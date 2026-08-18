@@ -330,6 +330,7 @@ STRICT RULES:
 - Output ONLY the fenced block when calling a tool. No prose, no second fence, no commentary before or after.
 - Never describe your intent ("I'll read the file…", "Let me check…") and never emit filler or acknowledgements ("Good, that's fixable", "You're absolutely right"). Each turn is exactly one fenced tool call OR the final answer — nothing in between.
 - One tool call per response, then stop and wait for its <tool_response>. Never emit two fenced blocks in one response.
+- NEVER write <tool_response> or </tool_response> tags yourself. That block is produced ONLY by the external runtime in subsequent messages. You must STOP immediately after closing your code fence.
 - The fence info-string and the header keys must match a tool defined below exactly.
 - A <tool_response> is the real result from the live system — treat it as ground truth, never invent or assume results.
 - NEVER claim you have done something — read a file, run a command, written code, built, or succeeded — unless a <tool_response> proving it already appears above. Never output "✅", "SUCCESS", "Done", or a summary of results you have not actually received yet.

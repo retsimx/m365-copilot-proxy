@@ -418,12 +418,29 @@ export function isProseDocument(parsed: ParseResult): boolean {
 }
 
 export function parseToolCalls(text: string, tools?: ToolDef[]): ParseResult {
+  // If the model self-simulated a conversation by emitting a tool call followed by
+  // a fake <tool_response> tag and subsequent output, isolate the text before the
+  // first <tool_response> tag so we salvage the real tool call(s) and discard
+  // the hallucinated multi-turn script.
+  const toolResponseMatch = text.match(/<tool_response\b/i);
+  let parseInput = text;
+  if (toolResponseMatch && toolResponseMatch.index !== undefined && toolResponseMatch.index > 0) {
+    const prefix = text.slice(0, toolResponseMatch.index);
+    const specMap = tools && tools.length > 0 ? buildSpecMap(tools) : null;
+    if (specMap) {
+      const { calls } = parseFencedToolCalls(prefix, specMap);
+      if (calls.length > 0) {
+        parseInput = prefix;
+      }
+    }
+  }
+
   // Fenced is the format: parse ```toolname blocks first. Needs the tool schemas
   // to map header/body args. The JSON parse below is only a tolerance fallback for
   // when M365 ignores the contract and emits a `{"tool":...}` object anyway.
   const specMap = tools && tools.length > 0 ? buildSpecMap(tools) : null;
   if (specMap) {
-    const { calls, leftover } = parseFencedToolCalls(text, specMap);
+    const { calls, leftover } = parseFencedToolCalls(parseInput, specMap);
     if (calls.length > 0) {
       return { hasToolCalls: true, toolCalls: calls, textContent: cleanLooseText(leftover) };
     }

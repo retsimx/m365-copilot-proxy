@@ -314,6 +314,34 @@ And ask the user for confirmation:
     expect(parsed.hasToolCalls).toBe(true);
     expect(isProseDocument(parsed)).toBe(false);
   });
+
+  it("salvages real tool calls and ignores hallucinated <tool_response> multi-turn simulation", () => {
+    const simulation = `Let me inspect the files first:
+\`\`\`bash
+find src/bilbyui -type f | sort | head -80
+\`\`\`
+
+<tool_response>
+src/bilbyui/__init__.py
+src/bilbyui/models.py
+</tool_response>
+
+Now let me view models:
+\`\`\`bash
+cat src/bilbyui/models.py
+\`\`\`
+
+<tool_response>
+class BilbyJob(models.Model):
+    pass
+</tool_response>
+`;
+    const parsed = parseToolCalls(simulation, bashTool);
+    expect(parsed.hasToolCalls).toBe(true);
+    expect(parsed.toolCalls).toHaveLength(1);
+    expect(JSON.parse(parsed.toolCalls[0].function.arguments).command).toBe("find src/bilbyui -type f | sort | head -80");
+    expect(isProseDocument(parsed)).toBe(false);
+  });
 });
 
 describe("looksLikeConfabulation", () => {
