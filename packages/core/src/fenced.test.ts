@@ -156,6 +156,66 @@ describe("parseFencedToolCalls", () => {
     const { args } = argsOf(rendered);
     expect(args.content).toBe(content);
   });
+
+  it("parses a bash script with a heredoc containing nested markdown code fences without premature closing", () => {
+    const script = `\`\`\`bash
+set -euo pipefail
+cd /home/lewis/Projects/gwdc/gwcloud_bilby-44
+cat >> docs/gwflow-runbook.md <<'ENDRUNBOOK'
+
+## Cron Deployment
+
+Deploy from the ingest checkout on gwcloud:
+
+\`\`\`bash
+cd /opt/gwcloud_bilby_gwosc_ingest
+git fetch origin
+git status --short --branch
+cd gwflow_cron
+bash build_docker.sh
+\`\`\`
+
+Create persistent host paths:
+
+\`\`\`bash
+sudo mkdir -p /opt/staging
+sudo touch /opt/log.log
+\`\`\`
+
+ENDRUNBOOK
+test -s docs/gwflow-runbook.md
+grep -q "Cron Deployment" docs/gwflow-runbook.md
+\`\`\``;
+
+    const { calls, leftover } = parseFencedToolCalls(script, specs);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].function.name).toBe("bash");
+    const args = JSON.parse(calls[0].function.arguments);
+    expect(args.command).toContain("cat >> docs/gwflow-runbook.md <<'ENDRUNBOOK'");
+    expect(args.command).toContain("ENDRUNBOOK");
+    expect(args.command).toContain("test -s docs/gwflow-runbook.md");
+    expect(leftover.trim()).toBe("");
+  });
+
+  it("parses quad-backtick fences enclosing triple-backticks (CommonMark)", () => {
+    const text = `\`\`\`\`write_file
+path: docs/guide.md
+
+# Guide
+Here is some code:
+\`\`\`bash
+echo "hello"
+\`\`\`
+\`\`\`\``;
+
+    const { calls, leftover } = parseFencedToolCalls(text, specs);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].function.name).toBe("write_file");
+    const args = JSON.parse(calls[0].function.arguments);
+    expect(args.path).toBe("docs/guide.md");
+    expect(args.content).toContain('```bash\necho "hello"\n```');
+    expect(leftover.trim()).toBe("");
+  });
 });
 
 describe("shell routing (Tier 1)", () => {

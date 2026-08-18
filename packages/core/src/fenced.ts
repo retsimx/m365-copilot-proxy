@@ -547,12 +547,12 @@ export const FRAMING_VARIANT_NAMES = Object.keys(FRAMING_VARIANTS);
 
 // --- Parsing -----------------------------------------------------------------
 
-// Match a fenced block with a tool-like info-string. Dots and hyphens are allowed
-// so namespaced runtime tool names (```container.exec) can be recognised and
-// routed; an info-string that resolves to no spec is left in prose by
-// parseFencedToolCalls, so widening this costs nothing. Non-greedy body; the
-// closing fence is a line that is exactly ``` (start of line).
-const FENCE_REGEX = /```([A-Za-z0-9_.-]+)[ \t]*\r?\n([\s\S]*?)\r?\n?```/g;
+// Match opening fence of 3 or more backticks with a tool-like info-string.
+// Dots and hyphens are allowed so namespaced runtime tool names (```container.exec)
+// can be recognised and routed.
+const OPEN_FENCE_REGEX = /^( {0,3})(`{3,})([A-Za-z0-9_.-]+)[ \t]*$/;
+const HEREDOC_OPEN_REGEX = /(?:^|[^<])<<-?\s*['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?/;
+
 const SEARCH_REPLACE_REGEX =
   /<{5,}\s*SEARCH\s*\r?\n([\s\S]*?)\r?\n={5,}\s*\r?\n([\s\S]*?)\r?\n>{5,}\s*REPLACE/;
 
@@ -608,24 +608,92 @@ export interface FencedParseResult {
   leftover: string;
 }
 
-/** Parse all fenced tool calls whose info-string matches a known tool name. */
+/**
+ * Parse all fenced tool calls whose info-string matches a known tool name.
+ * 
+ * Supports:
+ * - CommonMark variable fence length: ```` ```tool ```` closed by at least 3 backticks,
+ *   ```` ````tool ```` closed by at least 4 backticks.
+ * - Shell heredoc awareness: when inside a bash/shell block with an active heredoc
+ *   (e.g. `cat <<'END'`), nested ```` ``` ```` lines do not prematurely close the tool fence.
+ */
 export function parseFencedToolCalls(
   text: string,
   specs: Map<string, FencedToolSpec>,
 ): FencedParseResult {
   const calls: ParsedToolCall[] = [];
-  let leftover = text;
+  const lines = text.split(/\r?\n/);
 
-  const re = new RegExp(FENCE_REGEX.source, "g");
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(text)) !== null) {
-    const spec = specs.get(match[1]);
-    if (!spec) continue; // ```python illustration etc. — not a tool, leave in prose
-    const args = parseFencedInner(spec, match[2]);
-    if (!args) continue;
-    calls.push(makeCall(spec.name, args));
-    leftover = leftover.replace(match[0], "");
+  let inBlock = false;
+  let fenceLen = 3;
+  let toolSpec: FencedToolSpec | null = null;
+  let blockLines: string[] = [];
+  let matchedIndices: { start: number; end: number }[] = [];
+  let blockStartIndex = 0;
+  let heredocStack: string[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    if (!inBlock) {
+      const m = line.match(OPEN_FENCE_REGEX);
+      if (m) {
+        const spec = specs.get(m[3]);
+        if (spec) {
+          inBlock = true;
+          fenceLen = m[2].length;
+          toolSpec = spec;
+          blockLines = [];
+          blockStartIndex = i;
+          heredocStack = [];
+        }
+      }
+    } else {
+      // Check if we are inside a heredoc for shell tools
+      if (heredocStack.length > 0) {
+        const currentDelim = heredocStack[heredocStack.length - 1];
+        if (line.trim() === currentDelim) {
+          heredocStack.pop();
+        }
+        blockLines.push(line);
+        continue;
+      }
+
+      // Check for opening a heredoc in the current line
+      const hMatch = line.match(HEREDOC_OPEN_REGEX);
+      if (hMatch) {
+        heredocStack.push(hMatch[1]);
+      }
+
+      // Check if this line is a closing fence
+      const closeMatch = line.match(/^( {0,3})(`{3,})[ \t]*$/);
+      if (closeMatch && closeMatch[2].length >= fenceLen) {
+        // Closing fence reached
+        const inner = blockLines.join("\n");
+        const args = parseFencedInner(toolSpec!, inner);
+        if (args) {
+          calls.push(makeCall(toolSpec!.name, args));
+          matchedIndices.push({ start: blockStartIndex, end: i });
+        }
+        inBlock = false;
+        toolSpec = null;
+        blockLines = [];
+        heredocStack = [];
+      } else {
+        blockLines.push(line);
+      }
+    }
   }
 
-  return { calls, leftover };
+  // Build leftover text by excluding matched line ranges
+  const leftoverLines: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const isMatched = matchedIndices.some((range) => i >= range.start && i <= range.end);
+    if (!isMatched) {
+      leftoverLines.push(lines[i]);
+    }
+  }
+
+  return { calls, leftover: leftoverLines.join("\n") };
 }
+
