@@ -337,6 +337,13 @@ describe("looksLikeConfabulation", () => {
     expect(looksLikeConfabulation("I ran the commands. - pwd -> /mnt/data")).toBe(true);
     // Exact GPT-5.6 follow-up from the live OMP failure (2026-08-06).
     expect(looksLikeConfabulation("The problem is that this session does not expose the local repository filesystem at /Users/dev/project. My filesystem only contained /mnt/data.")).toBe(true);
+
+    // Live M365 refusal phrases claiming missing <tools> block / disabled tools
+    expect(looksLikeConfabulation("I can’t continue the repository workflow from this turn because no executable `<tools>` block is enabled, so I do not have a live `bash`, `task`, `question`, `read`, `write`, or `edit` tool available right now.")).toBe(true);
+    expect(looksLikeConfabulation("In this current chat surface, I don’t have an actual enabled `question` tool to call, despite the earlier pasted workflow defining one.")).toBe(true);
+    expect(looksLikeConfabulation("The most recent system instruction says tool calls are only available when the incoming message contains a `<tools>` block, and this message does not include one.")).toBe(true);
+    expect(looksLikeConfabulation("I cannot invoke the required `question` tool from this interface because no tool interface is currently enabled.")).toBe(true);
+    expect(looksLikeConfabulation("I can’t execute `bash` in this turn because the message still does not include an actual `<tools>` block for the runtime to execute.")).toBe(true);
   });
 
   it("does NOT flag genuine final answers or normal prose", () => {
