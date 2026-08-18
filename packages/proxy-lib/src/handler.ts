@@ -5,6 +5,7 @@ import {
   trunc,
   getToneForModel,
   formatMessages,
+  formatToolDefinitions,
   parseToolCalls,
   looksLikeConfabulation,
   looksLikeHallucinatedCompletion,
@@ -50,7 +51,7 @@ async function renderImagesMarkdown(images: CapturedImage[]): Promise<string> {
 // Forcing follow-up sent (in the same conversation) when M365 confabulates an
 // inability to act instead of calling a tool. See the confab-retry loop below.
 const CONFAB_FORCE_PROMPT =
-  "The working directory and the files named in the task ARE present on a real filesystem right now. Do NOT ask me to paste anything, and do NOT say commands return no output — you have not run any command yet. Emit ONE ```bash block this turn: run `ls -la` and `cat` the relevant files. Output only the ```bash block, nothing else.";
+  "The working directory, files, and tools ARE active and present right now. Do NOT ask me to paste anything, do NOT claim tools are unavailable, and do NOT say commands return no output — you have not run any tool yet. Emit ONE fenced tool block this turn (e.g. ```bash, ```question, or the required tool). Output only the fenced block, nothing else.";
 
 // Forcing follow-up when the model CLAIMS it did a file change but ran no tool.
 const HALLUCINATION_FORCE_PROMPT =
@@ -434,7 +435,7 @@ export async function handleChatCompletion(
     // thread, cheap). Disable with M365_NO_CONFAB_RETRY; tune count with M365_CONFAB_RETRIES.
     const maxConfabRetries = process.env.M365_NO_CONFAB_RETRY
       ? 0
-      : Number(process.env.M365_CONFAB_RETRIES ?? 1);
+      : Number(process.env.M365_CONFAB_RETRIES ?? 3);
     // The model never actually acted if no assistant turn in the history carried a
     // tool call. Used to gate the hallucinated-completion retry (a model that did
     // real work called at least one tool), keeping false positives near zero.
@@ -448,7 +449,9 @@ export async function handleChatCompletion(
       if (!confab && !remoteArtifact && !halluc) break;
       const retryKind = remoteArtifact ? "Remote artifact completion" : confab ? "Confabulation" : "Hallucinated completion";
       log.info(`${retryKind} detected (no tool call) — forcing retry ${attempt + 1}/${maxConfabRetries}`);
-      text = remoteArtifact ? REMOTE_ARTIFACT_FORCE_PROMPT : confab ? CONFAB_FORCE_PROMPT : HALLUCINATION_FORCE_PROMPT;
+      const basePrompt = remoteArtifact ? REMOTE_ARTIFACT_FORCE_PROMPT : confab ? CONFAB_FORCE_PROMPT : HALLUCINATION_FORCE_PROMPT;
+      const toolsBlock = hasTools ? `${formatToolDefinitions(body.tools)}\n\n` : "";
+      text = `${toolsBlock}${basePrompt}`;
       const retry = await runBuffered();
       if ("error" in retry) return { kind: "error", resp: retry.error };
       conv.sentMessageCount = body.messages.length;
