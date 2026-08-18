@@ -261,6 +261,59 @@ That should be everything you need to get going quickly.`;
   it("returns false when there are no tool calls at all", () => {
     expect(isProseDocument(parse("The answer is 42."))).toBe(false);
   });
+
+  it("does NOT flag multi-fence turns containing client tools (e.g. bash + skill) as a prose document", () => {
+    const skillTool: ToolDef = {
+      type: "function",
+      function: { name: "skill", parameters: { type: "object", properties: { name: { type: "string" } } } },
+    };
+    const bashTool: ToolDef = {
+      type: "function",
+      function: { name: "bash", parameters: { type: "object", properties: { command: { type: "string" } } } },
+    };
+    const text = `Phase 1 is effectively complete: the approved design has been saved in the issue worktree at docs/plans/designs/044.md.
+One gate item still deserves an explicit verification before entering Phase 2: confirm no files outside were modified.
+Next execution-runtime action should be a single bash block like this:
+
+\`\`\`bash
+git status --short --branch
+\`\`\`
+
+Then begin Phase 2 by loading the plan skill in the execution runtime:
+
+\`\`\`skill
+name: plan
+\`\`\``;
+
+    const parsed = parseToolCalls(text, [bashTool, skillTool]);
+    expect(parsed.hasToolCalls).toBe(true);
+    expect(parsed.toolCalls).toHaveLength(2);
+    expect(isProseDocument(parsed)).toBe(false);
+  });
+
+  it("does NOT flag multi-fence turns containing question tools as a prose document", () => {
+    const questionTool: ToolDef = {
+      type: "function",
+      function: { name: "question", parameters: { type: "object", properties: { questions: { type: "array" } } } },
+    };
+    const bashTool: ToolDef = {
+      type: "function",
+      function: { name: "bash", parameters: { type: "object", properties: { command: { type: "string" } } } },
+    };
+    const text = `Here is the current investigation result with lots of detailed explanation about the issue.
+First let's check git status:
+\`\`\`bash
+git status
+\`\`\`
+And ask the user for confirmation:
+\`\`\`question
+[{"question": "Proceed?", "options": ["Yes", "No"]}]
+\`\`\``;
+
+    const parsed = parseToolCalls(text, [bashTool, questionTool]);
+    expect(parsed.hasToolCalls).toBe(true);
+    expect(isProseDocument(parsed)).toBe(false);
+  });
 });
 
 describe("looksLikeConfabulation", () => {

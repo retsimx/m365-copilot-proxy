@@ -6,6 +6,7 @@ import {
   formatFencedToolDefinitions,
   parseFencedToolCalls,
   renderFencedCall,
+  SHELL_LANGS,
 } from "./fenced.js";
 
 const log = createLogger("tools");
@@ -384,17 +385,24 @@ export function looksLikeConfabulation(text: string | null): boolean {
  * ≥2 fences AND (≥120 chars of surrounding prose OR ≥4 fences). A SINGLE action
  * is never reclassified regardless of prose, so the coding loop is untouched.
  */
+/**
+ * Distinguish a real agentic tool turn from an instructional markdown document.
+ *
+ * 1. If ANY tool call is a client-specific tool (e.g. skill, question, edit_file,
+ *    write_file — anything not in SHELL_LANGS), it is an unambiguous agent action.
+ * 2. If ALL tool calls are generic shell blocks (bash/sh) AND surrounded by
+ *    substantial prose or markdown headings, it is treated as a tutorial document.
+ */
 export function isProseDocument(parsed: ParseResult): boolean {
   if (!parsed.hasToolCalls || parsed.toolCalls.length < 2) return false;
+
+  // If any tool call is a non-shell client tool, it is definitively an agent action.
+  const hasClientTool = parsed.toolCalls.some(
+    (tc) => !SHELL_LANGS.has(tc.function.name),
+  );
+  if (hasClientTool) return false;
+
   const prose = parsed.textContent ? parsed.textContent.trim() : "";
-  // Distinguish a coding-agent ACTION turn from a written DOCUMENT.
-  //   ACTION  (execute it): a short preamble + a couple command fences, e.g. Claude's
-  //           "I'll inspect the files first.\n```bash ls```\n```bash cat```" — common,
-  //           must NOT be reclassified or we eat real tool calls (docs §10 F23).
-  //   DOCUMENT (return as text): the model ANSWERING with markdown full of fences
-  //           (F15: "here's a simplified README") — it carries document signatures:
-  //           markdown headers, lots of prose, or many fences.
-  // Flag only documents. (Old heuristic was prose≥120, which ate Claude's preambles.)
   const hasMarkdownHeaders = /^#{1,6}\s/m.test(prose);
   return parsed.toolCalls.length >= 4 || hasMarkdownHeaders || prose.length >= 300;
 }

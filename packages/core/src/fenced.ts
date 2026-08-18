@@ -55,7 +55,7 @@ const REPLACE_KEYS = ["new", "replace", "replacement", "new_str", "new_string"];
 // ```bash blocks reflexively (it's the one agentic-shaped output Microsoft's
 // system prompt permits); we route them to whatever shell tool the harness gave,
 // whatever it's named. See docs/hypotheses.md §A (shell-routing).
-const SHELL_LANGS = new Set([
+export const SHELL_LANGS = new Set([
   "bash", "sh", "shell", "zsh", "console", "shell-session", "shellsession", "shsession",
   // M365's hosted runtime leaks its own code-interpreter tool namespace into
   // generations (`container.exec` and friends) — see §12.13. Those turns are
