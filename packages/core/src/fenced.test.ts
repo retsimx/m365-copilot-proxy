@@ -216,6 +216,51 @@ echo "hello"
     expect(args.content).toContain('```bash\necho "hello"\n```');
     expect(leftover.trim()).toBe("");
   });
+
+  it("parses a question tool with JSON array body as an array, not a string", () => {
+    const questionTool: ToolDef = {
+      type: "function",
+      function: {
+        name: "question",
+        description: "Ask the user questions.",
+        parameters: {
+          type: "object",
+          properties: {
+            questions: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  question: { type: "string" },
+                  options: { type: "array", items: { type: "string" } },
+                  multiple: { type: "boolean" },
+                },
+              },
+            },
+          },
+          required: ["questions"],
+        },
+      },
+    };
+    const localSpecs = buildSpecMap([questionTool]);
+    const input = `\`\`\`question
+[
+  {
+    "question": "Which workflow?",
+    "options": ["A", "B"],
+    "multiple": false
+  }
+]
+\`\`\``;
+
+    const { calls } = parseFencedToolCalls(input, localSpecs);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].function.name).toBe("question");
+    const args = JSON.parse(calls[0].function.arguments);
+    expect(Array.isArray(args.questions)).toBe(true);
+    expect(args.questions[0].question).toBe("Which workflow?");
+    expect(args.questions[0].options).toEqual(["A", "B"]);
+  });
 });
 
 describe("shell routing (Tier 1)", () => {

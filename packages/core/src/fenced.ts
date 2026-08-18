@@ -569,6 +569,19 @@ function parseFencedInner(spec: FencedToolSpec, inner: string): Record<string, u
   const lines = inner.split("\n");
   const args: Record<string, unknown> = {};
 
+  // If the entire block is valid JSON (object), parse directly
+  const trimmed = inner.trim();
+  if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+    try {
+      const parsedObj = JSON.parse(trimmed);
+      if (typeof parsedObj === "object" && parsedObj !== null && !Array.isArray(parsedObj)) {
+        return parsedObj;
+      }
+    } catch {
+      // fall through to line-by-line parsing
+    }
+  }
+
   // Header: contiguous "key: value" lines whose key is a known header param,
   // terminated by a blank line (consumed) or the first non-header line (kept).
   let i = 0;
@@ -578,7 +591,11 @@ function parseFencedInner(spec: FencedToolSpec, inner: string): Record<string, u
       if (line.trim() === "") { i++; break; }
       const m = line.match(/^([A-Za-z0-9_]+):[ \t]?(.*)$/);
       if (m && spec.headerParams.includes(m[1])) {
-        args[m[1]] = m[2];
+        const val = m[2].trim();
+        if (val === "true") args[m[1]] = true;
+        else if (val === "false") args[m[1]] = false;
+        else if (/^-?\d+(\.\d+)?$/.test(val)) args[m[1]] = Number(val);
+        else args[m[1]] = m[2];
       } else {
         break;
       }
@@ -596,7 +613,19 @@ function parseFencedInner(spec: FencedToolSpec, inner: string): Record<string, u
     args[spec.editPair.search] = sr[1];
     args[spec.editPair.replace] = sr[2];
   } else if (spec.bodyParam !== undefined) {
-    args[spec.bodyParam] = rest;
+    const restTrimmed = rest.trim();
+    if (
+      (restTrimmed.startsWith("[") && restTrimmed.endsWith("]")) ||
+      (restTrimmed.startsWith("{") && restTrimmed.endsWith("}"))
+    ) {
+      try {
+        args[spec.bodyParam] = JSON.parse(restTrimmed);
+      } catch {
+        args[spec.bodyParam] = rest;
+      }
+    } else {
+      args[spec.bodyParam] = rest;
+    }
   }
 
   return args;
