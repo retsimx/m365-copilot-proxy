@@ -386,4 +386,47 @@ describe("formatFencedToolDefinitions", () => {
     expect(out).toContain("ACTION");
     expect(out).toContain("PRIMARY JOB");
   });
+
+  it("derives task tool spec with prompt body and parses multiline prompt body correctly", () => {
+    const taskTool: ToolDef = {
+      type: "function",
+      function: {
+        name: "task",
+        description: "Spawn a subagent to run tasks.",
+        parameters: {
+          type: "object",
+          properties: {
+            description: { type: "string" },
+            subagent_type: { type: "string" },
+            prompt: { type: "string" },
+          },
+          required: ["description", "prompt"],
+        },
+      },
+    };
+
+    const taskSpec = deriveFencedSpec(taskTool);
+    expect(taskSpec.bodyParam).toBe("prompt");
+    expect(taskSpec.headerParams).toEqual(["description", "subagent_type"]);
+
+    const specs = buildSpecMap([taskTool]);
+    const input = `\`\`\`task
+description: ultrawork-phase1-pm-plan-review
+subagent_type: general
+
+You are the PM Agent for ultrawork Phase 1 PLAN, Steps 1-4.
+Please review the plan and produce the task board.
+\`\`\``;
+
+    const { calls, leftover } = parseFencedToolCalls(input, specs);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].function.name).toBe("task");
+    const args = JSON.parse(calls[0].function.arguments);
+    expect(args.description).toBe("ultrawork-phase1-pm-plan-review");
+    expect(args.subagent_type).toBe("general");
+    expect(args.prompt).toContain("You are the PM Agent for ultrawork Phase 1 PLAN, Steps 1-4.");
+    expect(args.prompt).toContain("Please review the plan and produce the task board.");
+    expect(leftover.trim()).toBe("");
+  });
 });
+

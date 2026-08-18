@@ -47,6 +47,7 @@ const log = createLogger("fenced");
 const BODY_PARAM_NAMES = [
   "command", "content", "code", "body", "script", "text",
   "query", "input", "patch", "cmd", "data", "contents",
+  "prompt", "instruction", "instructions", "message", "questions", "diff", "payload",
 ];
 const SEARCH_KEYS = ["old", "search", "find", "old_str", "old_string", "target"];
 const REPLACE_KEYS = ["new", "replace", "replacement", "new_str", "new_string"];
