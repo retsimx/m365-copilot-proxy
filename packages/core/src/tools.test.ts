@@ -340,6 +340,7 @@ describe("looksLikeConfabulation", () => {
 
     // Live M365 refusal phrases claiming missing <tools> block / disabled tools
     expect(looksLikeConfabulation("I can’t continue the repository workflow from this turn because no executable `<tools>` block is enabled, so I do not have a live `bash`, `task`, `question`, `read`, `write`, or `edit` tool available right now.")).toBe(true);
+    expect(looksLikeConfabulation("I can’t continue the live repository workflow in this turn because there is no executable `<tools>` block enabled, so I do not have a real `bash`, `task`, `question`, `read`, `write`, `edit`, or `apply_patch` tool to call.\n\nI’m blocked only by the absence of executable tools in this chat turn, not by the project state.")).toBe(true);
     expect(looksLikeConfabulation("In this current chat surface, I don’t have an actual enabled `question` tool to call, despite the earlier pasted workflow defining one.")).toBe(true);
     expect(looksLikeConfabulation("The most recent system instruction says tool calls are only available when the incoming message contains a `<tools>` block, and this message does not include one.")).toBe(true);
     expect(looksLikeConfabulation("I cannot invoke the required `question` tool from this interface because no tool interface is currently enabled.")).toBe(true);

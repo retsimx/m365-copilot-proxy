@@ -289,14 +289,16 @@ const CONFABULATION_PATTERNS: RegExp[] = [
   // patterns because it says the session "does not expose" the filesystem.
   /(?:session|environment|runtime)\s+(?:does\s+not|doesn.?t|cannot)\s+(?:expose|mount|provide)\s+(?:the\s+)?(?:local\s+)?(?:repository\s+)?filesystem/i,
   /(?:my|the)\s+filesystem\s+(?:only\s+)?(?:contained|contains|has)[\s\S]{0,80}\/mnt\/data/i,
-  // Claims about <tools> block / tool interface being disabled, absent or unavailable:
-  /no\s+(?:executable\s+)?(?:<tools>|tools?)\s+(?:block\s+)?(?:is\s+|are\s+)?(?:not\s+)?(?:enabled|available|provided|included)/i,
-  /(?:does\s+not|doesn.?t|not)\s+include\s+(?:an?\s+)?(?:actual\s+|executable\s+)?(?:<tools>|tools?)\s+block/i,
-  /(?:do\s+not|don.?t|cannot|can.?t)\s+have\s+(?:an?\s+)?(?:actual\s+|enabled\s+|live\s+)?[\w\s`,-]{0,60}\btools?\s+(?:to\s+call|available)/i,
-  /(?:no|without\s+(?:any)?)\s+(?:live\s+|enabled\s+)?[\w\s`,-]{0,60}\btools?\s+(?:is\s+|are\s+)?available/i,
-  /(?:can.?t|cannot|unable\s+to)\s+(?:continue|proceed)[\s\S]{0,60}no\s+(?:executable\s+|enabled\s+)?(?:<tools>|tools?)/i,
+  // Claims about <tools> block / tool interface being disabled, absent, or unavailable:
+  /no\s+(?:executable\s+)?`?<tools>`?\s+(?:block\s+)?(?:is\s+|are\s+)?(?:not\s+)?(?:enabled|available|provided|included)/i,
+  /(?:does\s+not|doesn.?t|not)\s+include\s+(?:an?\s+)?(?:actual\s+|executable\s+)?`?<tools>`?\s+block/i,
+  /(?:do\s+not|don.?t|cannot|can.?t)\s+have\s+(?:an?\s+)?(?:actual\s+|enabled\s+|live\s+|real\s+)?[\w\s`,-]{0,120}\btools?\s+(?:to\s+call|available)/i,
+  /(?:no|without\s+(?:any)?)\s+(?:live\s+|enabled\s+|real\s+)?[\w\s`,-]{0,120}\btools?\s+(?:is\s+|are\s+)?available/i,
+  /(?:absence|lack)\s+of\s+(?:executable|enabled|live|real)?\s*tools/i,
+  /blocked[\s\S]{0,80}(?:absence|lack|no)\s+(?:of\s+)?(?:executable|enabled|live|real)?\s*tools/i,
+  /(?:can.?t|cannot|unable\s+to)\s+(?:continue|proceed)[\s\S]{0,120}no\s+(?:executable\s+|enabled\s+)?`?<tools>`?/i,
   /(?:tool\s+calls?|tools?)\s+(?:is|are|are\s+only)\s+(?:only\s+)?available\s+when\s+(?:the\s+)?(?:incoming\s+)?message\s+contains/i,
-  /cannot\s+invoke\s+(?:the\s+)?(?:required\s+)?[\w\s`,-]{0,40}\btools?\s+from\s+this\s+interface/i,
+  /cannot\s+invoke\s+(?:the\s+)?(?:required\s+)?[\w\s`,-]{0,60}\btools?\s+from\s+this\s+interface/i,
 ];
 
 // M365 sometimes creates a real patch in its Teams-hosted remote artifact
