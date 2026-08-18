@@ -27,7 +27,13 @@ export default defineEventHandler(async (event) => {
     res.once("close", maybeAbort);
   }
 
+  // Extract explicit session identifier from standard agent headers or body
+  const sessionId = getHeader(event, "x-session-id")
+    ?? getHeader(event, "x-conversation-id")
+    ?? getHeader(event, "x-opencode-session")
+    ?? body.user;
+
   // handleChatCompletion returns a Web Response (JSON or an SSE ReadableStream
   // when stream:true). Returning it directly lets h3 forward it untouched.
-  return handleChatCompletion(body, pool, { signal: ac.signal });
+  return handleChatCompletion(body, pool, { signal: ac.signal, sessionId });
 });

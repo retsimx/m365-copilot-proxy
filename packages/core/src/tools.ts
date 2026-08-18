@@ -410,6 +410,9 @@ export function looksLikeConfabulation(text: string | null): boolean {
 export function isProseDocument(parsed: ParseResult): boolean {
   if (!parsed.hasToolCalls || parsed.toolCalls.length < 2) return false;
 
+  // Refusals or confabulations claiming inability to act are never instructional tutorial documents.
+  if (looksLikeConfabulation(parsed.textContent)) return false;
+
   // If any tool call is a non-shell client tool, it is definitively an agent action.
   const hasClientTool = parsed.toolCalls.some(
     (tc) => !SHELL_LANGS.has(tc.function.name),
@@ -417,8 +420,10 @@ export function isProseDocument(parsed: ParseResult): boolean {
   if (hasClientTool) return false;
 
   const prose = parsed.textContent ? parsed.textContent.trim() : "";
-  const hasMarkdownHeaders = /^#{1,6}\s/m.test(prose);
-  return parsed.toolCalls.length >= 4 || hasMarkdownHeaders || prose.length >= 300;
+  // Check for document-level tutorial headings (e.g. "# Title" or "## Install / ## Usage / ## Run / ## Setup")
+  const hasDocHeaders = /(?:^|\n)#{1,3}\s+(?:readme|install|usage|run|getting started|build|setup|example|overview|configuration|documentation)\b/i.test(prose)
+    || /(?:^|\n)#\s+[^\n]+/m.test(prose);
+  return parsed.toolCalls.length >= 4 || hasDocHeaders || prose.length >= 350;
 }
 
 export function parseToolCalls(text: string, tools?: ToolDef[]): ParseResult {

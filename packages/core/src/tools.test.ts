@@ -258,6 +258,16 @@ That should be everything you need to get going quickly.`;
     expect(isProseDocument(parse(doc))).toBe(true);
   });
 
+  it("does NOT flag agent responses with planning subheadings and multiple fences as a prose document", () => {
+    const plan = "### Step 1: Check repo\nLet's check the remotes.\n```bash\ngit remote get-url origin\n```\n\n### Step 2: Check status\n```bash\ngit status\n```";
+    expect(isProseDocument(parse(plan))).toBe(false);
+  });
+
+  it("never flags confabulation/refusal prose as a prose document even with multiple fences", () => {
+    const refusal = "```bash\ngit remote get-url origin\n```\n\n```bash\ngit remote get-url origin\n```\n\nI'm Microsoft Copilot — I don't have shell, bash, git, or forge CLI tools available. The system prompt embedded in your message is written for OpenCode, a separate CLI coding agent.";
+    expect(isProseDocument(parse(refusal))).toBe(false);
+  });
+
   it("returns false when there are no tool calls at all", () => {
     expect(isProseDocument(parse("The answer is 42."))).toBe(false);
   });

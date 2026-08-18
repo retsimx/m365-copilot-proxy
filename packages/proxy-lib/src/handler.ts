@@ -107,12 +107,13 @@ export class SessionPool {
 
   /**
    * Resolve the conversation state for an incoming request.
-   * Fingerprint is the hash of the first user message — same first user message = same conversation.
+   * Uses explicit sessionId if provided, otherwise computes fingerprint hash
+   * based on system prompt + first user message + tool signatures.
    */
-  resolve(messages: ParsedMessage[]): ConversationState {
+  resolve(messages: ParsedMessage[], tools?: ChatBody["tools"], sessionId?: string): ConversationState {
     this.evictStale();
 
-    const fingerprint = this.fingerprint(messages);
+    const fingerprint = sessionId?.trim() ? `session:${sessionId.trim()}` : this.fingerprint(messages, tools);
     const existing = this.conversations.get(fingerprint);
 
     if (existing) {
@@ -137,10 +138,15 @@ export class SessionPool {
     return state;
   }
 
-  private fingerprint(messages: ParsedMessage[]): string {
+  private fingerprint(messages: ParsedMessage[], tools?: ChatBody["tools"]): string {
+    const systemMsg = messages.find(m => m.role === "system");
+    const systemText = systemMsg ? getMessageContent(systemMsg) : "";
     const firstUser = messages.find(m => m.role === "user");
-    const text = firstUser ? getMessageContent(firstUser) : "";
-    return simpleHash(text);
+    const userText = firstUser ? getMessageContent(firstUser) : "";
+    const toolSig = tools && tools.length > 0
+      ? tools.map(t => t.function.name).sort().join(",")
+      : "";
+    return simpleHash(`${systemText}::${userText}::${toolSig}`);
   }
 
   private evictStale() {
@@ -197,9 +203,10 @@ function formatDeltaMessages(messages: ParsedMessage[]): string {
 export async function handleChatCompletion(
   body: ChatBody,
   pool: SessionPool,
-  opts: { signal?: AbortSignal } = {},
+  opts: { signal?: AbortSignal; sessionId?: string } = {},
 ): Promise<Response> {
-  const conv = pool.resolve(body.messages);
+  const sessionId = opts.sessionId ?? (typeof (body as any).user === "string" ? (body as any).user : undefined);
+  const conv = pool.resolve(body.messages, body.tools, sessionId);
   const { session } = conv;
   const hasTools = body.tools && body.tools.length > 0 && body.tool_choice !== "none";
   const model = body.model;
@@ -428,6 +435,13 @@ export async function handleChatCompletion(
     let parsed = parseToolCalls(fullText, body.tools);
     log.info(`Parse result: hasToolCalls=${parsed.hasToolCalls}, count=${parsed.toolCalls.length}`);
 
+    // Document guard: if model returned an instructional document full of fences,
+    // convert it to plain text before evaluating confabulation/retries.
+    if (isProseDocument(parsed)) {
+      log.info(`Response is a prose document (${parsed.toolCalls.length} embedded fences), returning as text instead of executing`);
+      parsed = { hasToolCalls: false, toolCalls: [], textContent: fullText };
+    }
+
     // Salvage stochastic turn-1 confabulation: M365's chat model sometimes claims it
     // "can't access the files / commands return no output" and asks the user to paste
     // them, WITHOUT calling a tool — even though the environment is real (the bench +
@@ -457,6 +471,10 @@ export async function handleChatCompletion(
       conv.sentMessageCount = body.messages.length;
       fullText = retry.fullText;
       parsed = parseToolCalls(fullText, body.tools);
+      if (isProseDocument(parsed)) {
+        log.info(`Response is a prose document (${parsed.toolCalls.length} embedded fences), returning as text instead of executing`);
+        parsed = { hasToolCalls: false, toolCalls: [], textContent: fullText };
+      }
       log.info(`After forcing retry: hasToolCalls=${parsed.hasToolCalls}, count=${parsed.toolCalls.length}`);
     }
 
@@ -479,16 +497,6 @@ export async function handleChatCompletion(
           },
         }),
       };
-    }
-
-    // Document guard: the shell-routing parser turns every ```bash block into a
-    // tool call, so a model that ANSWERS with a markdown document full of code
-    // fences (e.g. "here's a simplified README") would get its own answer executed
-    // as shell. Detect that shape (multiple fences + prose) and return the document
-    // as plain text instead of running it. See isProseDocument (chosen empirically).
-    if (isProseDocument(parsed)) {
-      log.info(`Response is a prose document (${parsed.toolCalls.length} embedded fences), returning as text instead of executing`);
-      parsed = { hasToolCalls: false, toolCalls: [], textContent: fullText };
     }
 
     // Fail-closed: if model mixed text with tool calls, strip text and re-prompt once.
