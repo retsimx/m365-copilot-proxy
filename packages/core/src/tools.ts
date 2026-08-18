@@ -299,6 +299,10 @@ const CONFABULATION_PATTERNS: RegExp[] = [
   /(?:can.?t|cannot|unable\s+to)\s+(?:continue|proceed)[\s\S]{0,120}no\s+(?:executable\s+|enabled\s+)?`?<tools>`?/i,
   /(?:tool\s+calls?|tools?)\s+(?:is|are|are\s+only)\s+(?:only\s+)?available\s+when\s+(?:the\s+)?(?:incoming\s+)?message\s+contains/i,
   /cannot\s+invoke\s+(?:the\s+)?(?:required\s+)?[\w\s`,-]{0,60}\btools?\s+from\s+this\s+interface/i,
+  // DeepLeo / GPT-5.6 refusals claiming no execution/shell tool is attached to the turn:
+  /(?:no|without\s+(?:any)?)\s+(?:executable\s+|execution\s+|live\s+|enabled\s+|real\s+|shell\s+|repository\s+)?[\w\s`,-]{0,80}\btools?\s+(?:is\s+|are\s+)?(?:attached|available|enabled|provided|active)/i,
+  /(?:this\s+turn\s+|this\s+response\s+)?(?:has\s+|contains\s+)?no\s+(?:executable\s+|execution\s+|repository\s+|shell\s+)?[\w\s`,-]{0,80}\btools?\s+attached/i,
+  /no\s+execution\s+tool\s+(?:is\s+)?attached/i,
 ];
 
 // M365 sometimes creates a real patch in its Teams-hosted remote artifact

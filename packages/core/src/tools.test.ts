@@ -373,6 +373,9 @@ describe("looksLikeConfabulation", () => {
     expect(looksLikeConfabulation("The most recent system instruction says tool calls are only available when the incoming message contains a `<tools>` block, and this message does not include one.")).toBe(true);
     expect(looksLikeConfabulation("I cannot invoke the required `question` tool from this interface because no tool interface is currently enabled.")).toBe(true);
     expect(looksLikeConfabulation("I can’t execute `bash` in this turn because the message still does not include an actual `<tools>` block for the runtime to execute.")).toBe(true);
+    // GPT-5.6 DeepLeo refusal phrases claiming no tool is attached to the turn
+    expect(looksLikeConfabulation("I cannot complete the thorough repository audit in this exact response because no execution tool is attached to the current turn.")).toBe(true);
+    expect(looksLikeConfabulation("I can’t conduct the remaining repository inspection in this response because this turn has no executable repository or shell tool attached.")).toBe(true);
   });
 
   it("does NOT flag genuine final answers or normal prose", () => {
