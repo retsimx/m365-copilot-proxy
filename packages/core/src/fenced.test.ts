@@ -259,7 +259,11 @@ echo "hello"
     const args = JSON.parse(calls[0].function.arguments);
     expect(Array.isArray(args.questions)).toBe(true);
     expect(args.questions[0].question).toBe("Which workflow?");
-    expect(args.questions[0].options).toEqual(["A", "B"]);
+    expect(args.questions[0].header).toBe("Which workflow?");
+    expect(args.questions[0].options).toEqual([
+      { label: "A", description: "A" },
+      { label: "B", description: "B" },
+    ]);
   });
 });
 
