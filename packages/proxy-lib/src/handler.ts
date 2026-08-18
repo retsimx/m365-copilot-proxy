@@ -537,6 +537,16 @@ export async function handleChatCompletion(
       }
     }
 
+    // If the model produced a hallucinated simulation with fake <tool_response> tags
+    // or confabulation in this turn, M365's cloud session context is now polluted with fake output.
+    // Reset the session so the next turn sends the full clean history from the caller instead
+    // of continuing from a dirty delta state.
+    if (/<tool_response\b/i.test(fullText) || looksLikeConfabulation(fullText)) {
+      log.info("Contaminated simulation or confabulation detected — resetting session state to force clean full history on next turn");
+      conv.session.reset();
+      conv.sentMessageCount = 0;
+    }
+
     if (parsed.hasToolCalls && parsed.toolCalls.length > 0) {
       return { kind: "tools", toolCalls: parsed.toolCalls };
     }
@@ -551,23 +561,29 @@ export async function handleChatCompletion(
   } // end produce()
 
   // --- Render: JSON (non-stream) or an early-flushed SSE stream (stream) ---
+  const promptChars = body.messages.reduce(
+    (acc, m) => acc + (typeof m.content === "string" ? m.content.length : JSON.stringify(m.content ?? "").length),
+    0,
+  );
   const includeUsage = !!body.stream_options?.include_usage;
-  const usage = () => buildUsage(lastThrottle, lastContentOrigin, lastMessageType, lastScores, lastTurnCount);
+  const usage = (compChars: number = 0) =>
+    buildUsage(promptChars, compChars, lastThrottle, lastContentOrigin, lastMessageType, lastScores, lastTurnCount);
 
   if (!body.stream) {
     const p = await produce();
     if (p.kind === "error") return p.resp;
     if (p.kind === "tools") {
+      const toolChars = p.toolCalls.reduce((acc, tc) => acc + tc.function.name.length + tc.function.arguments.length, 0);
       return jsonResponse(200, {
         id: completionId, object: "chat.completion", created, model,
         choices: [{ index: 0, message: { role: "assistant", content: null, tool_calls: p.toolCalls }, finish_reason: "tool_calls" }],
-        usage: usage(),
+        usage: usage(toolChars),
       });
     }
     return jsonResponse(200, {
       id: completionId, object: "chat.completion", created, model,
       choices: [{ index: 0, message: { role: "assistant", content: p.text }, finish_reason: outputFinishReason(p.text) }],
-      usage: usage(),
+      usage: usage(p.text.length),
     });
   }
 
@@ -609,9 +625,10 @@ export async function handleChatCompletion(
           // HTTP 200 is already committed, so surface the failure as an in-stream error chunk.
           send({ ...base, error: { message, type: "upstream_error" } });
         } else if (p.kind === "tools") {
+          const toolChars = p.toolCalls.reduce((acc, tc) => acc + tc.function.name.length + tc.function.arguments.length, 0);
           p.toolCalls.forEach((tc, i) =>
             send({ ...base, choices: [{ index: 0, delta: { tool_calls: [{ index: i, id: tc.id, type: "function", function: { name: tc.function.name, arguments: tc.function.arguments } }] }, finish_reason: null }] }));
-          send({ ...base, choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }], ...(includeUsage ? { usage: usage() } : {}) });
+          send({ ...base, choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }], ...(includeUsage ? { usage: usage(toolChars) } : {}) });
         } else {
           // Emit only what wasn't already streamed live: the whole text if nothing was
           // (tool-mode prose fallback, or a fully-buffered turn), or just the tail when
@@ -621,7 +638,7 @@ export async function handleChatCompletion(
           const remainder = p.text.startsWith(sent) ? p.text.slice(sent.length) : "";
           if (!p.text.startsWith(sent)) log.info(`Streamed prefix diverged from final text (sent ${sent.length}, final ${p.text.length} chars) — not re-sending to avoid duplication`);
           if (remainder) send({ ...base, choices: [{ index: 0, delta: { content: remainder }, finish_reason: null }] });
-          send({ ...base, choices: [{ index: 0, delta: {}, finish_reason: outputFinishReason(p.text) }], ...(includeUsage ? { usage: usage() } : {}) });
+          send({ ...base, choices: [{ index: 0, delta: {}, finish_reason: outputFinishReason(p.text) }], ...(includeUsage ? { usage: usage(p.text.length) } : {}) });
         }
       } catch {
         // client likely disconnected mid-emit — nothing more to do
@@ -633,28 +650,33 @@ export async function handleChatCompletion(
 }
 
 /**
+ * Estimate tokens from character count using standard ~3.8 chars/token ratio.
+ */
+function estimateTokens(chars: number): number {
+  if (chars <= 0) return 0;
+  return Math.ceil(chars / 3.8);
+}
+
+/**
  * Build the OpenAI-style `usage` block from whatever diagnostic info M365 gave
- * us. Token counts are NOT exposed by M365's WebSocket API (we'd need to count
- * locally with a tokenizer that matches the underlying model — see the doc on
- * token-usage hypotheses). What M365 does send is a **conversation quota**:
- * how many user messages out of the 600-per-conversation cap have been spent.
- *
- * That's a different axis from token-window utilisation, but it's the closest
- * thing we have to "remaining budget", so we surface it as extension fields
- * (`x_m365_*`) alongside the zeroed standard counters. Real OpenAI clients
- * ignore unknown extension fields; curious users can read them.
+ * us, estimating standard prompt/completion tokens from character length so
+ * harnesses can render context gauge meters.
  */
 function buildUsage(
+  promptChars: number,
+  completionChars: number,
   throttle: { current: number; max: number } | null,
   contentOrigin?: string | null,
   messageType?: string | null,
   scores?: Record<string, number> | null,
   turnCount?: number | null,
 ): Record<string, unknown> {
+  const promptTokens = estimateTokens(promptChars);
+  const completionTokens = estimateTokens(completionChars);
   const base: Record<string, unknown> = {
-    prompt_tokens: 0,
-    completion_tokens: 0,
-    total_tokens: 0,
+    prompt_tokens: promptTokens,
+    completion_tokens: completionTokens,
+    total_tokens: promptTokens + completionTokens,
   };
   if (throttle) {
     base.x_m365_conversation_messages = throttle.current;
