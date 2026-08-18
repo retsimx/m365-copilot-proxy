@@ -754,8 +754,8 @@ export function parseFencedToolCalls(
         heredocStack.push(hMatch[1]);
       }
 
-      // Check if this line is a closing fence
-      const closeMatch = line.match(/^( {0,3})(`{3,})[ \t]*$/);
+      // Check if this line is a closing fence (3+ backticks, optionally followed by inline prose)
+      const closeMatch = line.match(/^( {0,3})(`{3,})([ \t].*)?$/);
       if (closeMatch && closeMatch[2].length >= fenceLen) {
         // Closing fence reached
         const inner = blockLines.join("\n");

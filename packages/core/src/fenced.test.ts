@@ -428,5 +428,46 @@ Please review the plan and produce the task board.
     expect(args.prompt).toContain("Please review the plan and produce the task board.");
     expect(leftover.trim()).toBe("");
   });
+
+  it("parses code fences when the closing fence has inline trailing prose", () => {
+    const bashToolWithHeaders: ToolDef = {
+      type: "function",
+      function: {
+        name: "bash",
+        description: "Run shell command",
+        parameters: {
+          type: "object",
+          properties: {
+            command: { type: "string" },
+            cwd: { type: "string" },
+            timeout: { type: "number" },
+          },
+          required: ["command"],
+        },
+      },
+    };
+    const localSpecs = buildSpecMap([bashToolWithHeaders]);
+
+    const text = `\`\`\`bash
+timeout: 30
+cwd: /home/lewis/Projects/gwdc/gwcloud_bilby
+
+glab issue list --state opened -R CAS-eResearch/GWDC/gwcloud_bilby 2>&1
+\`\`\` in this session. Let me try the \`oc_bash\` tool:oc_bash
+timeout: 30
+cwd: /home/lewis/Projects/gwdc/gwcloud_bilby
+
+glab issue list --state opened -R CAS-eResearch/GWDC/gwcloud_bilby 2>&1
+\`\`\` correctly. Let me fix that.`;
+
+    const { calls } = parseFencedToolCalls(text, localSpecs);
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+    expect(calls[0].function.name).toBe("bash");
+    const args = JSON.parse(calls[0].function.arguments);
+    expect(args.command.trim()).toBe("glab issue list --state opened -R CAS-eResearch/GWDC/gwcloud_bilby 2>&1");
+    expect(args.cwd).toBe("/home/lewis/Projects/gwdc/gwcloud_bilby");
+    expect(args.timeout).toBe(30);
+  });
 });
+
 
