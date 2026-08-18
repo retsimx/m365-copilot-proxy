@@ -468,6 +468,71 @@ glab issue list --state opened -R CAS-eResearch/GWDC/gwcloud_bilby 2>&1
     expect(args.cwd).toBe("/home/lewis/Projects/gwdc/gwcloud_bilby");
     expect(args.timeout).toBe(30);
   });
+
+  it("normalizes todowrite calls missing priority or id", () => {
+    const todoTool: ToolDef = {
+      type: "function",
+      function: {
+        name: "todowrite",
+        description: "Write or update todos.",
+        parameters: {
+          type: "object",
+          properties: {
+            todos: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  id: { type: "string" },
+                  content: { type: "string" },
+                  status: { type: "string" },
+                  priority: { type: "string" },
+                },
+                required: ["id", "content", "status", "priority"],
+              },
+            },
+          },
+          required: ["todos"],
+        },
+      },
+    };
+
+    const todoSpec = deriveFencedSpec(todoTool);
+    expect(todoSpec.bodyParam).toBe("todos");
+
+    const specs = buildSpecMap([todoTool]);
+    const input = `\`\`\`todowrite
+[
+  {
+    "id": "1",
+    "content": "Review GitLab issues 30-46",
+    "status": "in_progress"
+  },
+  {
+    "content": "Create task board and ship gates"
+  }
+]
+\`\`\``;
+
+    const { calls } = parseFencedToolCalls(input, specs);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].function.name).toBe("todowrite");
+    const args = JSON.parse(calls[0].function.arguments);
+    expect(args.todos).toHaveLength(2);
+    expect(args.todos[0]).toEqual({
+      id: "1",
+      content: "Review GitLab issues 30-46",
+      status: "in_progress",
+      priority: "medium",
+    });
+    expect(args.todos[1]).toEqual({
+      id: "2",
+      content: "Create task board and ship gates",
+      status: "pending",
+      priority: "medium",
+    });
+  });
 });
+
 
 

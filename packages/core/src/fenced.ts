@@ -48,6 +48,7 @@ const BODY_PARAM_NAMES = [
   "command", "content", "code", "body", "script", "text",
   "query", "input", "patch", "cmd", "data", "contents",
   "prompt", "instruction", "instructions", "message", "questions", "diff", "payload",
+  "todos", "items", "tasks", "entries",
 ];
 const SEARCH_KEYS = ["old", "search", "find", "old_str", "old_string", "target"];
 const REPLACE_KEYS = ["new", "replace", "replacement", "new_str", "new_string"];
@@ -167,6 +168,16 @@ function renderSchemaSkeleton(name: string, schema?: any): string {
       { "label": "<option B: string>", "description": "<description B: string>" }
     ],
     "multiple": false
+  }
+]`;
+  }
+  if (name === "todos" || (schema.type === "array" && schema.items?.properties?.content)) {
+    return `[
+  {
+    "id": "<id: string>",
+    "content": "<task description: string>",
+    "status": "pending",
+    "priority": "medium"
   }
 ]`;
   }
@@ -685,6 +696,30 @@ function parseFencedInner(spec: FencedToolSpec, inner: string): Record<string, u
         normalized.multiple = false;
       }
       return normalized;
+    });
+  }
+
+  // Automatic schema normalization for todo tools (todowrite / todos)
+  if (Array.isArray(args.todos)) {
+    args.todos = args.todos.map((item: any, idx: number) => {
+      if (typeof item === "string") {
+        return {
+          id: String(idx + 1),
+          content: item,
+          status: "pending",
+          priority: "medium",
+        };
+      }
+      if (typeof item === "object" && item !== null) {
+        const normalized: any = { ...item };
+        if (!normalized.id) normalized.id = String(idx + 1);
+        if (!normalized.status) normalized.status = "pending";
+        if (!normalized.priority) normalized.priority = "medium";
+        if (!normalized.content && normalized.task) normalized.content = normalized.task;
+        if (!normalized.content && normalized.title) normalized.content = normalized.title;
+        return normalized;
+      }
+      return item;
     });
   }
 
