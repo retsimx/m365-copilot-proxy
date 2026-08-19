@@ -2543,3 +2543,56 @@ sent on every agent-less turn, so any type the GUI can reach is reachable here.
 
 `session.ts` used to list `"GenerateContentQuery"` twice in `allowedMessageTypes`; the image-mode
 edit collapsed it to one.
+
+---
+
+## 15. August 19 2026 — Structural Clause NLP, Truncation Resilience & Circuit Breaker Rate Limiting
+
+### F24 — Brittle regexes lose to structural clause semantic tokenization 🟢
+
+**Claim.** Monolithic linear regexes (e.g. `/cannot\s+access\s+tools/i`) suffered from two fatal flaws:
+(a) false negatives on phrasing variations ("this interface does not expose the execution tools", "no
+apply_patch binary exists on disk"), and (b) false positives when splitting across filenames containing
+dots (e.g. `test_candidate_claim.py` splitting into `test_candidate_claim` and `py`). Segmenting text
+across sentence/clause boundaries (`/(?:\.(?:\s+|$)|[;\n\r]+)/`) and evaluating co-occurrence of
+`[Tool Anchor] + [Negation] + [Availability State]` eliminates false negatives while preserving
+filenames.
+
+**Shipped (`packages/core/src/tools.ts`).**
+- `hasClauseRefusal`: Detects semantic tool availability refusals across clauses with transitive
+  provision verbs (`expose`, `mount`, `include`, `contain`, `offer`, `allow`, `have`), existence
+  verbs (`exist`, `exists`, `existed`), and action targets (`task-\d+`, `issue-\d+`).
+- `hasClauseHallucination`: Detects unearned mutation claims on `!everActed` turns without false
+  positives on past tool results.
+- Unit-tested across 49 specialized NLP test cases (`packages/core/src/tools.test.ts`).
+
+### F25 — Subagent truncation surrender & shell failure deferral interception 🟢
+
+**Claim.** Subagents operating on truncated tool output often confabulated apologies ("I cannot
+complete the report because output is truncated") or diagnosed shell errors without fixing them
+("the latest shell command failed because status is a read-only variable in zsh; the next execution
+must replace status with rc").
+
+**Shipped (`packages/core/src/fenced.ts` & `packages/core/src/tools.ts`).**
+- Anti-surrender prompt rule: models are instructed to paginate and inspect secondary files with
+  `cat`/`head` immediately on truncated outputs.
+- Deferral detector (`deferWords`): catches when the model diagnoses a shell error and defers
+  execution rather than self-healing within the current turn, forcing a retry.
+
+### F26 — Circuit Breaker Local Shielding & HTTP 429 Retry-After self-healing 🟢
+
+**Claim.** Upstream account degradation is driven by thread-creation rate (~15–20 new threads / 10 min),
+surfacing as empty handshakes (`answer length: 0`) rather than `Disengaged`.
+1. Returning `HTTP 502 upstream_error` caused client harnesses (OpenCode, Pi) to terminate turns
+   fatally.
+2. Bombarding Microsoft during cooldown kept the upstream token bucket empty.
+
+**Shipped (`packages/core/src/auth-recovery.ts` & `packages/proxy-lib/src/handler.ts`).**
+- **Local Circuit Breaker Shielding:** When degradation is detected, the proxy intercepts incoming
+  requests locally and returns `HTTP 429 Too Many Requests` with a `Retry-After: <seconds>` header.
+- **Zero Upstream Waste:** Microsoft's gateway sees 0 requests during the cooldown window, allowing
+  its token bucket to refill cleanly.
+- **Client Auto-Recovery:** Standard OpenAI clients catch the `429`, pause for the `Retry-After`
+  duration, and retry automatically without ending the turn.
+- Verified in live production on `10.0.1.15` and unit-tested in `handler-shielding.test.ts`.
+

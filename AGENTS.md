@@ -176,14 +176,27 @@ pnpm test:live      # M365_LIVE=1; live tests that hit real M365 (uses quota)
   turn and strips M365's invented `{confidence}`/`{final}` JSON (`M365_ALLOW_MULTI_TOOL` to opt out).
 - **Account degradation is THREAD-rate, not message-count** (docs/hypotheses.md §9 F13).
   Microsoft throttles *conversations started*, not messages sent — the per-conversation
-  counter resets each thread. A bench that opens one fresh conversation per task burns the
-  thread budget fast; a real pi session (one long thread, many messages) is fine. When
-  everything starts empty-503-ing, it's thread-throttle, **not** the Disengaged content
-  filter (check: no `messageType:"Disengaged"` → it's throttle). **A fresh login (move
-  `msal-cache.json` aside, restart → new tokens) clears it.** Space experiment runs; don't
-  loop new conversations.
-- The `nativeclient` OAuth redirect bounces to `/common/wrongplace`; the auth code is
-  scraped from the navigation request, not a settled URL.
+  counter resets each thread. A bench or harness that opens fresh conversations/subagents in rapid
+  succession burns the thread budget fast (~15–20 threads / 10 min); a single long thread
+  (hundreds of messages) is fine.
+- **The proxy features a Local Circuit Breaker Shield.** When degradation is detected
+  (repeated empty handshakes across conversations), the proxy intercepts subsequent requests
+  locally and returns **`HTTP 429 Too Many Requests`** with a **`Retry-After: <seconds>`** header
+  and a verbose message. This sends **zero traffic to Microsoft** during the cooldown window,
+  allowing Microsoft's token bucket to recharge while standard OpenAI clients (OpenCode, Pi)
+  automatically pause and retry without aborting the turn.
+- **Structural Clause NLP Analysis** (`packages/core/src/tools.ts`): All natural language
+  heuristics for tool refusals, confabulations, and unearned mutation claims use clause-boundary
+  segmentation (`[Tool Anchor] + [Negation] + [Availability State]`). This avoids false positives
+  on filenames with dots (e.g. `test_candidate_claim.py`), detects transitive provision verbs
+  (`expose`, `mount`, `offer`), existence verbs (`exist`), truncation surrenders, and shell error
+  deferrals.
+- **Delta Turn Tool Definitions Injection:** Follow-up turns proactively re-inject the `<tools>`
+  block into `formatDeltaMessages`. M365 reasoning models (`DeepLeo`) require continuous tool
+  context; without it, follow-up turns often confabulate that tools are no longer available.
+- **Assistant-simulated `<tool_response>` tags are rejected & flush session context:** When
+  a model produces a hallucinated simulation with fake `<tool_response>` tags, the proxy strips
+  them and resets the session to force a clean full-history replay on the next turn.
 
 ## Verifying changes end-to-end
 

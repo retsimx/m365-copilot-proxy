@@ -38,10 +38,19 @@ These are what actually move compliance. In rough order of importance:
    nothing yet, the files are real, and its FIRST output must be a ```` ```bash ```` block
    flips the stochastic turn-1 "I can't access the files, please paste them" reflex toward
    complying. ([hyp §9 F14].)
-5. **Proxy-side hardening** (deterministic, behind the model): document guard
-   (`isProseDocument` — don't execute a model's own markdown answer), confab retry,
-   hallucinated-completion retry, tool-result labelling, one-call-per-turn, stripping
-   invented `{confidence}`/`{final}` JSON. See [`tool-calling.md`](tool-calling.md).
+5. **Delta turn `<tools>` injection.** M365 reasoning models (`DeepLeo`) require continuous
+   tool context on every turn. In follow-up delta messages, `formatDeltaMessages` re-injects
+   the `<tools>` block, eliminating turn-2+ "I do not have access to tools" confabulations.
+6. **Structural Clause NLP Semantic Analyzer.** Replacing brittle regexes with clause-boundary
+   tokenization (`[Tool Anchor] + [Negation] + [Availability State]`) to intercept subtle refusals,
+   transitive provision verbs (`this interface does not expose tools`), existence claims (`no
+   apply_patch binary exists`), truncation surrenders, and shell diagnosis deferrals without
+   false-positive splits on `.py` filenames. ([hyp §15].)
+7. **Proxy-side hardening** (deterministic, behind the model): document guard
+   (`isProseDocument` — don't execute a model's own markdown answer), simulated `<tool_response>`
+   rejection and context flush, confab retry, hallucinated-completion retry, tool-result
+   labelling, one-call-per-turn, stripping invented `{confidence}`/`{final}` JSON.
+   See [`tool-calling.md`](tool-calling.md).
 
 ## What does NOT work (confirmed dead-ends — don't re-litigate)
 
