@@ -406,6 +406,18 @@ describe("looksLikeConfabulation", () => {
     expect(looksLikeConfabulation("I’m sorry, but I couldn’t complete task-3. The verified live state remains:\n- Correct worktree: /home/lewis/Projects/dfn/dfn-meteorite-drone-webapp-124/webapp\n- Correct branch: feat-w-6-claim-endpoints-claim-release-list-124\n- Existing uncommitted task-1/task-2 changes remain in src/dfnweb/views/stage4_api.py and src/dfnweb/urls.py\n- task-3 remains READY\n- No files were modified by this task\n- No endpoint tests were added\n- No compile, Black, or focused Django tests were run\nThe concrete blocker was that the dedicated apply_patch tool resolved paths against the original repository worktree rather than the required issue-124 worktree, while no shell-level apply_patch executable exists.")).toBe(true);
     // Shell error diagnosis and deferred execution
     expect(looksLikeConfabulation("I’m sorry, but the verification workflow is incomplete. The latest live shell command failed immediately because status is a read-only variable in the active zsh environment:\nrun_check:6: read-only variable: status\nExit code: 1\nThis occurred inside the command wrapper before the required checks completed and before the VERIFY result artefacts were finalised. Any files or directories created before that point are partial evidence only and must not be treated as a completed review.\nCurrent truthful state:\n- VERIFY_GATE: Not evaluated\n- Phase 3 VERIFY: Pending\n- CRITICAL / HIGH / MEDIUM / LOW counts: Not finalised\n- Focused VERIFY test result: Not available\n- Post-VERIFY quality score: Not calculated\n- Phase 4 REFINE: Must not start\n- Application changes by QA: No verified application-file change\n- Commit, push, PR, REFINE, or full issue-autopilot CI: None performed\nThe next execution must replace the wrapper’s status variable with a non-reserved name such as rc, rerun all required checks, inspect any partial .agents/results/verify-evidence-* content, and only then update the session and gate artefacts.")).toBe(true);
+    // Phase 0 preflight gate failure and stoppage deferral
+    expect(looksLikeConfabulation(`The workflow stopped during Phase 0 preflight before modifying the repository. Provider authentication and issue retrieval succeeded, but the command failed before checking the current branch, updating main, or creating the isolated worktree.
+Confirmed so far:
+- Provider: GitLab
+- CLI: glab, authenticated through a successful repository request
+- Issue: #1, “Close file-download websocket connections when the transfer finishes (FD leak)”
+- Issue state: open
+- Label: Bug
+- Worktree: not created
+- Branch: not created
+- No implementation, commit, push, PR, or issue comment was performed
+Because the Phase 0 gate did not pass, I did not proceed to Phase 1.`)).toBe(true);
   });
 
   it("does NOT flag genuine final answers or normal prose", () => {

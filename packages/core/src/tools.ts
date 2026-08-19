@@ -421,14 +421,14 @@ function hasClauseRefusal(text: string): boolean {
   const directNegStateWords =
     /\b(?:disabled|unavailable|inactive|unsupported|unmounted|inaccessible|unreachable|unexecutable|disallowed|prohibited)\b/i;
   const negWords =
-    /(?:\b(?:not|no|cannot|can.?t|unable|without|lack|absence|isn.?t|aren.?t|don.?t|never|falsely|decline|impossible|prevented|restricted|couldn.?t)\b)/i;
+    /(?:\b(?:not|no|cannot|can.?t|unable|without|lack|absence|isn.?t|aren.?t|don.?t|never|falsely|decline|impossible|prevented|restricted|couldn.?t|did.?t|didn.?t)\b)/i;
   const availWords =
     /(?:\b(?:enabled|available|attached|provided|active|functional|operational|accessible|installed|configured|present|support|supported|permitted|access|executed|claimed|started|run|interact|callable|expose|exposed|exposes|exposing|mount|mounted|mounts|mounting|include|included|includes|contain|contained|contains|offer|offered|offers|allow|allowed|allows|have|has|exists?|existed)\b)/i;
 
   const accessActionWords =
-    /\b(?:access|inspect|list|read|run|execute|retrieve|fetch|locate|see|open|edit|modify|write|apply|verify|complete|finish)\b/i;
+    /\b(?:access|inspect|list|read|run|execute|retrieve|fetch|locate|see|open|edit|modify|modifying|write|apply|verify|complete|finish|create|created|creating|perform|performed|performing|proceed|proceeded|proceeding|check|checking|update|updating)\b/i;
   const accessTargetWords =
-    /\b(?:files?|directory|directories|folder|environment|session|filesystem|repository|code|cwd|contents?|changes?|edits?|tasks?|task-\d+)\b/i;
+    /\b(?:files?|directory|directories|folder|environment|session|filesystem|repository|code|cwd|contents?|changes?|edits?|tasks?|task-\d+|worktrees?|branch(?:es)?|preflight|workflow|steps?|phase\s*\d+|stages?|repo|issues?|pr|pull\s+requests?)\b/i;
 
   const delegateWords = /\b(?:paste|provide\s+me|send\s+me)\b/i;
   const restartWords = /\b(?:restart|start\s+over|begin\s+again|re-?run)\b/i;
@@ -440,7 +440,7 @@ function hasClauseRefusal(text: string): boolean {
   const surrenderActionWords =
     /\b(?:complete|finish|provide|report|generate|proceed)\b/i;
   const deferWords =
-    /\b(?:the\s+next\s+execution\s+must|must\s+be\s+(?:re-?run|retried)|(?:workflow|verification|task|execution)\s+is\s+(?:incomplete|aborted|pending|blocked)|command\s+failed\s+immediately)\b/i;
+    /\b(?:the\s+next\s+execution\s+must|must\s+be\s+(?:re-?run|retried)|(?:workflow|verification|task|execution|preflight|process|run)\s+(?:is\s+(?:incomplete|aborted|pending|blocked|stopped)|stopped|halted|failed|aborted|paused|terminated)|command\s+failed|did\s+not\s+proceed\s+to\s+(?:phase|step|task|stage)|(?:phase|step|stage|task|gate)\s+(?:gate\s+)?(?:did\s+not\s+pass|failed|not\s+met)|gate\s+(?:did\s+not\s+pass|failed|not\s+met))\b/i;
 
   const clauses = text.split(/(?:\.(?:\s+|$)|[;\n\r]+)|\bbecause\b|\btherefore\b|\bso\b|\bsince\b|\bas\b|\bdue\s+to\b|\bhowever\b|\bbut\b|\bwhile\b/i);
   for (const clause of clauses) {
