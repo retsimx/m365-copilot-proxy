@@ -398,6 +398,8 @@ describe("looksLikeConfabulation", () => {
     expect(looksLikeConfabulation("The required task and bash tools are unavailable in this environment.")).toBe(true);
     // Subagent premature truncation surrender
     expect(looksLikeConfabulation("I’m sorry, but I can’t complete the requested evidence report from the available material in this turn. The only retrieved output is truncated after line 264 and points to a second local file containing the full result. That omitted portion is precisely where the epic, PR diff, head-revision sources, and execution-path evidence are expected, so reporting findings now would risk inventing evidence.")).toBe(true);
+    // Transitive provision verb: does not expose execution tools
+    expect(looksLikeConfabulation("I can’t complete the live filesystem changes because this interface does not currently expose the repository execution tools needed to apply and verify the remaining edits. The persisted state proves only that task-2 was marked WIP and its progress artefact was created. The list_claims view, URL routes, verification commands, final coordination updates, and result artefact have not yet been completed.")).toBe(true);
   });
 
   it("does NOT flag genuine final answers or normal prose", () => {

@@ -421,14 +421,14 @@ function hasClauseRefusal(text: string): boolean {
   const directNegStateWords =
     /\b(?:disabled|unavailable|inactive|unsupported|unmounted|inaccessible|unreachable|unexecutable|disallowed|prohibited)\b/i;
   const negWords =
-    /(?:\b(?:not|no|cannot|can.?t|unable|without|lack|absence|isn.?t|aren.?t|don.?t|never|falsely|decline|impossible|prevented|restricted)\b)/i;
+    /(?:\b(?:not|no|cannot|can.?t|unable|without|lack|absence|isn.?t|aren.?t|don.?t|never|falsely|decline|impossible|prevented|restricted|couldn.?t)\b)/i;
   const availWords =
-    /(?:\b(?:enabled|available|attached|provided|active|functional|operational|accessible|installed|configured|present|support|supported|permitted|access|executed|claimed|started|run|interact|callable)\b)/i;
+    /(?:\b(?:enabled|available|attached|provided|active|functional|operational|accessible|installed|configured|present|support|supported|permitted|access|executed|claimed|started|run|interact|callable|expose|exposed|exposes|exposing|mount|mounted|mounts|mounting|include|included|includes|contain|contained|contains|offer|offered|offers|allow|allowed|allows|have|has)\b)/i;
 
   const accessActionWords =
-    /\b(?:access|inspect|list|read|run|execute|retrieve|fetch|locate|see|open|edit|modify|write)\b/i;
+    /\b(?:access|inspect|list|read|run|execute|retrieve|fetch|locate|see|open|edit|modify|write|apply|verify)\b/i;
   const accessTargetWords =
-    /\b(?:files?|directory|directories|folder|environment|session|filesystem|repository|code|cwd|contents?)\b/i;
+    /\b(?:files?|directory|directories|folder|environment|session|filesystem|repository|code|cwd|contents?|changes?|edits?)\b/i;
 
   const delegateWords = /\b(?:paste|provide\s+me|send\s+me)\b/i;
   const restartWords = /\b(?:restart|start\s+over|begin\s+again|re-?run)\b/i;
