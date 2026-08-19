@@ -417,18 +417,18 @@ export function looksLikeRemoteArtifactCompletion(text: string | null): boolean 
  */
 function hasClauseRefusal(text: string): boolean {
   const toolWords =
-    /(?:\btools?\b|\bshell\b|\bexecution\b|\btool_calls?\b|`<tools>`|`?(?:bash|skill|question|task|edit_file|write_file|read_file|glob|grep|editing)`?|\bfile\s+editing\b|\bfilesystem\b|\bterminal\b|\bcommand\s+execution\b)/i;
+    /(?:\btools?\b|\bshell\b|\bexecution\b|\btool_calls?\b|`<tools>`|`?(?:bash|skill|question|task|edit_file|write_file|read_file|glob|grep|editing|apply_patch)`?|\bfile\s+editing\b|\bfilesystem\b|\bterminal\b|\bcommand\s+execution\b|\bexecutable\b|\bbinary\b)/i;
   const directNegStateWords =
     /\b(?:disabled|unavailable|inactive|unsupported|unmounted|inaccessible|unreachable|unexecutable|disallowed|prohibited)\b/i;
   const negWords =
     /(?:\b(?:not|no|cannot|can.?t|unable|without|lack|absence|isn.?t|aren.?t|don.?t|never|falsely|decline|impossible|prevented|restricted|couldn.?t)\b)/i;
   const availWords =
-    /(?:\b(?:enabled|available|attached|provided|active|functional|operational|accessible|installed|configured|present|support|supported|permitted|access|executed|claimed|started|run|interact|callable|expose|exposed|exposes|exposing|mount|mounted|mounts|mounting|include|included|includes|contain|contained|contains|offer|offered|offers|allow|allowed|allows|have|has)\b)/i;
+    /(?:\b(?:enabled|available|attached|provided|active|functional|operational|accessible|installed|configured|present|support|supported|permitted|access|executed|claimed|started|run|interact|callable|expose|exposed|exposes|exposing|mount|mounted|mounts|mounting|include|included|includes|contain|contained|contains|offer|offered|offers|allow|allowed|allows|have|has|exists?|existed)\b)/i;
 
   const accessActionWords =
-    /\b(?:access|inspect|list|read|run|execute|retrieve|fetch|locate|see|open|edit|modify|write|apply|verify)\b/i;
+    /\b(?:access|inspect|list|read|run|execute|retrieve|fetch|locate|see|open|edit|modify|write|apply|verify|complete|finish)\b/i;
   const accessTargetWords =
-    /\b(?:files?|directory|directories|folder|environment|session|filesystem|repository|code|cwd|contents?|changes?|edits?)\b/i;
+    /\b(?:files?|directory|directories|folder|environment|session|filesystem|repository|code|cwd|contents?|changes?|edits?|tasks?|task-\d+)\b/i;
 
   const delegateWords = /\b(?:paste|provide\s+me|send\s+me)\b/i;
   const restartWords = /\b(?:restart|start\s+over|begin\s+again|re-?run)\b/i;
@@ -440,7 +440,7 @@ function hasClauseRefusal(text: string): boolean {
   const surrenderActionWords =
     /\b(?:complete|finish|provide|report|generate|proceed)\b/i;
 
-  const clauses = text.split(/(?:\.(?:\s+|$)|[;\n\r]+)|\bbecause\b|\btherefore\b|\bso\b|\bsince\b|\bas\b|\bdue\s+to\b|\bhowever\b|\bbut\b/i);
+  const clauses = text.split(/(?:\.(?:\s+|$)|[;\n\r]+)|\bbecause\b|\btherefore\b|\bso\b|\bsince\b|\bas\b|\bdue\s+to\b|\bhowever\b|\bbut\b|\bwhile\b/i);
   for (const clause of clauses) {
     if (sandboxWords.test(clause)) return true;
     if (emptyOutputWords.test(clause)) return true;
