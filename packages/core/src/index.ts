@@ -25,6 +25,8 @@ export {
   noteRequestOutcome,
   awaitDegradationBackoff,
   isDegradationBackoff,
+  getRemainingDegradationCooldownMs,
+  getDegradationLevel,
   createBackoffController,
   type BackoffController,
   type BackoffOptions,

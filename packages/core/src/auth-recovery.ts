@@ -54,6 +54,10 @@ export interface BackoffController {
   waitForSlot: () => Promise<number>;
   /** Whether the controller is currently in a backoff window. */
   isBackingOff: () => boolean;
+  /** Milliseconds remaining in the active backoff window (0 if healthy). */
+  getRemainingCooldownMs: () => number;
+  /** Current backoff escalation level (0 if healthy). */
+  getLevel: () => number;
 }
 
 export function createBackoffController(opts: BackoffOptions): BackoffController {
@@ -111,6 +115,14 @@ export function createBackoffController(opts: BackoffOptions): BackoffController
     isBackingOff() {
       return now() < backoffUntil;
     },
+
+    getRemainingCooldownMs() {
+      return Math.max(0, backoffUntil - now());
+    },
+
+    getLevel() {
+      return now() < backoffUntil ? level : 0;
+    },
   };
 }
 
@@ -147,4 +159,16 @@ export async function awaitDegradationBackoff(): Promise<void> {
 /** Whether the global policy is currently backing off. */
 export function isDegradationBackoff(): boolean {
   return !disabled() && defaultController.isBackingOff();
+}
+
+/** Milliseconds remaining in the active degradation cooldown window (0 if healthy). */
+export function getRemainingDegradationCooldownMs(): number {
+  if (disabled()) return 0;
+  return defaultController.getRemainingCooldownMs();
+}
+
+/** Current degradation escalation level (0 if healthy). */
+export function getDegradationLevel(): number {
+  if (disabled()) return 0;
+  return defaultController.getLevel();
 }

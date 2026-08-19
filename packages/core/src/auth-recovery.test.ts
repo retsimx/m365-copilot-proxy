@@ -121,4 +121,25 @@ describe("createBackoffController", () => {
     const delay = await controller.waitForSlot();
     expect(delay).toBe(1000); // capped at remaining
   });
+
+  it("reports accurate remaining cooldown ms and level", async () => {
+    const { controller, advance } = setup();
+    expect(controller.getRemainingCooldownMs()).toBe(0);
+    expect(controller.getLevel()).toBe(0);
+
+    controller.note(true, "c1");
+    controller.note(true, "c2");
+    controller.note(true, "c3"); // enters level 1 -> 5000ms cooldown
+
+    expect(controller.getLevel()).toBe(1);
+    expect(controller.getRemainingCooldownMs()).toBe(5000);
+
+    advance(2000);
+    expect(controller.getRemainingCooldownMs()).toBe(3000);
+    expect(controller.getLevel()).toBe(1);
+
+    advance(3000);
+    expect(controller.getRemainingCooldownMs()).toBe(0);
+    expect(controller.getLevel()).toBe(0);
+  });
 });

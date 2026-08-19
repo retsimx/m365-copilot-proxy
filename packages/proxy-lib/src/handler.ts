@@ -14,6 +14,8 @@ import {
   getMessageContent,
   noteRequestOutcome,
   awaitDegradationBackoff,
+  isDegradationBackoff,
+  getRemainingDegradationCooldownMs,
   getImageArtifactToken,
   fetchImageBytes,
   type CapturedImage,
@@ -290,12 +292,18 @@ export async function handleChatCompletion(
     let agentRefreshed = false;
     let disengageRetried = false;
     const originalText = text;
-    // Self-imposed pacing while the account is degraded (thread-rate throttle). A
-    // no-op when healthy; during backoff it sleeps a jittered delay so we stop
-    // starting fresh turns into the throttle and let it self-heal (H-R1). This
-    // replaced the old auto-reauth, which didn't clear the throttle and raised our
-    // detection profile. A single long pi thread never trips the trigger.
-    await awaitDegradationBackoff();
+
+    // Circuit breaker / Local Shielding: when the account is in degradation cooldown
+    // (thread-rate throttle), do NOT send requests to Microsoft (which would keep the
+    // upstream bucket empty and extend the throttle). Return HTTP 429 with Retry-After
+    // immediately so OpenCode/client sleeps and retries cleanly without failing the turn.
+    if (isDegradationBackoff()) {
+      const remainingMs = getRemainingDegradationCooldownMs();
+      const remainingSec = Math.max(1, Math.ceil(remainingMs / 1000));
+      log.info(`Account degraded — locally shielding request (circuit breaker active for ${remainingSec}s, returning 429 Retry-After)`);
+      return { error: degradationShieldResponse(remainingSec) };
+    }
+
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       let copilotStream;
       try {
@@ -410,13 +418,17 @@ export async function handleChatCompletion(
         // Final empty after retries, and not an at-limit (per-conversation) cap:
         // this is the thread-rate throttle signature (F13). Feed the degradation-
         // backoff policy — once empties span enough distinct conversations it paces
-        // subsequent turns so the account can self-heal (H-R1). Never blocks this request.
+        // subsequent turns so the account can self-heal (H-R1).
         noteRequestOutcome(true, convId);
-        return { error: emptyResponseResponse(t) };
+        const remainingMs = getRemainingDegradationCooldownMs();
+        const remainingSec = Math.max(1, Math.ceil(remainingMs / 1000)) || 60;
+        return { error: emptyResponseResponse(t, remainingSec) };
       }
     }
     noteRequestOutcome(true, convId);
-    return { error: emptyResponseResponse(null) };
+    const remainingMs = getRemainingDegradationCooldownMs();
+    const remainingSec = Math.max(1, Math.ceil(remainingMs / 1000)) || 60;
+    return { error: emptyResponseResponse(null, remainingSec) };
   }
 
   // Produce the final turn result as DATA (not a Response), so the same logic
@@ -719,10 +731,10 @@ function buildUsage(
 
 // --- Helpers ---
 
-function jsonResponse(status: number, body: unknown): Response {
+function jsonResponse(status: number, body: unknown, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...headers },
   });
 }
 
@@ -734,25 +746,54 @@ function sseResponse(stream: ReadableStream): Response {
 
 function rateLimitMessage(throttle: { current: number; max: number } | null): string {
   return throttle
-    ? `M365 Copilot rate limited (${throttle.current}/${throttle.max} messages used). Please wait and try again.`
-    : "M365 Copilot returned an empty response. You may be rate limited. Please wait and try again.";
+    ? `M365 Copilot rate limited (${throttle.current}/${throttle.max} messages used in this conversation). Please wait and try again.`
+    : "M365 Copilot rate limit reached. Upstream capacity exceeded. Please wait and try again.";
 }
 
-function rateLimitResponse(throttle: { current: number; max: number } | null): Response {
-  return jsonResponse(429, { error: { message: rateLimitMessage(throttle), type: "rate_limit_error" } });
-}
-
-/** Empty upstream reply that is NOT an at-limit throttle — a distinct failure
- *  (content filter, invalid agent/session, transient error) we surface clearly
- *  instead of hanging on a long retry loop. */
-function emptyResponseResponse(throttle: { current: number; max: number } | null): Response {
-  const detail = throttle ? ` (throttle ${throttle.current}/${throttle.max})` : "";
-  return jsonResponse(502, {
-    error: {
-      message: `M365 Copilot returned an empty response${detail} — likely a content filter, an invalid agent/session, or a transient upstream error.`,
-      type: "upstream_empty_response",
+function rateLimitResponse(throttle: { current: number; max: number } | null, retryAfterSec: number = 60): Response {
+  return jsonResponse(
+    429,
+    {
+      error: {
+        message: rateLimitMessage(throttle),
+        type: "rate_limit_error",
+        code: "rate_limit_exceeded",
+      },
     },
-  });
+    { "Retry-After": retryAfterSec.toString() },
+  );
+}
+
+function degradationShieldResponse(remainingSec: number): Response {
+  return jsonResponse(
+    429,
+    {
+      error: {
+        message: `M365 Copilot account is in thread-rate throttle cooldown (${remainingSec}s remaining). Upstream token bucket is recovering. Client will retry automatically.`,
+        type: "rate_limit_error",
+        code: "rate_limit_exceeded",
+      },
+    },
+    { "Retry-After": remainingSec.toString() },
+  );
+}
+
+/** Empty upstream reply that is NOT an at-limit throttle — surfaces as a standard
+ *  OpenAI 429 rate limit with Retry-After so OpenCode/Pi automatically waits
+ *  and retries rather than aborting the turn. */
+function emptyResponseResponse(throttle: { current: number; max: number } | null, retryAfterSec: number = 60): Response {
+  const detail = throttle ? ` (throttle ${throttle.current}/${throttle.max})` : "";
+  return jsonResponse(
+    429,
+    {
+      error: {
+        message: `M365 Copilot returned an empty response${detail} — likely account thread rate limit reached. Backing off for ${retryAfterSec}s to allow upstream token bucket to recover. Client will retry automatically.`,
+        type: "rate_limit_error",
+        code: "rate_limit_exceeded",
+      },
+    },
+    { "Retry-After": retryAfterSec.toString() },
+  );
 }
 
 // (streaming is emitted inline by the early-flushed SSE renderer in
