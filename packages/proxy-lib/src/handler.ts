@@ -113,7 +113,7 @@ export class SessionPool {
   resolve(messages: ParsedMessage[], tools?: ChatBody["tools"], sessionId?: string): ConversationState {
     this.evictStale();
 
-    const fingerprint = sessionId?.trim() ? `session:${sessionId.trim()}` : this.fingerprint(messages, tools);
+    const fingerprint = this.fingerprint(messages, tools, sessionId);
     const existing = this.conversations.get(fingerprint);
 
     if (existing) {
@@ -138,7 +138,8 @@ export class SessionPool {
     return state;
   }
 
-  private fingerprint(messages: ParsedMessage[], tools?: ChatBody["tools"]): string {
+  private fingerprint(messages: ParsedMessage[], tools?: ChatBody["tools"], sessionId?: string): string {
+    const sessionPrefix = sessionId?.trim() ? `session:${sessionId.trim()}::` : "";
     const systemMsg = messages.find(m => m.role === "system");
     const systemText = systemMsg ? getMessageContent(systemMsg) : "";
     const firstUser = messages.find(m => m.role === "user");
@@ -146,7 +147,7 @@ export class SessionPool {
     const toolSig = tools && tools.length > 0
       ? tools.map(t => t.function.name).sort().join(",")
       : "";
-    return simpleHash(`${systemText}::${userText}::${toolSig}`);
+    return `${sessionPrefix}${simpleHash(`${systemText}::${userText}::${toolSig}`)}`;
   }
 
   private evictStale() {

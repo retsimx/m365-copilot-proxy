@@ -66,4 +66,26 @@ describe("SessionPool session isolation & fingerprinting", () => {
     expect(sessionA).not.toBe(sessionB);
     expect(sessionA).toBe(sessionARepeat);
   });
+
+  it("isolates title generator and main agent requests even when they share the exact same sessionId header", () => {
+    const pool = new SessionPool();
+    const sharedSessionId = "ses_fe8aeb805ffeD3JhxTLCcOaK84";
+
+    const titleGenMessages = [
+      { role: "system" as const, content: "You are a title generator. You output ONLY a thread title. Nothing else." },
+      { role: "user" as const, content: "/issue-autopilot 124" },
+    ];
+
+    const mainAgentMessages = [
+      { role: "system" as const, content: "You are the execution core of an automated agent, not a chat assistant." },
+      { role: "user" as const, content: "/issue-autopilot 124" },
+    ];
+
+    const titleSession = pool.resolve(titleGenMessages, undefined, sharedSessionId);
+    const mainSession = pool.resolve(mainAgentMessages, bashTool, sharedSessionId);
+
+    expect(pool.size).toBe(2);
+    expect(titleSession).not.toBe(mainSession);
+    expect(titleSession.session.conversationId).not.toBe(mainSession.session.conversationId);
+  });
 });

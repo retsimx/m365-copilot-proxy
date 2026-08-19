@@ -248,8 +248,12 @@ export interface ParseResult {
 // see/run anything and asks the user to paste files, WITHOUT ever calling a tool —
 // even though the environment is real. Used to trigger a forcing retry (handler).
 const CONFABULATION_PATTERNS: RegExp[] = [
-  /return(?:ing|s|ed)?\s+no\s+(?:output|results?|content)/i,
+  /return(?:ing|s|ed)?\s+(?:no|empty)\s+(?:output|results?|content|data)(?:\s+available)?/i,
   /no\s+(?:output|results?|content|data)\s+(?:was\s+|were\s+)?(?:return|provid|present)/i, // "no content was returned"
+  /(?:not|aren.?t|is not)\s+(?:operational|functioning)\s+in\s+the\s+current\s+execution\s+environment/i,
+  /not\s+(?:being\s+)?executed\s+by\s+the\s+runtime/i,
+  /(?:possible|function)\s+without\s+a\s+(?:functioning|live|real)\s+shell\s+tool/i,
+  /Run\s+OpenCode\s+in\s+its\s+native\s+CLI\s+context/i,
   // The `to` is optional — matches both "unable TO access" and "can't access" (the
   // old `to?` made the *t* mandatory, so "can't inspect"/"can't access" slipped
   // through). `execute`/`retrieve`/`fetch` added: the give-up reflex phrases them

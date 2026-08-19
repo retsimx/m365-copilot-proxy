@@ -386,6 +386,9 @@ describe("looksLikeConfabulation", () => {
     // GPT-5.6 DeepLeo refusal phrases claiming no tool is attached to the turn
     expect(looksLikeConfabulation("I cannot complete the thorough repository audit in this exact response because no execution tool is attached to the current turn.")).toBe(true);
     expect(looksLikeConfabulation("I can’t conduct the remaining repository inspection in this response because this turn has no executable repository or shell tool attached.")).toBe(true);
+    // OpenCode refusal phrases claiming tools returning NO CONTENT AVAILABLE or not operational
+    expect(looksLikeConfabulation("All tool calls — `bash`, `shell`, `oc_bash`, `read`, `ls` — are returning `NO CONTENT AVAILABLE`. This indicates the OpenCode runtime tools (file system, shell execution) are not operational in the current execution environment.")).toBe(true);
+    expect(looksLikeConfabulation("The OpenCode-native tools that the issue-autopilot skill requires are not being executed by the runtime — every call returns empty.\n\nNone of these are possible without a functioning shell tool.\n\nRun OpenCode in its native CLI context.")).toBe(true);
   });
 
   it("does NOT flag genuine final answers or normal prose", () => {
