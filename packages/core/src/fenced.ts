@@ -664,7 +664,10 @@ function parseFencedInner(spec: FencedToolSpec, inner: string): Record<string, u
         args[spec.bodyParam] = rest;
       }
     } else {
-      args[spec.bodyParam] = rest;
+      // Strip trailing model invocation stop-tokens emitted at stream end
+      args[spec.bodyParam] = typeof rest === "string"
+        ? rest.replace(/(?:<\/?(?:parameter|invoke|tool_call|function_call)[^>]*>\s*)+$/gi, "").trimEnd()
+        : rest;
     }
   }
 
@@ -741,6 +744,8 @@ export interface FencedParseResult {
  *   ```` ````tool ```` closed by at least 4 backticks.
  * - Shell heredoc awareness: when inside a bash/shell block with an active heredoc
  *   (e.g. `cat <<'END'`), nested ```` ``` ```` lines do not prematurely close the tool fence.
+ * - Consecutive fence transitions without closing backticks (e.g. ```` ```bash ... ```bash ````).
+ * - EOF flush for streams ending without a decorative closing fence.
  */
 export function parseFencedToolCalls(
   text: string,
@@ -784,6 +789,26 @@ export function parseFencedToolCalls(
         continue;
       }
 
+      // Check if this line is starting a NEW tool fence without an explicit closing fence
+      // (e.g. ```bash ... ```bash ...) when not inside an active heredoc
+      const openMatch = line.match(OPEN_FENCE_REGEX);
+      const newSpec = openMatch && openMatch[2].length >= fenceLen ? specs.get(openMatch[3]) : null;
+      if (newSpec) {
+        const inner = blockLines.join("\n");
+        const args = parseFencedInner(toolSpec!, inner);
+        if (args) {
+          calls.push(makeCall(toolSpec!.name, args));
+          matchedIndices.push({ start: blockStartIndex, end: i - 1 });
+        }
+        inBlock = true;
+        fenceLen = openMatch![2].length;
+        toolSpec = newSpec;
+        blockLines = [];
+        blockStartIndex = i;
+        heredocStack = [];
+        continue;
+      }
+
       // Check for opening a heredoc in the current line
       const hMatch = line.match(HEREDOC_OPEN_REGEX);
       if (hMatch) {
@@ -807,6 +832,16 @@ export function parseFencedToolCalls(
       } else {
         blockLines.push(line);
       }
+    }
+  }
+
+  // EOF Flush: if stream ended while still inside an unclosed tool block, parse it
+  if (inBlock && toolSpec && blockLines.length > 0) {
+    const inner = blockLines.join("\n");
+    const args = parseFencedInner(toolSpec, inner);
+    if (args) {
+      calls.push(makeCall(toolSpec.name, args));
+      matchedIndices.push({ start: blockStartIndex, end: lines.length - 1 });
     }
   }
 

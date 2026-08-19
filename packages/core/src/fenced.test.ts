@@ -532,7 +532,67 @@ glab issue list --state opened -R CAS-eResearch/GWDC/gwcloud_bilby 2>&1
       priority: "medium",
     });
   });
+
+  it("parses an unclosed tool fence at EOF (stream ends before closing backticks)", () => {
+    const text = `Now writing the design doc:
+\`\`\`bash
+python3 << 'PYEOF'
+from pathlib import Path
+Path("design.md").write_text("Hello World")
+PYEOF`;
+
+    const { calls, leftover } = parseFencedToolCalls(text, specs);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].function.name).toBe("bash");
+    const args = JSON.parse(calls[0].function.arguments);
+    expect(args.command).toContain("Path(\"design.md\").write_text(\"Hello World\")");
+    expect(leftover.trim()).toBe("Now writing the design doc:");
+  });
+
+  it("sanitizes trailing model stop tags (</parameter></invoke>) on unclosed tool fence at EOF", () => {
+    const text = `\`\`\`bash
+python3 << 'PYEOF'
+print("SAVED")
+PYEOF</parameter>
+</invoke>`;
+
+    const { calls } = parseFencedToolCalls(text, specs);
+    expect(calls).toHaveLength(1);
+    const args = JSON.parse(calls[0].function.arguments);
+    expect(args.command).toBe("python3 << 'PYEOF'\nprint(\"SAVED\")\nPYEOF");
+  });
+
+  it("parses consecutive tool fences emitted back-to-back without closing backticks", () => {
+    const text = `\`\`\`bash
+git remote get-url origin
+\`\`\`bash
+echo test && git remote get-url origin
+\`\`\``;
+
+    const { calls } = parseFencedToolCalls(text, specs);
+    expect(calls).toHaveLength(2);
+    expect(JSON.parse(calls[0].function.arguments).command).toBe("git remote get-url origin");
+    expect(JSON.parse(calls[1].function.arguments).command).toBe("echo test && git remote get-url origin");
+  });
+
+  it("does not split nested markdown fences inside an active heredoc", () => {
+    const text = `\`\`\`bash
+cat << 'EOF' > README.md
+# Project
+\`\`\`bash
+npm start
+\`\`\`
+EOF
+\`\`\``;
+
+    const { calls } = parseFencedToolCalls(text, specs);
+    expect(calls).toHaveLength(1);
+    const args = JSON.parse(calls[0].function.arguments);
+    expect(args.command).toContain("# Project");
+    expect(args.command).toContain("npm start");
+  });
 });
+
 
 
 
