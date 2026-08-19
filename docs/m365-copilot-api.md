@@ -329,6 +329,8 @@ that is distinct from the per-conversation 600 cap (which resets per conversatio
 - A "conversation" = a stable `ConversationId` (+ `X-SessionId`). M365 keeps **server-side context** for it.
 - Each **turn opens a fresh WebSocket** (with `invocationId:"0"`), but reuses the same `ConversationId`/`sessionId`, so the server threads them together. `isStartOfSession:true` only on turn 0.
 - Because the server remembers prior turns, follow-ups should send **only the new messages** (the delta), not the whole history. Re-sending the full history confuses it and burns quota. See `ModelSession`/`CopilotSession` and `SessionPool` (`handler.ts`).
+- **Session Isolation & Fingerprinting (`SessionPool`):** The proxy resolves conversation states using explicit session headers (`x-session-id`, `x-conversation-id`, `x-opencode-session`, `body.user`) combined with SHA-256 fingerprints of `system prompt + first user message + tool definitions`. This isolates concurrent subagents and title generators cleanly.
+- **Estimated Token Usage Metrics:** Character counts are mapped to estimated `prompt_tokens`, `completion_tokens`, and `total_tokens` (using ~3.8 chars/token ratio) so OpenAI client status bars and context window meters reflect real session usage.
 
 ---
 

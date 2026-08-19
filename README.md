@@ -30,6 +30,8 @@ it scored 0/5 on real agentic tasks; see [hypotheses §9](docs/hypotheses.md)):
   is what turns 0/5 into real multi-turn loops (verified 9-tool-call bug fix).
 - **Reliability comes from the Copilot Studio agent (below) + the fenced/shell framing** —
   without the agent, M365 ignores tool instructions and answers in prose
+- **Structural Clause NLP:** Replaces brittle regexes with clause-boundary segmentation (`[Tool Anchor] + [Negation] + [Availability State]`) to intercept subtle refusals, existence claims, truncation surrenders, and shell failure deferrals.
+- **Circuit Breaker Local Shielding:** Automatically intercepts requests during thread-rate cooldowns and returns `HTTP 429` with `Retry-After: <seconds>`, allowing OpenAI clients (OpenCode, Pi) to auto-pause and self-heal without aborting turns.
 
 ### Agent mode
 
@@ -41,9 +43,9 @@ On first use, the system creates a **Copilot Studio agent** with tool-calling in
 4. Uses the agent ID (`T_{titleId}.{botId}.gpt.default`) in WebSocket chat requests
 5. Caches the agent ID in `~/.config/opencode-m365/agent-id.json`
 
-### Conversation reuse
+### Conversation reuse & Session Isolation
 
-Each agent session reuses the same M365 conversation (same `sessionId` + `conversationId`). The WebSocket reconnects per turn but M365 maintains server-side context. This saves quota — the 600 message limit applies per-conversation.
+Each agent session reuses the same M365 conversation (same `sessionId` + `conversationId`). The WebSocket reconnects per turn but M365 maintains server-side context. The proxy's `SessionPool` isolates subagents via SHA-256 fingerprinting and session headers (`x-session-id`, `x-opencode-session`). Follow-up delta turns re-inject tool definitions so reasoning models (`DeepLeo`) never lose tool context. Output usage blocks provide estimated token counts for context window gauges.
 
 ## Packages
 

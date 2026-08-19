@@ -18,6 +18,14 @@ Per-tool shape: the fence info-string is the tool name, scalar args are `key: va
 header lines, one free-form arg is the fence body, and an `old`/`new` pair renders as an
 aider-style `SEARCH/REPLACE` diff.
 
+**Advanced Fence Parsing & Schema Normalization (`fenced.ts`):**
+- **Heredoc-Aware Parser:** Shell tools parsing `cat <<'EOF' ... EOF` will **not** prematurely close the tool fence when the heredoc contains nested code blocks.
+- **CommonMark Variable Backtick Lengths:** Fences opened with ```` ````tool ```` are correctly matched to closing fences with $\ge 4$ backticks.
+- **Consecutive Tool Call Transitions & EOF Flush:** Handles back-to-back tool blocks without closing backticks and flushes unclosed fences at stream completion.
+- **Question Schema Normalization:** Normalizes `questions` arrays for interactive prompts, defaulting `header` ("Clarification"), formatting options as `{ label, description }` pairs, and setting `multiple: false`.
+- **Todo / Task Normalization:** Automatically structures `todos` items for `todowrite` tools, assigning incremental IDs, default `status: "pending"`, and `priority: "medium"`.
+- **JSON Body Parsing:** Automatically parses JSON arrays and objects passed within fenced block bodies.
+
 **Shell-routing (the load-bearing trick).** M365's chat model won't "act as an agent" on
 demand but *will* reflexively write a ` ```bash ` block. When the toolset includes a shell
 tool (`bash`/`shell`/`run`/`run_command`/… — any name), the proxy injects "do the whole step
