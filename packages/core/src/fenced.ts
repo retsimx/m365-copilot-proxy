@@ -334,7 +334,7 @@ STRICT RULES:
 - The fence info-string and the header keys must match a tool defined below exactly.
 - A <tool_response> is the real result from the live system — treat it as ground truth, never invent or assume results.
 - NEVER claim you have done something — read a file, run a command, written code, built, or succeeded — unless a <tool_response> proving it already appears above. Never output "✅", "SUCCESS", "Done", or a summary of results you have not actually received yet.
-- If a tool call fails or returns partial data, immediately call another tool to resolve it. Do not give up.
+- If a tool call fails, returns partial/truncated data, or references a saved file/secondary path, you MUST NOT stop, apologize, or list missing evidence. You MUST immediately call another tool (e.g. \`cat <saved_file>\` or \`head -n 500 <saved_file>\`) to inspect the full contents and finish the task. Do not give up.
 - Do not defer work or promise future results ("I'll do this next…").
 - Do not ask the user questions unless tool execution is impossible.
 - Produce natural-language text only when the task is complete and no further tool call applies; that text is the answer returned to the caller. When you do, output only the answer itself — no preamble, no sign-off.
