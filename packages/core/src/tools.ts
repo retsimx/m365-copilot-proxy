@@ -296,15 +296,17 @@ const CONFABULATION_PATTERNS: RegExp[] = [
   // Claims about <tools> block / tool interface being disabled, absent, or unavailable:
   /no\s+(?:executable\s+)?`?<tools>`?\s+(?:block\s+)?(?:is\s+|are\s+)?(?:not\s+)?(?:enabled|available|provided|included)/i,
   /(?:does\s+not|doesn.?t|not)\s+include\s+(?:an?\s+)?(?:actual\s+|executable\s+)?`?<tools>`?\s+block/i,
+  /(?:execution\s+tool\s+block|tool\s+block|tools\s+block|execution\s+tools?|tool\s+interface)\s+(?:is\s+|are\s+)?(?:no\s+longer|not|currently\s+not)\s+(?:available|enabled|present|active)/i,
   /(?:do\s+not|don.?t|cannot|can.?t)\s+have\s+(?:an?\s+)?(?:actual\s+|enabled\s+|live\s+|real\s+)?[\w\s`,-]{0,120}\btools?\s+(?:to\s+call|available)/i,
-  /(?:no|without\s+(?:any)?)\s+(?:live\s+|enabled\s+|real\s+)?[\w\s`,-]{0,120}\btools?\s+(?:is\s+|are\s+)?available/i,
+  /(?:no|without\s+(?:any)?)\s+(?:live\s+|enabled\s+|real\s+)?[\w\s`,-]{0,120}\btools?\s+(?:is\s+|are\s+)?(?:currently\s+|now\s+|presently\s+|no\s+longer\s+|longer\s+|any\s+longer\s+)?(?:available|enabled|provided|active|accessible)/i,
   /(?:absence|lack)\s+of\s+(?:executable|enabled|live|real)?\s*tools/i,
   /blocked[\s\S]{0,80}(?:absence|lack|no)\s+(?:of\s+)?(?:executable|enabled|live|real)?\s*tools/i,
-  /(?:can.?t|cannot|unable\s+to)\s+(?:continue|proceed)[\s\S]{0,120}no\s+(?:executable\s+|enabled\s+)?`?<tools>`?/i,
+  /(?:can.?t|cannot|unable\s+to)\s+(?:continue|proceed)[\s\S]{0,120}(?:no\s+(?:executable\s+|enabled\s+)?`?<tools>`?|no\s+execution\s+tools?|tool\s+block)/i,
+  /(?:re-run|send|provide|continue|resume)[\s\S]{0,80}(?:tool-?enabled|coding-?enabled|execution)\s+(?:context|session|environment)/i,
   /(?:tool\s+calls?|tools?)\s+(?:is|are|are\s+only)\s+(?:only\s+)?available\s+when\s+(?:the\s+)?(?:incoming\s+)?message\s+contains/i,
   /cannot\s+invoke\s+(?:the\s+)?(?:required\s+)?[\w\s`,-]{0,60}\btools?\s+from\s+this\s+interface/i,
   // DeepLeo / GPT-5.6 refusals claiming no execution/shell tool is attached to the turn:
-  /(?:no|without\s+(?:any)?)\s+(?:executable\s+|execution\s+|live\s+|enabled\s+|real\s+|shell\s+|repository\s+)?[\w\s`,-]{0,80}\btools?\s+(?:is\s+|are\s+)?(?:attached|available|enabled|provided|active)/i,
+  /(?:no|without\s+(?:any)?)\s+(?:executable\s+|execution\s+|live\s+|enabled\s+|real\s+|shell\s+|repository\s+)?[\w\s`,-]{0,80}\btools?\s+(?:is\s+|are\s+)?(?:currently\s+|now\s+|presently\s+|no\s+longer\s+|longer\s+|any\s+longer\s+)?(?:attached|available|enabled|provided|active)/i,
   /(?:this\s+turn\s+|this\s+response\s+)?(?:has\s+|contains\s+)?no\s+(?:executable\s+|execution\s+|repository\s+|shell\s+)?[\w\s`,-]{0,80}\btools?\s+attached/i,
   /no\s+execution\s+tool\s+(?:is\s+)?attached/i,
 ];

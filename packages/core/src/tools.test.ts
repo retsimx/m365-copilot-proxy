@@ -389,6 +389,9 @@ describe("looksLikeConfabulation", () => {
     // OpenCode refusal phrases claiming tools returning NO CONTENT AVAILABLE or not operational
     expect(looksLikeConfabulation("All tool calls — `bash`, `shell`, `oc_bash`, `read`, `ls` — are returning `NO CONTENT AVAILABLE`. This indicates the OpenCode runtime tools (file system, shell execution) are not operational in the current execution environment.")).toBe(true);
     expect(looksLikeConfabulation("The OpenCode-native tools that the issue-autopilot skill requires are not being executed by the runtime — every call returns empty.\n\nNone of these are possible without a functioning shell tool.\n\nRun OpenCode in its native CLI context.")).toBe(true);
+    // DeepLeo Phase 2 refusal phrases
+    expect(looksLikeConfabulation("I can’t continue executing Phase 2 in this message because the current execution tool block is no longer available in the conversation. To proceed, send the next instruction with tools enabled.")).toBe(true);
+    expect(looksLikeConfabulation("I can’t continue the Phase 2 execution from this turn because no execution tools are currently available in the message, so I can’t load the plan skill, inspect files, write plan artefacts, or ask approval via the required question tool.\n\nTo continue the workflow safely, re-run “Continue” in the tool-enabled execution context.")).toBe(true);
   });
 
   it("does NOT flag genuine final answers or normal prose", () => {

@@ -175,8 +175,15 @@ function simpleHash(str: string): string {
 
 // --- Delta message formatting ---
 
-function formatDeltaMessages(messages: ParsedMessage[]): string {
+function formatDeltaMessages(messages: ParsedMessage[], tools?: ChatBody["tools"]): string {
   const parts: string[] = [];
+
+  // Proactively attach tool definitions on delta turns so reasoning models (DeepLeo / GPT-5.5)
+  // always see active tools and never claim "no tools are available in this message".
+  if (tools && tools.length > 0) {
+    parts.push(formatToolDefinitions(tools));
+  }
+
   for (const m of messages) {
     if (m.role === "assistant") {
       // Skip assistant messages — M365 already has them server-side.
@@ -242,14 +249,15 @@ export async function handleChatCompletion(
     log.info(`Chat completion: model=${model}, stream=${body.stream}, messages=${body.messages.length}, turn=${session.turnCount}, mode=full, cid=${convId}`);
   } else {
     const newMessages = body.messages.slice(conv.sentMessageCount);
-    const delta = newMessages.length > 0 ? formatDeltaMessages(newMessages) : "";
+    const delta = newMessages.length > 0 ? formatDeltaMessages(newMessages, hasTools ? body.tools : undefined) : "";
     if (delta.length > 0) {
       text = delta;
       log.info(`Chat completion: model=${model}, stream=${body.stream}, messages=${body.messages.length}, new=${newMessages.length}, turn=${session.turnCount}, mode=delta, cid=${convId}`);
     } else {
       // No meaningful new content to send — nudge M365 to continue.
-      text = "Please continue.";
-      log.info(`Chat completion: model=${model}, stream=${body.stream}, messages=${body.messages.length}, turn=${session.turnCount}, mode=retry, cid=${convId}`);
+      const toolsBlock = hasTools ? `${formatToolDefinitions(body.tools)}\n\n` : "";
+      text = `${toolsBlock}<user>\nPlease continue from where you left off.\n</user>`;
+      log.info(`Chat completion: model=${model}, stream=${body.stream}, messages=${body.messages.length}, new=0 (nudge), turn=${session.turnCount}, mode=delta, cid=${convId}`);
     }
   }
 
