@@ -386,11 +386,35 @@ export function looksLikeRemoteArtifactCompletion(text: string | null): boolean 
   return REMOTE_ARTIFACT_COMPLETION_PATTERNS.some((re) => re.test(t));
 }
 
+/**
+ * Segment text into independent syntactic clauses and check if any clause expresses
+ * a refusal to act due to missing, disabled, or unattached tools/capabilities.
+ */
+function hasClauseRefusal(text: string): boolean {
+  const toolWords =
+    /(?:\btools?\b|\bshell\b|\bexecution\b|\btool_calls?\b|`<tools>`|`?(?:bash|skill|question|task|edit_file|write_file|read_file|glob|grep|editing)`?|\bfile\s+editing\b|\bfilesystem\b|\bterminal\b|\bcommand\s+execution\b)/i;
+  const directNegStateWords =
+    /\b(?:disabled|unavailable|inactive|unsupported|unmounted|inaccessible|unreachable|unexecutable|disallowed|prohibited)\b/i;
+  const negWords =
+    /(?:\b(?:not|no|cannot|can.?t|unable|without|lack|absence|isn.?t|aren.?t|don.?t|never|falsely|decline|impossible|prevented|restricted)\b)/i;
+  const availWords =
+    /(?:\b(?:enabled|available|attached|provided|active|functional|operational|accessible|installed|configured|present|support|supported|permitted|access|executed|claimed|started|run|interact|callable)\b)/i;
+
+  const clauses = text.split(/[.;\n\r]+|\bbecause\b|\btherefore\b|\bso\b|\bsince\b|\bas\b|\bdue\s+to\b|\bhowever\b|\bbut\b/i);
+  for (const clause of clauses) {
+    if (toolWords.test(clause)) {
+      if (directNegStateWords.test(clause)) return true;
+      if (negWords.test(clause) && availWords.test(clause)) return true;
+    }
+  }
+  return false;
+}
+
 export function looksLikeConfabulation(text: string | null): boolean {
   if (!text) return false;
   const t = text.trim();
   if (t.length < 12) return false;
-  return CONFABULATION_PATTERNS.some((re) => re.test(t));
+  return hasClauseRefusal(t) || CONFABULATION_PATTERNS.some((re) => re.test(t));
 }
 
 /**

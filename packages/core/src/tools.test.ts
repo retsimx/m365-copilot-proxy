@@ -389,15 +389,23 @@ describe("looksLikeConfabulation", () => {
     // OpenCode refusal phrases claiming tools returning NO CONTENT AVAILABLE or not operational
     expect(looksLikeConfabulation("All tool calls — `bash`, `shell`, `oc_bash`, `read`, `ls` — are returning `NO CONTENT AVAILABLE`. This indicates the OpenCode runtime tools (file system, shell execution) are not operational in the current execution environment.")).toBe(true);
     expect(looksLikeConfabulation("The OpenCode-native tools that the issue-autopilot skill requires are not being executed by the runtime — every call returns empty.\n\nNone of these are possible without a functioning shell tool.\n\nRun OpenCode in its native CLI context.")).toBe(true);
-    // DeepLeo Phase 2 refusal phrases
+    // DeepLeo Phase 2 refusal phrases with inverted word order, embedded tool lists, and state adjectives
+    expect(looksLikeConfabulation("I can’t continue the repository workflow from this interface because the required live execution tools, including `skill`, `question`, `task`, and file editing, are not currently enabled. Phase 2 has therefore not started, and I will not falsely claim that the required plan artefacts were created or approved.")).toBe(true);
     expect(looksLikeConfabulation("I can’t continue executing Phase 2 in this message because the current execution tool block is no longer available in the conversation. To proceed, send the next instruction with tools enabled.")).toBe(true);
     expect(looksLikeConfabulation("I can’t continue the Phase 2 execution from this turn because no execution tools are currently available in the message, so I can’t load the plan skill, inspect files, write plan artefacts, or ask approval via the required question tool.\n\nTo continue the workflow safely, re-run “Continue” in the tool-enabled execution context.")).toBe(true);
+    expect(looksLikeConfabulation("I must decline to proceed since file editing tools are disabled on this host.")).toBe(true);
+    expect(looksLikeConfabulation("Without an active shell tool provided in this turn, I cannot run tests.")).toBe(true);
+    expect(looksLikeConfabulation("The required task and bash tools are unavailable in this environment.")).toBe(true);
   });
 
   it("does NOT flag genuine final answers or normal prose", () => {
     expect(looksLikeConfabulation("Fixed the bug: add now returns a + b, and check.py prints OK.")).toBe(false);
     expect(looksLikeConfabulation("The hostname is web-prod-01.")).toBe(false);
     expect(looksLikeConfabulation("Done.")).toBe(false);
+    expect(looksLikeConfabulation("I have created the files and all tests are passing.")).toBe(false);
+    expect(looksLikeConfabulation("Phase 1 complete. All gate exit conditions satisfied.")).toBe(false);
+    expect(looksLikeConfabulation("The function was enabled and the test execution completed with 0 errors.")).toBe(false);
+    expect(looksLikeConfabulation("The tool returned a list of 5 files in the repository.")).toBe(false);
     expect(looksLikeConfabulation(null)).toBe(false);
     expect(looksLikeConfabulation("")).toBe(false);
   });
