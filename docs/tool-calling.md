@@ -78,13 +78,19 @@ prompt is tuned. The layers, in handler order:
   "here's a simplified README") would get its own answer executed as shell. A response that
   looks like a document (≥2 fences AND ≥120 chars surrounding prose, OR ≥4 fences) is returned
   as **text**, not executed. A single action is never reclassified. (hypotheses §9 F15.)
-- **Confabulation retry** (`looksLikeConfabulation`): if a tool request comes back with no
-  tool call and give-up prose ("can't access the files", "commands return no output", "the
-  file appears empty", "paste the files"), the proxy re-prompts forcefully **in the same
-  conversation** to force a real first action. `M365_NO_CONFAB_RETRY` / `M365_CONFAB_RETRIES`.
-- **Hallucinated-completion retry** (`looksLikeHallucinatedCompletion`): if the model CLAIMS
-  a file mutation ("I've replaced the README") with **no tool call all conversation**, force a
-  real write. Gated on "never acted," so it won't misfire on a genuine post-write summary.
+- **Structural Clause NLP Confabulation & Refusal Detection** (`hasClauseRefusal`): replaces
+  brittle linear regexes with clause-boundary segmentation (`[Tool Anchor] + [Negation] + [Availability State]`).
+  Catches transitive provision verbs (`this interface does not expose tools`), tool existence claims
+  (`no apply_patch binary exists`), truncation surrenders, and shell diagnosis deferrals (`status is
+  a read-only variable; next execution must replace with rc`) without splitting on `.py` filenames.
+- **Hallucinated-completion retry** (`hasClauseHallucination`): if the model CLAIMS a file mutation
+  ("I've replaced the README") with **no tool call all conversation**, force a real write. Gated on
+  `!everActed`, so it won't misfire on a genuine post-write summary.
+- **Delta Turn `<tools>` Injection:** Follow-up turns in `formatDeltaMessages` proactively re-inject
+  the `<tools>` block to prevent M365 reasoning models (`DeepLeo`) from forgetting tool availability.
+- **Assistant-simulated `<tool_response>` rejection & context flush:** When a model produces fake
+  `<tool_response>` tags in its output, the proxy strips them and resets the session to force a clean
+  full-history replay on the next turn.
 - **Tool-result labelling:** each `<tool_response>` is tagged with the command that produced
   it (`<tool_response tool="bash" command="ls -la">`) by correlating `tool_call_id` back to
   the call — so the model reads output in context (a listing vs file contents vs stdout)
@@ -95,12 +101,11 @@ prompt is tuned. The layers, in handler order:
   riding alongside tool calls (premature success), and **unwraps** a lone `{"final":"…"}`.
 - **One call per turn:** keeps only the **first** tool call; M365 batches its whole plan into
   one response, running later steps on guessed state. Override with `M365_ALLOW_MULTI_TOOL`.
-- **Empty ≠ rate limit:** an empty reply is treated as throttling only when the throttle is
-  **at-limit**; otherwise it fails fast after a couple of quick retries. Repeated empties
-  across **distinct conversations** (the thread-rate-throttle signature) trigger **degradation
-  backoff** — the proxy paces subsequent turns so the account self-heals. This replaced the
-  old auto-reauth: a fresh login does **not** clear this throttle (`oid`-keyed — hypotheses
-  §11 H-R1) and raised our detection profile. `M365_NO_BACKOFF` to disable.
+- **Circuit Breaker Local Shielding & HTTP 429 Rate Limiting:** Repeated empties across **distinct
+  conversations** trigger the proxy's **Local Circuit Breaker**. While active, the proxy returns
+  **`HTTP 429 Too Many Requests`** with a **`Retry-After: <seconds>`** header, sending **zero traffic
+  to Microsoft** so the upstream token bucket recharges. OpenAI clients (OpenCode, Pi) auto-pause
+  and retry cleanly without aborting the turn.
 
 > The JSON tool format and the few-shot block were **removed** this cycle (0/5 on real
 > agentic tasks). Tool calling is fenced-only; behavioural framing lives in the per-request
