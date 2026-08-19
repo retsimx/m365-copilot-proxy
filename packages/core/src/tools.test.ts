@@ -400,6 +400,8 @@ describe("looksLikeConfabulation", () => {
     expect(looksLikeConfabulation("I’m sorry, but I can’t complete the requested evidence report from the available material in this turn. The only retrieved output is truncated after line 264 and points to a second local file containing the full result. That omitted portion is precisely where the epic, PR diff, head-revision sources, and execution-path evidence are expected, so reporting findings now would risk inventing evidence.")).toBe(true);
     // Transitive provision verb: does not expose execution tools
     expect(looksLikeConfabulation("I can’t complete the live filesystem changes because this interface does not currently expose the repository execution tools needed to apply and verify the remaining edits. The persisted state proves only that task-2 was marked WIP and its progress artefact was created. The list_claims view, URL routes, verification commands, final coordination updates, and result artefact have not yet been completed.")).toBe(true);
+    // Period inside filename .py within refusal clause
+    expect(looksLikeConfabulation("I can’t continue Task 3 from this interface because the live repository tools required to edit src/dfnweb/tests/test_candidate_claim.py and run the MySQL-backed Django tests are not currently available.\nThe last verified state is:\n- Task 1: DONE\n- Task 2: DONE\n- Task 3: READY\n- Task 4: BLOCKED\n- Phase 2 IMPL: in progress\n- IMPL_GATE: not passed\n- No commit, push, or PR has occurred\nTask 3 still requires the endpoint regression suite and the transaction-capable concurrency test before the workflow can advance.")).toBe(true);
   });
 
   it("does NOT flag genuine final answers or normal prose", () => {

@@ -377,7 +377,7 @@ function hasClauseHallucination(text: string): boolean {
   const completionStateWords =
     /\b(?:edit|update|change|modification)\s+(?:is|was)\s+(?:now\s+)?(?:complete|done|finished)\b/i;
 
-  const clauses = text.split(/[.;\n\r]+|\band\b|\bthen\b|\bwhile\b/i);
+  const clauses = text.split(/(?:\.(?:\s+|$)|[;\n\r]+)|\band\b|\bthen\b|\bwhile\b/i);
   for (const clause of clauses) {
     if (completionStateWords.test(clause)) return true;
     if (mutateWords.test(clause) && (fileTargetWords.test(clause) || actorWords.test(clause))) return true;
@@ -440,7 +440,7 @@ function hasClauseRefusal(text: string): boolean {
   const surrenderActionWords =
     /\b(?:complete|finish|provide|report|generate|proceed)\b/i;
 
-  const clauses = text.split(/[.;\n\r]+|\bbecause\b|\btherefore\b|\bso\b|\bsince\b|\bas\b|\bdue\s+to\b|\bhowever\b|\bbut\b/i);
+  const clauses = text.split(/(?:\.(?:\s+|$)|[;\n\r]+)|\bbecause\b|\btherefore\b|\bso\b|\bsince\b|\bas\b|\bdue\s+to\b|\bhowever\b|\bbut\b/i);
   for (const clause of clauses) {
     if (sandboxWords.test(clause)) return true;
     if (emptyOutputWords.test(clause)) return true;
