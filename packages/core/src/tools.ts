@@ -362,6 +362,31 @@ const HALLUCINATED_COMPLETION_PATTERNS: RegExp[] = [
 ];
 
 /**
+ * Segment text into independent syntactic clauses and check if any clause expresses
+ * a hallucinated file creation or execution claim without running actual tools.
+ */
+function hasClauseHallucination(text: string): boolean {
+  const mutateWords =
+    /\b(?:created|written|wrote|updated|modified|replaced|saved|applied|overwritten|implemented|generated|produced)\b/i;
+  const execWords =
+    /\b(?:executed|ran|invoked|launched|compiled)\b/i;
+  const fileTargetWords =
+    /(?:\b(?:files?|script|scripts|code|readme|tests?|repo|repository|changes?|patch|version|content|implementation)\b|[\w-]{2,}\.[a-z0-9]{1,4})/i;
+  const actorWords =
+    /(?:\bI\b|\bI've\b|\bwe\b|\bwe've\b|\bhere'?s\b|\bthe\s+(?:file|script|code|readme|config|changes?|patch|edit|update)\b)/i;
+  const completionStateWords =
+    /\b(?:edit|update|change|modification)\s+(?:is|was)\s+(?:now\s+)?(?:complete|done|finished)\b/i;
+
+  const clauses = text.split(/[.;\n\r]+|\band\b|\bthen\b|\bwhile\b/i);
+  for (const clause of clauses) {
+    if (completionStateWords.test(clause)) return true;
+    if (mutateWords.test(clause) && (fileTargetWords.test(clause) || actorWords.test(clause))) return true;
+    if (execWords.test(clause) && (fileTargetWords.test(clause) || /\b(?:it|them|this|python3?|node)\b/i.test(clause))) return true;
+  }
+  return false;
+}
+
+/**
  * Does this no-tool-call response CLAIM a file mutation it may not have performed?
  * The handler only acts on this when NO tool call ran in the whole conversation —
  * a model that actually did the work called at least one tool — so it's a low
@@ -371,7 +396,7 @@ export function looksLikeHallucinatedCompletion(text: string | null): boolean {
   if (!text) return false;
   const t = text.trim();
   if (t.length < 8) return false;
-  return HALLUCINATED_COMPLETION_PATTERNS.some((re) => re.test(t));
+  return hasClauseHallucination(t) || HALLUCINATED_COMPLETION_PATTERNS.some((re) => re.test(t));
 }
 
 /**
@@ -400,11 +425,32 @@ function hasClauseRefusal(text: string): boolean {
   const availWords =
     /(?:\b(?:enabled|available|attached|provided|active|functional|operational|accessible|installed|configured|present|support|supported|permitted|access|executed|claimed|started|run|interact|callable)\b)/i;
 
+  const accessActionWords =
+    /\b(?:access|inspect|list|read|run|execute|retrieve|fetch|locate|see|open|edit|modify|write)\b/i;
+  const accessTargetWords =
+    /\b(?:files?|directory|directories|folder|environment|session|filesystem|repository|code|cwd|contents?)\b/i;
+
+  const delegateWords = /\b(?:paste|provide\s+me|send\s+me)\b/i;
+  const restartWords = /\b(?:restart|start\s+over|begin\s+again|re-?run)\b/i;
+  const envWords = /\b(?:different|another|proper|coding-?enabled|tool-?enabled|shell-?enabled|native\s+cli)\s+(?:session|environment|conversation|mode|context)\b/i;
+  const sandboxWords = /(?:\/mnt\/data\b|\bcontainer\.(?:exec|open_image|download)\b)/i;
+  const emptyOutputWords = /(?:\breturn(?:ing|s|ed)?\s+(?:no|empty|nothing)\b|\bno\s+(?:output|results?|content|data)\s+(?:was|were)?\s*(?:returned|provided|present)\b)/i;
+
   const clauses = text.split(/[.;\n\r]+|\bbecause\b|\btherefore\b|\bso\b|\bsince\b|\bas\b|\bdue\s+to\b|\bhowever\b|\bbut\b/i);
   for (const clause of clauses) {
+    if (sandboxWords.test(clause)) return true;
+    if (emptyOutputWords.test(clause)) return true;
+    if (restartWords.test(clause) && envWords.test(clause)) return true;
+    if (delegateWords.test(clause) && accessTargetWords.test(clause)) return true;
+    if (/\b(?:run|use|open)\s+[\w-]+\s+in\s+its\s+(?:native\s+)?CLI\s+context\b/i.test(clause)) return true;
+
     if (toolWords.test(clause)) {
       if (directNegStateWords.test(clause)) return true;
-      if (negWords.test(clause) && availWords.test(clause)) return true;
+      if (negWords.test(clause) && (availWords.test(clause) || accessActionWords.test(clause))) return true;
+    }
+
+    if (negWords.test(clause) && accessActionWords.test(clause) && accessTargetWords.test(clause)) {
+      return true;
     }
   }
   return false;

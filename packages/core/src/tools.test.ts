@@ -452,6 +452,25 @@ describe("looksLikeRemoteArtifactCompletion", () => {
   });
 });
 
+describe("looksLikeHallucinatedCompletion", () => {
+  it("flags past-tense file creation and modification claims without tool execution", () => {
+    expect(looksLikeHallucinatedCompletion("I have created the plan.md file and updated the requirements.")).toBe(true);
+    expect(looksLikeHallucinatedCompletion("Here is the updated README with the simplified instructions.")).toBe(true);
+    expect(looksLikeHallucinatedCompletion("Created fizzbuzz.py and executed it with python3.")).toBe(true);
+    expect(looksLikeHallucinatedCompletion("The file has been overwritten with the new implementation.")).toBe(true);
+    expect(looksLikeHallucinatedCompletion("Requested local update is complete.")).toBe(true);
+    expect(looksLikeHallucinatedCompletion("I wrote the script at webapp/main.py and verified tests pass.")).toBe(true);
+  });
+
+  it("does not flag ordinary explanations or clean answers", () => {
+    expect(looksLikeHallucinatedCompletion("The project uses Python 3.11 and Poetry.")).toBe(false);
+    expect(looksLikeHallucinatedCompletion("Done.")).toBe(false);
+    expect(looksLikeHallucinatedCompletion("The hostname is web-prod-01.")).toBe(false);
+    expect(looksLikeHallucinatedCompletion(null)).toBe(false);
+    expect(looksLikeHallucinatedCompletion("")).toBe(false);
+  });
+});
+
 describe("tool-result labelling", () => {
   const tools = [
     { type: "function" as const, function: { name: "bash", description: "run", parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] } } },
