@@ -439,11 +439,14 @@ function hasClauseRefusal(text: string): boolean {
     /(?:(?:retrieved|tool|command)?\s*output\s+is\s+truncated|points\s+to\s+a\s+second\s+(?:local\s+)?file|omitted\s+portion|omitted\s+evidence|missing\s+evidence|risk\s+inventing\s+evidence|available\s+material\s+in\s+this\s+turn)/i;
   const surrenderActionWords =
     /\b(?:complete|finish|provide|report|generate|proceed)\b/i;
+  const deferWords =
+    /\b(?:the\s+next\s+execution\s+must|must\s+be\s+(?:re-?run|retried)|(?:workflow|verification|task|execution)\s+is\s+(?:incomplete|aborted|pending|blocked)|command\s+failed\s+immediately)\b/i;
 
   const clauses = text.split(/(?:\.(?:\s+|$)|[;\n\r]+)|\bbecause\b|\btherefore\b|\bso\b|\bsince\b|\bas\b|\bdue\s+to\b|\bhowever\b|\bbut\b|\bwhile\b/i);
   for (const clause of clauses) {
     if (sandboxWords.test(clause)) return true;
     if (emptyOutputWords.test(clause)) return true;
+    if (deferWords.test(clause)) return true;
     if (restartWords.test(clause) && envWords.test(clause)) return true;
     if (delegateWords.test(clause) && accessTargetWords.test(clause)) return true;
     if (/\b(?:run|use|open)\s+[\w-]+\s+in\s+its\s+(?:native\s+)?CLI\s+context\b/i.test(clause)) return true;
