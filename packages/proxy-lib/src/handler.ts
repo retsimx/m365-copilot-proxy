@@ -421,13 +421,13 @@ export async function handleChatCompletion(
         // subsequent turns so the account can self-heal (H-R1).
         noteRequestOutcome(true, convId);
         const remainingMs = getRemainingDegradationCooldownMs();
-        const remainingSec = Math.max(1, Math.ceil(remainingMs / 1000)) || 60;
+        const remainingSec = remainingMs > 0 ? Math.ceil(remainingMs / 1000) : 90;
         return { error: emptyResponseResponse(t, remainingSec) };
       }
     }
     noteRequestOutcome(true, convId);
     const remainingMs = getRemainingDegradationCooldownMs();
-    const remainingSec = Math.max(1, Math.ceil(remainingMs / 1000)) || 60;
+    const remainingSec = remainingMs > 0 ? Math.ceil(remainingMs / 1000) : 90;
     return { error: emptyResponseResponse(null, remainingSec) };
   }
 
