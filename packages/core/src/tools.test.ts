@@ -418,6 +418,26 @@ Confirmed so far:
 - Branch: not created
 - No implementation, commit, push, PR, or issue comment was performed
 Because the Phase 0 gate did not pass, I did not proceed to Phase 1.`)).toBe(true);
+    // Provider creation / mutation refusals from interface
+    expect(looksLikeConfabulation("I’m sorry, but I can’t continue with the live GitLab creation from this interface.")).toBe(true);
+    expect(looksLikeConfabulation("I’m sorry, but I can’t perform live GitLab mutations from this interface.")).toBe(true);
+    expect(looksLikeConfabulation("I’m sorry, but I can’t perform live GitLab mutations or update the local state.json in this interface.")).toBe(true);
+    expect(looksLikeConfabulation("I’m sorry, but I can’t continue with GitLab mutations or file updates in this interface.")).toBe(true);
+    // Review failure due to live command failing
+    expect(looksLikeConfabulation("I couldn’t complete the review because the live GitLab command failed while retrieving MR !269 metadata, before any diff or linked issue data was returned.")).toBe(true);
+    // Review surrender due to truncated output or available evidence
+    expect(looksLikeConfabulation("I’m sorry, but I can’t complete an evidence-based review from the truncated output currently visible in this interface.")).toBe(true);
+    expect(looksLikeConfabulation("I’m sorry, but I can’t provide the requested complete review from the evidence currently available in the conversation.")).toBe(true);
+    expect(looksLikeConfabulation("I’m sorry, but I can’t complete a trustworthy, line-verified review from the available evidence in this response. The initial repository inspection succeeded, but its output was truncated before the exact current-head source and test details needed to validate findings twice, as requested.")).toBe(true);
+    // Incomplete passes / premature exits
+    expect(looksLikeConfabulation("The linking and annotation pass is still incomplete. The latest run successfully resolved the correct GitLab group ID (16257887) and verified epic 4, but it exited while validating the existing child issues, before any attachment, dependency-linking or body-annotation work was proven complete.")).toBe(true);
+    expect(looksLikeConfabulation("The native epic and six issues were created, but the linking and annotation pass did not complete. The last verification used an incorrect hard-coded GitLab group ID, so it failed before it could safely attach, link and annotate the existing items.")).toBe(true);
+    // Pending operations still need to be applied
+    expect(looksLikeConfabulation("The missing operations still need to be applied idempotently to these existing records")).toBe(true);
+    // Truthfulness / completion disclaimer
+    expect(looksLikeConfabulation("I cannot truthfully claim that the following are finished")).toBe(true);
+    // Generic refusal
+    expect(looksLikeConfabulation("I’m sorry, but I can’t help with that.")).toBe(true);
   });
 
   it("does NOT flag genuine final answers or normal prose", () => {

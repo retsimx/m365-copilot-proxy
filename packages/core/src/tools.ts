@@ -421,14 +421,14 @@ function hasClauseRefusal(text: string): boolean {
   const directNegStateWords =
     /\b(?:disabled|unavailable|inactive|unsupported|unmounted|inaccessible|unreachable|unexecutable|disallowed|prohibited)\b/i;
   const negWords =
-    /(?:\b(?:not|no|cannot|can.?t|unable|without|lack|absence|isn.?t|aren.?t|don.?t|never|falsely|decline|impossible|prevented|restricted|couldn.?t|did.?t|didn.?t)\b)/i;
+    /(?:\b(?:not|no|cannot|can.?t|unable|without|lack|absence|isn.?t|aren.?t|don.?t|never|falsely|decline|impossible|prevented|restricted|couldn.?t|did.?t|didn.?t|won.?t|wouldn.?t)\b)/i;
   const availWords =
     /(?:\b(?:enabled|available|attached|provided|active|functional|operational|accessible|installed|configured|present|support|supported|permitted|access|executed|claimed|started|run|interact|callable|expose|exposed|exposes|exposing|mount|mounted|mounts|mounting|include|included|includes|contain|contained|contains|offer|offered|offers|allow|allowed|allows|have|has|exists?|existed)\b)/i;
 
   const accessActionWords =
-    /\b(?:access|inspect|list|read|run|execute|retrieve|fetch|locate|see|open|edit|modify|modifying|write|apply|verify|complete|finish|create|created|creating|perform|performed|performing|proceed|proceeded|proceeding|check|checking|update|updating)\b/i;
+    /\b(?:access|inspect|list|read|run|execute|retrieve|fetch|locate|see|open|edit|modify|modifying|write|apply|verify|complete|finish|create|created|creating|perform|performed|performing|proceed|proceeded|proceeding|check|checking|update|updating|mutate|mutating|mutations?|continue\s+with|help\s+with|assist\s+with)\b/i;
   const accessTargetWords =
-    /\b(?:files?|directory|directories|folder|environment|session|filesystem|repository|code|cwd|contents?|changes?|edits?|tasks?|task-\d+|worktrees?|branch(?:es)?|preflight|workflow|steps?|phase\s*\d+|stages?|repo|issues?|pr|pull\s+requests?)\b/i;
+    /\b(?:files?|directory|directories|folder|environment|session|filesystem|repository|code|cwd|contents?|changes?|edits?|tasks?|task-\d+|worktrees?|branch(?:es)?|preflight|workflow|steps?|phase\s*\d+|stages?|repo|issues?|pr|pull\s+requests?|mr\b|merge\s+requests?|gitlab|github|jira|linear|records?|items?|epics?|state\.json|local\s+state|file\s+updates?|database|server)\b/i;
 
   const delegateWords = /\b(?:paste|provide\s+me|send\s+me)\b/i;
   const restartWords = /\b(?:restart|start\s+over|begin\s+again|re-?run)\b/i;
@@ -436,9 +436,21 @@ function hasClauseRefusal(text: string): boolean {
   const sandboxWords = /(?:\/mnt\/data\b|\bcontainer\.(?:exec|open_image|download)\b)/i;
   const emptyOutputWords = /(?:\breturn(?:ing|s|ed)?\s+(?:no|empty|nothing)\b|\bno\s+(?:output|results?|content|data)\s+(?:was|were)?\s*(?:returned|provided|present)\b)/i;
   const truncationSurrenderWords =
-    /(?:(?:retrieved|tool|command)?\s*output\s+is\s+truncated|points\s+to\s+a\s+second\s+(?:local\s+)?file|omitted\s+portion|omitted\s+evidence|missing\s+evidence|risk\s+inventing\s+evidence|available\s+material\s+in\s+this\s+turn)/i;
+    /(?:(?:retrieved|tool|command|initial|visible)?\s*output\s+is\s+truncated|output\s+was\s+truncated|points\s+to\s+a\s+second\s+(?:local\s+)?file|omitted\s+portion|omitted\s+evidence|missing\s+evidence|risk\s+inventing\s+evidence|available\s+material\s+in\s+this\s+turn|truncated\s+(?:output|evidence|material|data|response|details|information|source|results?)|available\s+evidence|evidence\s+(?:currently\s+)?available|evidence\s+in\s+this\s+response)\b/i;
   const surrenderActionWords =
-    /\b(?:complete|finish|provide|report|generate|proceed)\b/i;
+    /\b(?:complete|finish|provide|report|generate|proceed|conduct|perform|produce|deliver)\b/i;
+  const reviewWords =
+    /\b(?:review|audit|investigation|report|analysis|findings|assessment|evidence-based\s+review|line-verified\s+review|trustworthy(?:,\s+line-verified)?\s+review)\b/i;
+  const interfaceRefusalWords =
+    /\b(?:from|in|using)\s+this\s+(?:interface|chat|surface|session|mode|context|response|conversation)\b/i;
+  const truthClaimWords =
+    /\b(?:cannot|can.?t|unable\s+to|will\s+not|must\s+not)\s+(?:truthfully|falsely|honestly)\s+(?:claim|state|declare|assert|report)\b/i;
+  const incompletePassWords =
+    /(?:(?:linking|annotation|verification|validation|review|audit|planning|implementation|preflight|task|pass|stage|step|run|workflow)\s+(?:pass\s+)?(?:is|remains|was)?\s*(?:still\s+)?(?:incomplete|unfinished|unverified|unproven|pending|aborted|partial)|(?:pass|stage|step|run|task|workflow|review)\s+(?:did\s+not|could\s+not|failed\s+to)\s+complete|(?:exited|failed|stopped|halted|aborted)\s+while\s+(?:validating|retrieving|checking|running|inspecting|creating|updating|processing|executing)|(?:exited|failed|stopped)\s+before\s+(?:it\s+could|any|the|being|we\s+could))/i;
+  const pendingOperationsWords =
+    /(?:(?:the\s+)?(?:missing|remaining|uncompleted|pending|subsequent|unapplied)\s+(?:operations?|steps?|actions?|tasks?|changes?|edits?|work|mutations?)\s+(?:still\s+)?(?:need|needs|must)\s+(?:to\s+be\s+)?(?:applied|run|executed|performed|completed|retried|finished))/i;
+  const genericRefusalWords =
+    /(?:(?:cannot|can.?t|unable\s+to|won.?t)\s+(?:help|assist|comply|fulfill|do\s+that)\s*(?:with\s+(?:that|this)|request)?)/i;
   const deferWords =
     /\b(?:the\s+next\s+execution\s+must|must\s+be\s+(?:re-?run|retried)|(?:workflow|verification|task|execution|preflight|process|run)\s+(?:is\s+(?:incomplete|aborted|pending|blocked|stopped)|stopped|halted|failed|aborted|paused|terminated)|command\s+failed|did\s+not\s+proceed\s+to\s+(?:phase|step|task|stage)|(?:phase|step|stage|task|gate)\s+(?:gate\s+)?(?:did\s+not\s+pass|failed|not\s+met)|gate\s+(?:did\s+not\s+pass|failed|not\s+met))\b/i;
 
@@ -447,10 +459,15 @@ function hasClauseRefusal(text: string): boolean {
     if (sandboxWords.test(clause)) return true;
     if (emptyOutputWords.test(clause)) return true;
     if (deferWords.test(clause)) return true;
+    if (incompletePassWords.test(clause)) return true;
+    if (pendingOperationsWords.test(clause)) return true;
+    if (truthClaimWords.test(clause)) return true;
+    if (genericRefusalWords.test(clause)) return true;
     if (restartWords.test(clause) && envWords.test(clause)) return true;
     if (delegateWords.test(clause) && accessTargetWords.test(clause)) return true;
     if (/\b(?:run|use|open)\s+[\w-]+\s+in\s+its\s+(?:native\s+)?CLI\s+context\b/i.test(clause)) return true;
-    if (negWords.test(clause) && surrenderActionWords.test(clause) && truncationSurrenderWords.test(clause)) return true;
+    if (negWords.test(clause) && surrenderActionWords.test(clause) && (truncationSurrenderWords.test(clause) || (reviewWords.test(clause) && truncationSurrenderWords.test(text)))) return true;
+    if (negWords.test(clause) && accessActionWords.test(clause) && interfaceRefusalWords.test(clause)) return true;
 
     if (toolWords.test(clause)) {
       if (directNegStateWords.test(clause)) return true;
