@@ -178,6 +178,7 @@ There is no `model` parameter. The `tone` string on the chat message picks the m
 | `gpt-5.5` / `gpt-5.5-quick` | `Gpt_5_5_Chat` | current GPT generation |
 | `gpt-5.5-think-deeper` | `Gpt_5_5_Reasoning` | |
 | `gpt-5.6-think-deeper` | `Gpt_5_6_Reasoning` | confirmed live 2026-08-06; GPT-5.6 Think deeper |
+| `gpt-6-astra` | `Gpt_6_Astra` | confirmed live 2026-09-08; GPT-6 Astra, routes `DeepLeo` reasoning pipeline |
 | `gpt-5.4` / `gpt-5.4-think-deeper` | `Gpt_5_4_Reasoning` | |
 | `gpt-5.4-quick` | `Gpt_5_4_Quick` | |
 | `gpt-5.3` / `gpt-5.3-quick` | `Gpt_5_3_Quick` | |
@@ -196,6 +197,8 @@ Mapping lives in `MODEL_TONES` (`copilot.ts`). `*_Reasoning` tones take 10–30s
 | **Registered but dead** | canned *"Sorry, I wasn't able to respond to that"* + `contentOrigin: "BotConnection"`, ~1.6s | route exists, serves nothing |
 
 That third state is the trap: **"didn't error" is not sufficient to conclude a tone works.** `Gpt_5_6_Chat` sits there right now — rejected outright in June 2026, accepted-but-dead since the GPT-5.6 rollout, and it would ship as a model that only ever apologises. Require `DeepLeo` before mapping anything.
+
+GPT-6 follows the same pattern: `Gpt_6_Astra` is live (`DeepLeo`, correct answers), while `Gpt_6_Reasoning` is registered-but-dead (canned "wasn't able to respond" via `BotConnection`) and `Gpt_6_Chat` / `Gpt_6_Quick` / `Gpt_6_Astra_*` are rejected outright (2026-09-08). So the only working GPT-6 tone is `Gpt_6_Astra`.
 
 Rejected on test: `Anthropic_Claude`, `Claude_Haiku`, `Claude_3_7_Sonnet`. Accepted-but-NOT-Claude: `Claude_Reasoning` (self-IDs as GPT-5 — don't use). New tones still appear by pattern (`Gpt_5_N_{Quick,Reasoning}`, `Claude_*`).
 

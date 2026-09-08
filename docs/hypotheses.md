@@ -2272,6 +2272,30 @@ evidence of a working route.** Every tone confirmation from here on must show
 *fast* model, not a broken one, so a latency-only check would have missed it too.
 `scripts/tone-probe.mjs` already prints `origin`; §5 now documents all three states.
 
+### 12.16 — GPT-6 Astra is live; `Gpt_6_Reasoning` is registered-but-dead 🟢
+
+**Hypothesis.** GPT-6 has shipped to M365; the working tone follows the `Gpt_6_*`
+pattern and `Gpt_6_Astra` (the marketing codename) is the live one.
+
+**Test.** Agent-less single-turn probes (2026-09-08) with
+`Definitely_Not_A_Real_Tone_XYZ` as the invalid control, plus a second pass
+on real reasoning questions to rule out prompt effects.
+
+| Tone | Result | `contentOrigin` | Elapsed |
+|---|---|---|---|
+| `magic` (control, good) | `pong` | `DeepLeo` | 4.2s |
+| `Gpt_6_Astra` | `pong`; 17×23→`391`; r-count→`3` | **`DeepLeo`** | 3.9–4.9s |
+| `Gpt_6_Reasoning` (×4) | canned *"Sorry, I wasn't able to respond to that."* | **`BotConnection`** | 2–3s |
+| `Gpt_6_Chat` / `Gpt_6_Quick` / `Gpt_6_Astra_Chat` / `Gpt_6_Astra_Reasoning` | `Failed to invoke 'Chat'` | — | ~0.2s |
+| `Definitely_Not_A_Real_Tone_XYZ` (control) | `Failed to invoke 'Chat'` | — | 0.18s |
+
+**Conclusion — confirmed.** `Gpt_6_Astra` is a real, serving GPT-6 reasoning tone
+(`DeepLeo`, correct answers). `Gpt_6_Reasoning` is the same registered-but-dead trap
+as `Gpt_5_6_Chat` — it deflects via `BotConnection` regardless of prompt, so it is
+**not** a prompt problem. M365 won't self-identify the underlying model (says "M365
+Copilot" for both `Gpt_6_Astra` and `magic`), but the accepted-tone + `DeepLeo`
+signature is conclusive. Mapped as `gpt-6-astra` → `Gpt_6_Astra` in `MODEL_TONES`.
+
 ---
 
 ## 13. July 29 2026 — user-driven SSO for tenants that can't do TOTP (third-party)

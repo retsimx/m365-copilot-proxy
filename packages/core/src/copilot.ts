@@ -29,6 +29,11 @@ const MODEL_TONES: Record<string, string> = {
   // GPT-5.6 (live-validated 2026-08-06; M365 currently exposes reasoning only)
   "gpt-5.6-think-deeper": "Gpt_5_6_Reasoning",
 
+  // GPT-6 Astra (live-validated 2026-09-08; routes DeepLeo reasoning pipeline).
+  // Note: `Gpt_6_Reasoning` is registered-but-dead (deflects via BotConnection),
+  // so the working GPT-6 tone is `Gpt_6_Astra`, not the generic `*_Reasoning`.
+  "gpt-6-astra": "Gpt_6_Astra",
+
   // GPT-5.4
   "gpt-5.4": "Gpt_5_4_Reasoning",
   "gpt-5.4-think-deeper": "Gpt_5_4_Reasoning",
