@@ -229,12 +229,12 @@ describe("Handler Degradation Circuit Breaker & 429 Retry-After Shielding", () =
     expect(json.error).toBeDefined();
     expect(json.error.type).toBe("rate_limit_error");
     expect(json.error.code).toBe("rate_limit_exceeded");
-    expect(json.error.message).toContain("600s remaining");
+    expect(json.error.message).toContain("1800s remaining");
 
     // Fast-fail: exactly 1 attempt (no "Please continue." retries)
     expect(runSpy).toHaveBeenCalledTimes(1);
     expect(resetSpy).toHaveBeenCalled();
-    expect(triggerSpy).toHaveBeenCalledWith(600_000, "PerScenarioThrottled");
+    expect(triggerSpy).toHaveBeenCalledWith(1_800_000, "PerScenarioThrottled");
   });
 });
 

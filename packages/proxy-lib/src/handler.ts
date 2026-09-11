@@ -403,7 +403,7 @@ export async function handleChatCompletion(
       lastTurnCount = copilotStream.turnCount;
 
       if (copilotStream.isThrottled) {
-        const throttleSec = Number(process.env.M365_THROTTLE_COOLDOWN_SEC ?? 600);
+        const throttleSec = Number(process.env.M365_THROTTLE_COOLDOWN_SEC ?? 1800);
         const errCode = copilotStream.result?.errorCode ?? copilotStream.result?.value ?? "Throttled";
         const errMsg = copilotStream.result?.message ?? "We're currently experiencing high traffic. Please try again later.";
         log.warn(`Upstream M365 rate limit detected: ${errCode} (${errMsg}) — arming ${throttleSec}s cooldown and fast-failing with 429`);

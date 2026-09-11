@@ -183,7 +183,7 @@ export function getDegradationLevel(): number {
 }
 
 export function triggerDegradationBackoff(
-  cooldownMs: number = Number(process.env.M365_THROTTLE_COOLDOWN_SEC ?? 600) * 1000,
+  cooldownMs: number = Number(process.env.M365_THROTTLE_COOLDOWN_SEC ?? 1800) * 1000,
   reason?: string,
 ): void {
   if (disabled()) return;
