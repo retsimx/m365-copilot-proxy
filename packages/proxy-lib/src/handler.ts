@@ -249,6 +249,13 @@ export async function handleChatCompletion(
   pool: SessionPool,
   opts: { signal?: AbortSignal; sessionId?: string } = {},
 ): Promise<Response> {
+  if (isDegradationBackoff()) {
+    const remainingMs = getRemainingDegradationCooldownMs();
+    const remainingSec = Math.max(1, Math.ceil(remainingMs / 1000));
+    log.info(`Account degraded — locally shielding request at entry (circuit breaker active for ${remainingSec}s, returning 429 Retry-After)`);
+    return degradationShieldResponse(remainingSec);
+  }
+
   const sessionId = opts.sessionId ?? (typeof (body as any).user === "string" ? (body as any).user : undefined);
   const conv = pool.resolve(body.messages, body.tools, sessionId);
   const { session } = conv;
@@ -851,6 +858,7 @@ function rateLimitResponse(throttle: { current: number; max: number } | null, re
 }
 
 function degradationShieldResponse(remainingSec: number): Response {
+  const clientRetryAfterSec = Math.min(remainingSec, Number(process.env.M365_MAX_RETRY_AFTER_SEC ?? 60));
   return jsonResponse(
     429,
     {
@@ -860,7 +868,7 @@ function degradationShieldResponse(remainingSec: number): Response {
         code: "rate_limit_exceeded",
       },
     },
-    { "Retry-After": remainingSec.toString() },
+    { "Retry-After": clientRetryAfterSec.toString() },
   );
 }
 

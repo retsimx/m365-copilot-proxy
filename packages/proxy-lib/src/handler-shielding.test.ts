@@ -33,6 +33,31 @@ describe("Handler Degradation Circuit Breaker & 429 Retry-After Shielding", () =
     expect(json.error.message).toContain("Client will retry automatically");
   });
 
+  it("returns HTTP 429 with capped Retry-After (60s) for streaming requests when degradation circuit breaker is active", async () => {
+    vi.spyOn(core, "isDegradationBackoff").mockReturnValue(true);
+    vi.spyOn(core, "getRemainingDegradationCooldownMs").mockReturnValue(600_000);
+
+    const pool = new SessionPool();
+    const body = {
+      model: "gpt-5.5-think-deeper",
+      messages: [{ role: "user" as const, content: "Hello test streaming" }],
+      stream: true,
+    };
+
+    const response = await handleChatCompletion(body, pool);
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("Retry-After")).toBe("60");
+    expect(response.headers.get("Content-Type")).toBe("application/json");
+
+    const json = (await response.json()) as any;
+    expect(json.error).toBeDefined();
+    expect(json.error.type).toBe("rate_limit_error");
+    expect(json.error.code).toBe("rate_limit_exceeded");
+    expect(json.error.message).toContain("600s remaining");
+    expect(json.error.message).toContain("Client will retry automatically");
+  });
+
   it("returns HTTP 429 with Retry-After when upstream returns empty response after retries", async () => {
     vi.spyOn(core, "isDegradationBackoff").mockReturnValue(false);
     vi.spyOn(core, "getRemainingDegradationCooldownMs").mockReturnValue(90_000);
@@ -199,7 +224,7 @@ describe("Handler Degradation Circuit Breaker & 429 Retry-After Shielding", () =
     const response = await handleChatCompletion(body, pool);
 
     expect(response.status).toBe(429);
-    expect(response.headers.get("Retry-After")).toBe("600");
+    expect(response.headers.get("Retry-After")).toBe("60");
     const json = (await response.json()) as any;
     expect(json.error).toBeDefined();
     expect(json.error.type).toBe("rate_limit_error");
