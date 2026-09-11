@@ -49,6 +49,7 @@ export interface BackoffOptions {
 export interface BackoffController {
   /** Record one request outcome. `empty` = throttle-shaped empty response. */
   note: (empty: boolean, conversationId: string) => void;
+  arm: (cooldownMs: number, reason?: string) => void;
   /** Await a paced slot before starting a backend turn. Resolves immediately when
    *  healthy; during backoff it sleeps a jittered delay. Returns ms slept. */
   waitForSlot: () => Promise<number>;
@@ -101,6 +102,14 @@ export function createBackoffController(opts: BackoffOptions): BackoffController
       backoffUntil = t + cooldownMs;
       empties = [];
       opts.onTrigger?.({ distinctConversations: distinct, cooldownMs, level });
+    },
+
+    arm(cooldownMs, reason) {
+      const t = now();
+      level = Math.max(level, 1);
+      backoffUntil = Math.max(backoffUntil, t + cooldownMs);
+      empties = [];
+      opts.onTrigger?.({ distinctConversations: threshold, cooldownMs, level });
     },
 
     async waitForSlot() {
@@ -171,4 +180,12 @@ export function getRemainingDegradationCooldownMs(): number {
 export function getDegradationLevel(): number {
   if (disabled()) return 0;
   return defaultController.getLevel();
+}
+
+export function triggerDegradationBackoff(
+  cooldownMs: number = Number(process.env.M365_THROTTLE_COOLDOWN_SEC ?? 600) * 1000,
+  reason?: string,
+): void {
+  if (disabled()) return;
+  defaultController.arm(cooldownMs, reason);
 }

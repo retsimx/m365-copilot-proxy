@@ -27,6 +27,7 @@ export {
   isDegradationBackoff,
   getRemainingDegradationCooldownMs,
   getDegradationLevel,
+  triggerDegradationBackoff,
   createBackoffController,
   type BackoffController,
   type BackoffOptions,

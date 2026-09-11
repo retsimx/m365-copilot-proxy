@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // Replace core's ModelSession with a scripted fake so we can exercise the handler's
 // streaming path with no auth/WebSocket. Everything else in core stays real.
@@ -39,7 +39,11 @@ vi.mock("@m365-copilot/core", async (importActual) => {
   return { ...actual, ModelSession: FakeModelSession };
 });
 
-const { handleChatCompletion, SessionPool, ChatCompletionRequest } = await import("./index.js");
+const { handleChatCompletion, SessionPool, ChatCompletionRequest, resetNewSessionPacing } = await import("./index.js");
+
+beforeEach(() => {
+  resetNewSessionPacing();
+});
 
 /** Drive one streaming request and collect the ordered content-delta strings. */
 async function streamContents(deltas: string[], fullText?: string): Promise<string[]> {

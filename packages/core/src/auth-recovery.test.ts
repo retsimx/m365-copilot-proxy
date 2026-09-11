@@ -142,4 +142,40 @@ describe("createBackoffController", () => {
     expect(controller.getRemainingCooldownMs()).toBe(0);
     expect(controller.getLevel()).toBe(0);
   });
+
+  it("controller.arm(cooldownMs) immediately enters backoff and sets remaining cooldown", () => {
+    const { controller, advance } = setup();
+    expect(controller.isBackingOff()).toBe(false);
+    expect(controller.getRemainingCooldownMs()).toBe(0);
+
+    controller.arm(10_000, "PerScenarioThrottled");
+    expect(controller.isBackingOff()).toBe(true);
+    expect(controller.getRemainingCooldownMs()).toBe(10_000);
+    expect(controller.getLevel()).toBe(1);
+
+    advance(4000);
+    expect(controller.getRemainingCooldownMs()).toBe(6000);
+    expect(controller.isBackingOff()).toBe(true);
+
+    advance(6001);
+    expect(controller.getRemainingCooldownMs()).toBe(0);
+    expect(controller.isBackingOff()).toBe(false);
+  });
+
+  it("repeated calls to arm() extend or preserve backoffUntil without reducing it", () => {
+    const { controller, advance } = setup();
+    controller.arm(10_000);
+    expect(controller.getRemainingCooldownMs()).toBe(10_000);
+
+    advance(3000);
+    expect(controller.getRemainingCooldownMs()).toBe(7000);
+
+    // Smaller cooldown from current time should not reduce the existing backoff window
+    controller.arm(5000); // 3000 + 5000 = 8000 < 10000
+    expect(controller.getRemainingCooldownMs()).toBe(7000);
+
+    // Longer cooldown extends the window
+    controller.arm(15_000); // 3000 + 15000 = 18000 > 10000
+    expect(controller.getRemainingCooldownMs()).toBe(15_000);
+  });
 });

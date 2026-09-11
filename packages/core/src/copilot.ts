@@ -118,4 +118,6 @@ export interface CopilotStream {
   turnState?: string | null;
   /** True if the model triggered a native custom action this turn (H-NATIVE-6). */
   sawAction?: boolean;
+  readonly result: { value?: string; message?: string; errorCode?: string; serviceVersion?: string } | null;
+  readonly isThrottled: boolean;
 }

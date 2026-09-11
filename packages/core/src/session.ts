@@ -11,6 +11,7 @@ import {
   CloseFrame,
 } from "./schemas.js";
 import { decodeJwt, getToneForModel, type CopilotStream, type CapturedImage } from "./copilot.js";
+export type { CopilotStream } from "./copilot.js";
 import {
   parseActionConfirmation,
   buildResumeInvokeAction,
@@ -264,6 +265,7 @@ export class CopilotSession {
       const maxScores: Record<string, number> = {};
       let turnCountServer: number | null = null;
       let turnState: string | null = null;
+      let resultInfo: { value?: string; message?: string; errorCode?: string; serviceVersion?: string } | null = null;
       // Generated images captured this turn (§14). Keyed by fileToken so the
       // repeated progress snapshots for one image collapse to a single entry.
       const imagesByToken = new Map<string, CapturedImage>();
@@ -382,6 +384,16 @@ export class CopilotSession {
         },
         get sawAction() {
           return sawAction;
+        },
+        get result() {
+          return resultInfo;
+        },
+        get isThrottled() {
+          return (
+            resultInfo?.value === "Throttled" ||
+            resultInfo?.errorCode === "PerScenarioThrottled" ||
+            (turnState === "Failed" && resultInfo?.value === "Throttled")
+          );
         },
 
         [Symbol.asyncIterator]() {
@@ -703,8 +715,9 @@ export class CopilotSession {
         if (base.type === 2) {
           // Stream item — the FINAL state of the conversation, with authoritative
           // throttle/turnCount/scores. Mine it before closing.
-          const item = (raw as { item?: { messages?: any[]; throttling?: any; turnState?: string } }).item;
+          const item = (raw as { item?: { messages?: any[]; throttling?: any; turnState?: string; result?: any } }).item;
           if (item) {
+            if (item.result) resultInfo = item.result;
             if (item.turnState) turnState = item.turnState;
             if (item.throttling) {
               throttleInfo = { current: item.throttling.numUserMessagesInConversation, max: item.throttling.maxNumUserMessagesInConversation };

@@ -17,6 +17,7 @@ import {
   awaitDegradationBackoff,
   isDegradationBackoff,
   getRemainingDegradationCooldownMs,
+  triggerDegradationBackoff,
   getImageArtifactToken,
   fetchImageBytes,
   type CapturedImage,
@@ -205,6 +206,38 @@ function formatDeltaMessages(messages: ParsedMessage[], tools?: ChatBody["tools"
   return parts.join("\n\n");
 }
 
+let nextNewSessionAllowedAt = 0;
+export async function paceNewSessionStart(signal?: AbortSignal): Promise<number> {
+  const intervalMs = Number(process.env.M365_NEW_SESSION_SPACING_MS ?? 15_000);
+  if (intervalMs <= 0) return 0;
+  const now = Date.now();
+  const scheduledAt = Math.max(now, nextNewSessionAllowedAt);
+  nextNewSessionAllowedAt = scheduledAt + intervalMs;
+  const delayMs = scheduledAt - now;
+  if (delayMs > 0) {
+    log.info(`Pacing new session start: delaying turn 0 by ${(delayMs / 1000).toFixed(1)}s to prevent parallel dispatch throttle`);
+    await new Promise<void>((resolve, reject) => {
+      let timer: NodeJS.Timeout | undefined;
+      const onAbort = () => {
+        if (timer) clearTimeout(timer);
+        reject(new Error("Aborted while waiting in new session pacing queue"));
+      };
+      timer = setTimeout(() => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve();
+      }, delayMs);
+      if (signal) {
+        if (signal.aborted) onAbort();
+        else signal.addEventListener("abort", onAbort, { once: true });
+      }
+    });
+  }
+  return delayMs;
+}
+export function resetNewSessionPacing(): void {
+  nextNewSessionAllowedAt = 0;
+}
+
 // --- Main handler ---
 
 /**
@@ -245,6 +278,8 @@ export async function handleChatCompletion(
   // M365 is stateful — it remembers everything from prior turns,
   // so we only need to send new messages after the first turn.
   const isFirstTurn = session.turnCount === 0;
+  const turn = session.turnCount;
+  const isFirst = isFirstTurn || conv.sentMessageCount === 0;
   const convId = session.conversationId;
   let text: string;
   if (isFirstTurn || conv.sentMessageCount === 0) {
@@ -281,6 +316,7 @@ export async function handleChatCompletion(
   let lastMessageType: string | null | undefined;
   let lastScores: Record<string, number> | null | undefined;
   let lastTurnCount: number | null | undefined;
+  let sessionPaced = false;
 
   // `onDelta` (when provided) forwards each text delta to the caller AS IT ARRIVES,
   // for live incremental streaming. It's safe to forward without ever retracting:
@@ -303,6 +339,15 @@ export async function handleChatCompletion(
       const remainingSec = Math.max(1, Math.ceil(remainingMs / 1000));
       log.info(`Account degraded — locally shielding request (circuit breaker active for ${remainingSec}s, returning 429 Retry-After)`);
       return { error: degradationShieldResponse(remainingSec) };
+    }
+
+    if (turn === 0 && isFirst && !sessionPaced) {
+      sessionPaced = true;
+      try {
+        await paceNewSessionStart(opts.signal);
+      } catch (err: any) {
+        return { error: jsonResponse(499, { error: { message: err.message, type: "client_closed_request" } }) };
+      }
     }
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
@@ -349,6 +394,16 @@ export async function handleChatCompletion(
       lastMessageType = copilotStream.messageType;
       lastScores = copilotStream.scores;
       lastTurnCount = copilotStream.turnCount;
+
+      if (copilotStream.isThrottled) {
+        const throttleSec = Number(process.env.M365_THROTTLE_COOLDOWN_SEC ?? 600);
+        const errCode = copilotStream.result?.errorCode ?? copilotStream.result?.value ?? "Throttled";
+        const errMsg = copilotStream.result?.message ?? "We're currently experiencing high traffic. Please try again later.";
+        log.warn(`Upstream M365 rate limit detected: ${errCode} (${errMsg}) — arming ${throttleSec}s cooldown and fast-failing with 429`);
+        triggerDegradationBackoff(throttleSec * 1000, errCode);
+        session.reset();
+        return { error: degradationShieldResponse(throttleSec) };
+      }
 
       if (copilotStream.hasContent || fullText.length > 0) {
         noteRequestOutcome(false, convId); // clean response → degradation has lifted
