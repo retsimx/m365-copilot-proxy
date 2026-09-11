@@ -176,8 +176,8 @@ There is no `model` parameter. The `tone` string on the chat message picks the m
 | `claude-sonnet-think-deeper` | `Claude_Sonnet_Reasoning` | Claude Sonnet 4.5 + reasoning |
 | `claude-opus` | `Claude_Opus` | accepted tone; identity deflected (likely Opus) |
 | `gpt-5.5` / `gpt-5.5-quick` | `Gpt_5_5_Chat` | current GPT generation |
-| `gpt-5.5-think-deeper` | `Gpt_5_5_Reasoning` | |
-| `gpt-5.6-think-deeper` | `Gpt_5_6_Reasoning` | confirmed live 2026-08-06; GPT-5.6 Think deeper |
+| `gpt-5.5-think-deeper` | `Gpt_5_5_Reasoning` | **recommended for tool calling** (paired with fenced/shell routing) |
+| `gpt-5.6-think-deeper` | `Gpt_5_6_Reasoning` | confirmed live 2026-08-06; GPT-5.6 Think deeper, robust tool caller |
 | `gpt-6-astra` | `Gpt_6_Astra` | confirmed live 2026-09-08; GPT-6 Astra, routes `DeepLeo` reasoning pipeline |
 | `gpt-5.4` / `gpt-5.4-think-deeper` | `Gpt_5_4_Reasoning` | |
 | `gpt-5.4-quick` | `Gpt_5_4_Quick` | |
@@ -202,9 +202,12 @@ GPT-6 follows the same pattern: `Gpt_6_Astra` is live (`DeepLeo`, correct answer
 
 Rejected on test: `Anthropic_Claude`, `Claude_Haiku`, `Claude_3_7_Sonnet`. Accepted-but-NOT-Claude: `Claude_Reasoning` (self-IDs as GPT-5 — don't use). New tones still appear by pattern (`Gpt_5_N_{Quick,Reasoning}`, `Claude_*`).
 
-> ⚠️ **The declarative agent overrides the tone and forces GPT-5.** This is the big one (June 2026, `scripts/tone-probe.mjs`): with **no agent**, `Claude_Sonnet` → real Claude; with the agent attached (`threadLevelGptId`, §10) the *same* tone silently routes to **GPT-5**. So a non-default tone (Claude, and the `*_Reasoning` tones) only takes effect on the **agent-less / plain-chat** path. With a heavy tool prompt a Claude tone + agent goes further and **Disengages persistently** (the `DeepLeo` reasoning pipeline meta-analyses the injected prompt instead of obeying it). Ruled out as causes: prompt wrapper, the `variants` flag list, conversation reuse — isolated cleanly to agent presence.
+> ⚠️ **Declarative agent interaction with tones: Claude vs Reasoning Models.**
 >
-> **Consequence:** Claude (and other non-default tones) are usable for plain chat but **not** for tool calling via our emulation agent — tool requests get GPT regardless. The proxy therefore attaches the agent **only when the request carries tools** (`ModelSession.run(..., useAgent=hasTools)`), so plain chat reaches the model the tone selects. Getting Claude-grade *tool* use needs the native-action / MCP path (no declarative agent) — see `docs/hypotheses.md` §8.
+> 1. **Claude tones route to GPT-5 when an agent is attached:** With **no agent**, `Claude_Sonnet` reaches real Anthropic Claude. However, attaching the declarative agent (`threadLevelGptId`, §10) silently routes the turn to **GPT-5**. Thus, Claude tones are effective for plain chat, but requests with tools fall back to GPT. The proxy attaches the agent **only when the request carries tools** (`ModelSession.run(..., useAgent=hasTools)`), ensuring plain chat reaches Claude.
+>
+> 2. **Reasoning tones (`gpt-5.5-think-deeper`, `gpt-5.6-think-deeper`) are robust tool-callers:** When paired with fenced/shell-routing and delta turn `<tools>` re-injection, reasoning models excel at tool calling and driving multi-turn agent loops. The earlier June 2026 notes suggesting `DeepLeo` meta-analyzed prompts and refused tools applied only to the obsolete bare-JSON `{"tool":...}` format and few-shot wrappers. Under the current fenced/shell routing architecture, reasoning models consistently emit valid tool fences. In contrast, the default `m365-copilot` (magic) tone frequently confabulates and fails to call tools (~0% solve).
+
 
 ### Code interpreter — a real server-side Python sandbox
 
@@ -307,18 +310,34 @@ that is distinct from the per-conversation 600 cap (which resets per conversatio
 
 - **The Limit:** Microsoft throttles **threads / conversations started per unit time** (~15–20 new
   threads / 10 min, or bursts of >5 threads in <2 min). In-thread message volume is unmetered.
-- **The Signature:** Turns return empty replies (`answer length: 0`, `type: 7`, `offense: "None"`)
-  with no `Disengaged` safety frame.
+- **The Signature (`PerScenarioThrottled`):** Upstream throttling returns explicit completion
+  frames: SignalR `type: 2` stream items containing `item.result` with `errorCode: "PerScenarioThrottled"`
+  (or `value: "Throttled"`) and `item.turnState: "Failed"`. Historically, when unparsed, these
+  completion frames appeared as empty replies (`answer length: 0`, `type: 7`, `offense: "None"`),
+  leading to bogus rate-limit or safety misdiagnoses. The proxy now mines `item.result` on every
+  `type: 2` frame and detects throttling directly.
 - **Identity-Keyed (`oid`):** The governor keys on the Microsoft Entra User Object ID. Token
   regeneration does not bypass it.
+- **Recovery Dynamics (30-minute baseline):** Upstream thread-bucket replenishment is non-linear.
+  Empirical probing shows that waiting 10 minutes recovers only ~1 thread token; attempting a fresh
+  request then immediately re-exhausts the bucket. Achieving a full bucket recovery requires
+  **30–35 minutes of absolute quiet**.
 - **Mitigation & Circuit Breaker (Shipped):**
-  - **Local Circuit Breaker Shielding (`packages/core/src/auth-recovery.ts`):** When empty responses
-    occur across distinct conversations, the proxy arms a local cooldown window (e.g. 90s–600s).
+  - **Local Circuit Breaker Shielding (`packages/core/src/auth-recovery.ts`):** Upon detecting
+    upstream `PerScenarioThrottled` or repeated empty responses across distinct conversations, the
+    proxy arms a 30-minute (1800s) default cooldown (`M365_THROTTLE_COOLDOWN_SEC = 1800`).
   - **Zero Upstream Waste:** While the circuit breaker is open, incoming requests are intercepted
-    locally and return **`HTTP 429 Too Many Requests`** with a **`Retry-After: <seconds>`** header.
-    **Zero requests are sent to Microsoft**, allowing their token bucket to refill undisturbed.
-  - **Client Self-Healing:** Standard OpenAI clients (OpenCode, Pi, SDK) catch the `429` with
-    `Retry-After`, pause automatically, and retry without terminating the turn.
+    locally and return **`HTTP 429 Too Many Requests`**. **Zero requests are sent to Microsoft**
+    during this window, protecting the upstream token bucket so it can recharge undisturbed.
+  - **Client-Capped `Retry-After: 60`:** Although the circuit breaker holds a 30-minute shield,
+    the response header `Retry-After` is capped at 60 seconds (`M365_MAX_RETRY_AFTER_SEC = 60`).
+    This prevents standard OpenAI clients (OpenCode, Pi, OpenAI SDK) from timing out or aborting,
+    enabling them to loop their normal backoff/retry cycles smoothly until the shield clears.
+  - **New Session Stagger Queue (`paceNewSessionStart`):** To prevent burst thread exhaustion when
+    multiple agents or background workers launch in parallel, the proxy gates initial turns
+    (`turn === 0`) through a 15-second pacing queue (`M365_NEW_SESSION_SPACING_MS = 15000`). This
+    caps fresh thread creation at 4 per minute, while follow-up turns (`turn > 0`) within existing
+    conversations run unthrottled with zero added delay.
 
 **Operational implications.**
 - Keep tasks inside persistent long threads wherever possible. Spawning 10 subagents consumes 10×
@@ -495,7 +514,7 @@ Evidence (`scripts/dataverse-bot-probe.mjs`, with a `<org>.crm4.dynamics.com/.de
 - Copilot Studio *does* ship an agent-model feature — its ECS config (`ecs.office.com/config/v1/CopilotStudio`) exposes `displayModelPicker=true`, `AgentModelSelectionV2`, `isReasoningCardEnabled=true`, even `cuaAnthropicModels` with `modelHint: "sonnet4-6"/"opus4-6"`. But that picker operates on **full Studio/Dataverse bots**, which we neither have nor create.
 - `msdyn_aimodels` exists but is **AI Builder** (invoice/receipt/sentiment/OCR models), unrelated to the Copilot chat LLM.
 
-**Conclusion:** our declarative agent has **no model knob**. The model is *only* the BizChat chat-layer `tone` (§5). Pairing our declarative agent with a non-default **reasoning** tone is an **unsupported combination** — the reasoning pipeline (`contentOrigin: "DeepLeo"`) meta-reasons over the injected prompt instead of obeying it (it will literally critique your few-shot, echo the `{"tool":"<tool_name>"}` template verbatim, and reason itself *out* of using tools). The agent is still attached (`threadLevelGptId` rides along, response is tagged `3PDeclarativeAgent`) — it just loses its grip under a reasoning tone.
+**Conclusion:** our declarative agent has **no model knob**. The model is *only* the BizChat chat-layer `tone` (§5). While declarative agents cannot bind a specific model on the server side, reasoning models (`gpt-5.5-think-deeper`, `gpt-5.6-think-deeper`) are robust, highly compliant tool-callers when paired with fenced/shell-routing and delta turn `<tools>` re-injection. The earlier June 2026 notes suggesting that the reasoning pipeline (`contentOrigin: "DeepLeo"`) meta-analyzed prompts and reasoned itself out of calling tools applied strictly to the legacy bare-JSON `{"tool":...}` format and few-shot wrappers. Under the current fenced/shell routing architecture, reasoning models naturally emit ```` ```bash ```` and other tool fences, making them the recommended engines for complex multi-turn coding loops.
 
 **Open frontier:** create a *full* Studio/Dataverse PVA bot (which *can* bind a model) and test whether it's reachable over the same BizChat WS. Different APIs (Dataverse write + PVA `botcomponents` + a different publish path) and unknown BizChat compatibility — filed as the next experiment, not yet done.
 
@@ -517,15 +536,15 @@ Evidence (`scripts/dataverse-bot-probe.mjs`, with a `<org>.crm4.dynamics.com/.de
 | 10 | Power Platform env host needs last-2-chars trimmed to resolve DNS | `getEnvironmentUrl()` |
 | 11 | 600 messages **per conversation**; reuse + delta to conserve | §7/§8 |
 | 12 | Only bot messages **without** `messageType` are real content | `handleMsg()` |
-| 13 | **Reasoning tones** (`*_Reasoning`/`DeepLeo`) meta-analyze the prompt and disengage; only `magic` + `*_Quick` work with the agent | §5/§10 |
+| 13 | **Reasoning models** (`gpt-5.5-think-deeper`, `gpt-5.6-think-deeper`) work robustly with the agent using fenced/shell routing and delta `<tools>` re-injection | §5/§10 |
 | 14 | Our `minimalBots` agents are **not** Dataverse bots (that table is empty) and have **no model field** — can't bind a model | §10 |
-| 15 | Agent is **versioned by name** (`m365-tool-agent-<sha256-prefix>`); editing instructions auto-provisions a new one + cleans up old | §10 |
-| 16 | Empty reply ≠ rate limit unless throttle is at-limit; otherwise fail fast (don't burn 60s of retries) | `handler.ts` |
+| 15 | Agent is **versioned by name** (`m365-tool-agent-<sha256-prefix>`); editing instructions auto-provisions a new one (stale bots are preserved for multi-host safety) | §10 |
+| 16 | `PerScenarioThrottled` is now parsed directly on `type: 2` completion frames; fast-fails with 429 and arms circuit breaker without retries | `handler.ts`/§7 |
 | 17 | M365 invents `{"confidence":N}` / `{"final":"…"}` JSON and batches calls + premature `✅ SUCCESS`; proxy strips them + enforces one call/turn | `tools.ts`/`handler.ts` |
 | 18 | **Deleted-agent trap:** a long-lived host caches its agent id for life (`reset()` won't clear it) and can't self-heal when its bot is cleaned up; dead agent → instant empty reply (`throttle:null`, ~0.7s) misread as "rate limited". Restart, or clear `cachedAgentId` on empty | `model.ts`/§10 |
 | 19 | **Cancel** = send `{"type":1,"target":"stop","invocationId":"1","arguments":[{}]}` then close; server acks `type:3` and wipes the partial answer. Still costs 1/600; context persists. **Proxy now sends this on client-abort** | §6/F11 |
 | 20 | **I/O is asymmetric:** input is retrieval-backed ≥500k tokens (benign size never Disengages); output soft-caps ~3k tokens by *concluding early*, not truncating — so big writes look complete but aren't. Proxy advertises 128k window + emits `finish_reason:"length"` near the cap | §6/F9/F10 |
-| 21 | **The agent overrides `tone` → GPT-5.** A non-default tone (Claude, `*_Reasoning`) only takes effect with NO agent attached; with the agent it silently routes to GPT (or Disengages on heavy tool prompts). Proxy attaches the agent only for tool requests | §5/§10 |
+| 21 | **The agent overrides Claude `tone` → GPT-5.** Non-GPT tones (e.g. Claude) only take effect with NO agent attached; with the agent they silently route to GPT. Proxy attaches the agent only for tool requests | §5/§10 |
 | 22 | **`tone` is server-validated** (unknown → `type:3` error), so an accepted tone is real. `Claude_Sonnet` = real Claude Sonnet 4.5; `Gpt_5_5_*` current gen; `Claude_Reasoning` accepted but actually GPT | §5 |
 | 23 | **Code interpreter is real:** `cwc_code_interpreter*` optionsSets + `GeneratedCode` msg type → genuine server-side Python execution. Proxy enables it on the agent-less path | §5 |
 | 24 | **`optionsSets` was sent empty** — leaves code-interpreter/memory/custom-instructions/image off the table. Reference impls (PyRIT, kuchris) populate it | §5/hypotheses §8 |

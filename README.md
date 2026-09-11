@@ -31,7 +31,7 @@ it scored 0/5 on real agentic tasks; see [hypotheses §9](docs/hypotheses.md)):
 - **Reliability comes from the Copilot Studio agent (below) + the fenced/shell framing** —
   without the agent, M365 ignores tool instructions and answers in prose
 - **Structural Clause NLP:** Replaces brittle regexes with clause-boundary segmentation (`[Tool Anchor] + [Negation] + [Availability State]`) to intercept subtle refusals, existence claims, truncation surrenders, and shell failure deferrals.
-- **Circuit Breaker Local Shielding:** Automatically intercepts requests during thread-rate cooldowns and returns `HTTP 429` with `Retry-After: <seconds>`, allowing OpenAI clients (OpenCode, Pi) to auto-pause and self-heal without aborting turns.
+- **Circuit Breaker Local Shielding:** Automatically intercepts requests during thread-rate cooldowns and returns `HTTP 429` with a client-capped `Retry-After: 60` header. Enforces a 30-minute (1800s) default cooldown baseline sending zero traffic upstream so Microsoft's leaky bucket can fully recover, while standard OpenAI clients (OpenCode, Pi) auto-pause and self-heal without aborting turns. Also incorporates a 15-second in-flight stagger queue for fresh sessions (`turn === 0`) to prevent parallel dispatch drops.
 
 ### Agent mode
 
@@ -273,7 +273,7 @@ without NixOS: `nix run github:cramt/m365-copilot-proxy -- 4141`.
 
 | Model ID | M365 Tone | Description |
 |---|---|---|
-| `gpt-5.6-think-deeper` | Gpt_5_6_Reasoning | GPT-5.6 reasoning — live-validated; agent/tool reliability not yet benchmarked |
+| `gpt-5.6-think-deeper` | Gpt_5_6_Reasoning | GPT-5.6 reasoning — live-validated and capable of robust tool execution and reasoning |
 | `gpt-5.5-think-deeper` | Gpt_5_5_Reasoning | **Recommended default for agents/tool-calling** — robust tool compliance |
 | `gpt-5.5` / `gpt-5.5-quick` | Gpt_5_5_Chat | GPT-5.5 fast |
 | `m365-copilot` / `auto` | magic | Auto-routing — high-variance at tool-calling (confabulates; see below) |
@@ -380,6 +380,9 @@ Three token scopes are acquired:
 | `M365_NO_CONFAB_RETRY` / `M365_CONFAB_RETRIES` | M365's chat model sometimes produces prose instead of a tool call when it should act — either confabulating an inability ("I can't access the files, please paste them") **or** claiming a completion it never did ("I've replaced the README", with no tool call). By default the proxy detects both and re-prompts forcefully **in the same conversation** (`M365_CONFAB_RETRIES`, default `1`) to force a real action. Set `M365_NO_CONFAB_RETRY=1` to disable. |
 | `M365_NO_BACKOFF` (alias `M365_NO_AUTO_REAUTH`) | Set to `1` to disable degradation backoff. By default, when empty/throttled responses span several **distinct conversations** in a short window (the thread-rate-throttle signature, [F13](docs/hypotheses.md)), the proxy **paces subsequent turns** (a jittered delay before starting new backend conversations) to let the account self-heal. This replaced the old auto-reauth: a fresh login does **not** clear this throttle (it's `oid`-keyed — [§11 H-R1](docs/hypotheses.md)) and raised our detection profile. A single long pi thread never trips the trigger. |
 | `M365_BACKOFF_THRESHOLD` / `M365_BACKOFF_WINDOW_MS` / `M365_BACKOFF_BASE_MS` / `M365_BACKOFF_MAX_MS` | Tune backoff: distinct-conversation empties to trigger (default `3`), the window they must fall in (default `120000`), the initial pacing window (default `90000`), and its escalation cap (default `600000`). |
+| `M365_THROTTLE_COOLDOWN_SEC` | Degradation cooldown window in seconds (default `1800`, i.e. 30 minutes). |
+| `M365_MAX_RETRY_AFTER_SEC` | Maximum `Retry-After` header value sent to clients (default `60`). |
+| `M365_NEW_SESSION_SPACING_MS` | Minimum spacing between new session (`turn === 0`) starts in milliseconds (default `15000`, i.e. 15s). |
 | `M365_BROWSER_PROFILE` / `M365_LOGIN_UA` | Override the persistent browser-profile dir and the login User-Agent used for the (rare) automated interactive login. The persistent profile keeps AAD SSO/device cookies so repeat logins are silent and look like a familiar device ([§11 H-R3](docs/hypotheses.md)). |
 | `M365_ENABLE_INTERACTIVE_APPROVAL` | Set to `1` to allow a **visible** browser window for sign-in when the automated login can't work or fails — the fallback for tenants with no TOTP option (push-only MFA, FIDO2, Okta/Ping/Duo). You complete SSO/MFA by hand once; tokens refresh silently afterwards. Off by default so headless hosts fail loudly rather than hang. See [If your tenant has no TOTP option](#if-your-tenant-has-no-totp-option). |
 | `M365_NO_INTERACTIVE` | Set to `1` to hard-disable any visible browser login, overriding the flag above. For systemd/CI hosts where a window must never open. |
@@ -454,7 +457,7 @@ pnpm run test:live    # Run live integration tests against M365
 - Tool calling is emulated (prompt injection + a Copilot Studio agent), not native function calling — robust with the agent, unreliable without it
 - The `think-deeper` / `*_Reasoning` models take 10-30s per response
 - Hard quota of ~600 messages **per conversation** (mitigated by session reuse + delta sends)
-- Streaming: **tool-less** responses stream incrementally (deltas forwarded as they arrive). **Tool-calling** turns are still buffered server-side — the raw text has to be parsed for tool-call fences before it can be emitted — so those arrive as a single chunk at the end (with an immediate HTTP 200 + heartbeats so the client never times out waiting)
+- Streaming: **tool-less** responses stream incrementally (deltas forwarded as they arrive). **Tool-calling** turns are still buffered server-side — the raw text has to be parsed for tool-call fences before it can be emitted — so those arrive as a single chunk at the end (with an immediate HTTP 200 + heartbeats so the client never times out waiting). Rate limit shielding returns HTTP 429 upfront before streaming commits HTTP 200.
 
 ## License
 

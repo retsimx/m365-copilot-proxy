@@ -86,11 +86,23 @@ prompt is tuned. The layers, in handler order:
   "here's a simplified README") would get its own answer executed as shell. A response that
   looks like a document (≥2 fences AND ≥120 chars surrounding prose, OR ≥4 fences) is returned
   as **text**, not executed. A single action is never reclassified. (hypotheses §9 F15.)
+- **Safety Refusal Separation (`looksLikeSafetyRefusal`):** When the model response matches
+  safety or content policy refusal heuristics (e.g. prompt injection warnings, prohibited topic
+  canned responses), the proxy fast-fails immediately with **HTTP 400 `content_policy_refusal`**
+  and resets the session context (`session.reset()`). Unlike confabulations, safety refusals are
+  never retried.
 - **Structural Clause NLP Confabulation & Refusal Detection** (`hasClauseRefusal`): replaces
   brittle linear regexes with clause-boundary segmentation (`[Tool Anchor] + [Negation] + [Availability State]`).
   Catches transitive provision verbs (`this interface does not expose tools`), tool existence claims
   (`no apply_patch binary exists`), truncation surrenders, and shell diagnosis deferrals (`status is
   a read-only variable; next execution must replace with rc`) without splitting on `.py` filenames.
+- **Forced Confabulation & Hallucination Retries:** Stochastic turn-1 claims that tools or files
+  cannot be accessed trigger automated in-conversation re-prompting (up to `M365_CONFAB_RETRIES`,
+  default 3).
+- **Fail-Closed Unresolved Tool Refusal:** If tool confabulation persists after all forcing retries
+  are exhausted without any tool calls emitted, the proxy fails closed with **HTTP 502
+  `unresolved_tool_refusal`** (and flushes session context), rather than passing unearned prose
+  claims through to the agent.
 - **Hallucinated-completion retry** (`hasClauseHallucination`): if the model CLAIMS a file mutation
   ("I've replaced the README") with **no tool call all conversation**, force a real write. Gated on
   `!everActed`, so it won't misfire on a genuine post-write summary.
@@ -109,11 +121,17 @@ prompt is tuned. The layers, in handler order:
   riding alongside tool calls (premature success), and **unwraps** a lone `{"final":"…"}`.
 - **One call per turn:** keeps only the **first** tool call; M365 batches its whole plan into
   one response, running later steps on guessed state. Override with `M365_ALLOW_MULTI_TOOL`.
-- **Circuit Breaker Local Shielding & HTTP 429 Rate Limiting:** Repeated empties across **distinct
-  conversations** trigger the proxy's **Local Circuit Breaker**. While active, the proxy returns
-  **`HTTP 429 Too Many Requests`** with a **`Retry-After: <seconds>`** header, sending **zero traffic
-  to Microsoft** so the upstream token bucket recharges. OpenAI clients (OpenCode, Pi) auto-pause
-  and retry cleanly without aborting the turn.
+- **New Session Stagger Queue (`paceNewSessionStart`):** Fresh conversations (`turn === 0`) are
+  paced through a 15-second spacing queue (`M365_NEW_SESSION_SPACING_MS = 15000`), capping new session
+  starts at 4 per minute to avoid burst thread-rate throttling across parallel workers or subagents,
+  while follow-up turns (`turn > 0`) proceed unthrottled without delay.
+- **Circuit Breaker Local Shielding & HTTP 429 Rate Limiting:** When upstream throttling
+  (`PerScenarioThrottled`) or repeated empties across **distinct conversations** are detected, the proxy
+  arms a 30-minute (1800s) default cooldown (`M365_THROTTLE_COOLDOWN_SEC = 1800`). While active, the
+  proxy returns **`HTTP 429 Too Many Requests`** with a client header capped at **`Retry-After: 60`**
+  (`M365_MAX_RETRY_AFTER_SEC = 60`), sending **zero traffic to Microsoft** so the upstream token bucket
+  recharges. Standard OpenAI clients (OpenCode, Pi) auto-pause and loop their retry timers cleanly
+  without aborting the turn.
 
 > The JSON tool format and the few-shot block were **removed** this cycle (0/5 on real
 > agentic tasks). Tool calling is fenced-only; behavioural framing lives in the per-request

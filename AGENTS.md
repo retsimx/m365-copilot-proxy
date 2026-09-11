@@ -36,12 +36,15 @@ Leave a one-line pointer + evidence reference behind in the notebook.
 Hard-won defaults for working on this proxy. Internalize these before touching anything.
 
 1. **Always run sequentially — one thread at a time.** The rate limit is real but
-   weird: it tracks *conversations/threads started per unit time*, not messages (F13),
-   and it surfaces as `Disengaged`-looking 502s that are actually throttle. Never fire
-   concurrent requests, and never loop fresh conversations back-to-back. Space experiment
-   runs out (generous cooldowns between threads). A real pi/openclaw session — one long
-   thread, many messages — is cheap; it's our *experiments* (a new thread per task) that
-   burn the thread budget and trigger the throttle.
+   weird: it tracks *conversations/threads started per unit time*, not messages (F13).
+   Upstream throttling returns explicit `PerScenarioThrottled` completion frames (which
+   previously manifested as empty `answer length: 0` / 502s when unparsed). The proxy
+   enforces a 15-second new session stagger queue for fresh conversations (`turn === 0`)
+   to cap thread creation at 4/min, and arms a 30-minute circuit breaker when tripped.
+   Never fire concurrent requests, and never loop fresh conversations back-to-back.
+   Space experiment runs out (generous cooldowns between threads). A real pi/openclaw
+   session — one long thread, many messages — is cheap; it's our *experiments* (a new
+   thread per task) that burn the thread budget and trigger the throttle.
 
 2. **Chase all hunches — tangents are encouraged.** This is an undocumented API we're
    reverse-engineering. The moment you think *"oh, maybe X works like this"* — stop and
@@ -167,24 +170,35 @@ pnpm test:live      # M365_LIVE=1; live tests that hit real M365 (uses quota)
   would delete the agent another host/PC is still using mid-conversation. A few orphaned
   lightweight bots are harmless. `updateBotInstructions()` is still dead code — we re-create
   rather than update in place. See API doc §10.
-- **Reasoning tones don't work with the agent.** `gpt-5.x` / `*-think-deeper` route through
-  the `DeepLeo` reasoning pipeline, which meta-analyzes the injected prompt instead of
-  obeying it. Only the default `magic` and `*-quick` tones behave. The model can't be bound
-  to our (declarative `minimalBots`) agent type at all — see API doc §10 *Agent types*.
+- **Reasoning tones are recommended for tool calling.** Reasoning tones
+  (`gpt-5.5-think-deeper`, `gpt-5.6-think-deeper`) are the recommended engines for
+  tool-calling when paired with fenced/shell-routing and delta turn tool re-injection.
+  The default `m365-copilot` (magic) tone is unreliable for tools (confabulates ~0%
+  solve). The older claim that reasoning tones do not work applied only to the legacy
+  bare-JSON format prior to fenced/shell routing.
 - **M365 disengages on large tool payloads.** Keep injected toolsets lean. This is why
   pi works and heavy harnesses (opencode) don't. The proxy also enforces one tool call per
   turn and strips M365's invented `{confidence}`/`{final}` JSON (`M365_ALLOW_MULTI_TOOL` to opt out).
 - **Account degradation is THREAD-rate, not message-count** (docs/hypotheses.md §9 F13).
   Microsoft throttles *conversations started*, not messages sent — the per-conversation
-  counter resets each thread. A bench or harness that opens fresh conversations/subagents in rapid
-  succession burns the thread budget fast (~15–20 threads / 10 min); a single long thread
-  (hundreds of messages) is fine.
-- **The proxy features a Local Circuit Breaker Shield.** When degradation is detected
-  (repeated empty handshakes across conversations), the proxy intercepts subsequent requests
-  locally and returns **`HTTP 429 Too Many Requests`** with a **`Retry-After: <seconds>`** header
-  and a verbose message. This sends **zero traffic to Microsoft** during the cooldown window,
+  counter resets each thread. Upstream throttling returns explicit `PerScenarioThrottled`
+  completion frames (which previously caused `answer length: 0` / silent failures when unparsed).
+  A bench or harness that opens fresh conversations/subagents in rapid succession burns the
+  thread budget fast (~15–20 threads / 10 min); a single long thread (hundreds of messages) is fine.
+- **The proxy features a Local Circuit Breaker Shield.** When upstream throttling (`PerScenarioThrottled`)
+  or repeated empty responses across conversations are detected, the proxy arms a 30-minute (1800s)
+  default cooldown (`M365_THROTTLE_COOLDOWN_SEC`). The proxy intercepts subsequent requests locally
+  and returns **`HTTP 429 Too Many Requests`** with a client header capped at **`Retry-After: 60`**
+  (`M365_MAX_RETRY_AFTER_SEC`). This sends **zero traffic to Microsoft** during the cooldown window,
   allowing Microsoft's token bucket to recharge while standard OpenAI clients (OpenCode, Pi)
   automatically pause and retry without aborting the turn.
+- **New Session Stagger Queue:** The proxy enforces a 15-second spacing queue for initial turns
+  (`turn === 0`, `M365_NEW_SESSION_SPACING_MS = 15000`), capping fresh session creation to 4/min to
+  prevent parallel dispatch drops while follow-up turns (`turn > 0`) run unthrottled.
+- **Safety Refusal Separation vs Unresolved Tool Refusal:** Upstream content policy violations
+  (`looksLikeSafetyRefusal`) fast-fail with **HTTP 400 `content_policy_refusal`** and flush session
+  context immediately without retries. In contrast, unresolved tool confabulations that persist after
+  forcing retries fail closed with **HTTP 502 `unresolved_tool_refusal`**.
 - **Structural Clause NLP Analysis** (`packages/core/src/tools.ts`): All natural language
   heuristics for tool refusals, confabulations, and unearned mutation claims use clause-boundary
   segmentation (`[Tool Anchor] + [Negation] + [Availability State]`). This avoids false positives

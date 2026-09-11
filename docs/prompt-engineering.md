@@ -41,12 +41,16 @@ These are what actually move compliance. In rough order of importance:
 5. **Delta turn `<tools>` injection.** M365 reasoning models (`DeepLeo`) require continuous
    tool context on every turn. In follow-up delta messages, `formatDeltaMessages` re-injects
    the `<tools>` block, eliminating turn-2+ "I do not have access to tools" confabulations.
-6. **Structural Clause NLP Semantic Analyzer.** Replacing brittle regexes with clause-boundary
+6. **Reasoning models (`gpt-5.5-think-deeper`, `gpt-5.6-think-deeper`) — the winning engine.**
+   Paired with fenced/shell-routing and delta `<tools>` injection, reasoning tones are the
+   recommended and most compliant engines for tool-calling. In contrast, the default `m365-copilot`
+   (magic) tone is unreliable and frequently confabulates (~0% solve rate).
+7. **Structural Clause NLP Semantic Analyzer.** Replacing brittle regexes with clause-boundary
    tokenization (`[Tool Anchor] + [Negation] + [Availability State]`) to intercept subtle refusals,
    transitive provision verbs (`this interface does not expose tools`), existence claims (`no
    apply_patch binary exists`), truncation surrenders, and shell diagnosis deferrals without
    false-positive splits on `.py` filenames. ([hyp §15].)
-7. **Proxy-side hardening** (deterministic, behind the model): document guard
+8. **Proxy-side hardening** (deterministic, behind the model): document guard
    (`isProseDocument` — don't execute a model's own markdown answer), simulated `<tool_response>`
    rejection and context flush, confab retry, hallucinated-completion retry, tool-result
    labelling, one-call-per-turn, stripping invented `{confidence}`/`{final}` JSON.
@@ -65,9 +69,11 @@ These are what actually move compliance. In rough order of importance:
   primed info as "task complete" and says "Done" with 0 tools.
 - **`tool_choice: "required"`** translated to a prompt rule: forces bogus `bash()` calls
   on pure-prose questions ("what is 7×8?"). Pass it through as advisory only. ([hyp F3].)
-- **Reasoning tones + agent** (`*-think-deeper`, bare `gpt-5.x`, `DeepLeo`): the pipeline
-  meta-reasons over the injected prompt instead of obeying it — it will critique your
-  few-shot and reason itself *out* of tools. Use `magic` / `*-quick`. ([api §10].)
+- **Legacy bare-JSON tool prompting with reasoning models:** When prompted with legacy
+  bare JSON `{"tool":...}` blocks and few-shot wrappers, the `DeepLeo` reasoning pipeline
+  meta-analyzed the prompt and critiqued the few-shot instead of executing tools. Fenced/shell-routing
+  and delta `<tools>` injection completely resolved this, making reasoning tones
+  (`gpt-5.5-think-deeper`, `gpt-5.6-think-deeper`) the winning combination.
 - **Native tool-calling (MCP / full Dataverse bot):** out of scope — needs a paid Copilot
   Studio license, breaking the zero-cost premise. ([hyp §8.11].)
 

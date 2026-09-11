@@ -2618,5 +2618,33 @@ surfacing as empty handshakes (`answer length: 0`) rather than `Disengaged`.
   its token bucket to refill cleanly.
 - **Client Auto-Recovery:** Standard OpenAI clients catch the `429`, pause for the `Retry-After`
   duration, and retry automatically without ending the turn.
-- Verified in live production on `10.0.1.15` and unit-tested in `handler-shielding.test.ts`.
+- Verified in live production on a headless host and unit-tested in `handler-shielding.test.ts`.
+
+---
+
+## 16. September 11 2026 — PerScenarioThrottled Protocol Parsing, 30m Leaky Bucket Baseline & Parallel Session Stagger Queue
+
+### F27 — Direct `PerScenarioThrottled` SignalR Completion Extraction & Fast-429 🟢
+
+- **Protocol details:** SignalR `type: 2` completion frames carry `item.result: {"value":"Throttled","errorCode":"PerScenarioThrottled","message":"We're currently experiencing high traffic. Please try again later."}`.
+- **Root cause of historical `answer length: 0`:** The proxy previously checked only `item.messages` (which is empty on throttle) and treated it as an unexpected socket close, triggering futile `Please continue.` retries.
+- **Shipped (`packages/core/src/session.ts` & `packages/proxy-lib/src/handler.ts`):** `CopilotStream.isThrottled` directly detects this frame, immediately returns HTTP 429, arms the circuit breaker, and resets session context with zero retries.
+
+### F28 — 15-Second In-Flight Stagger Queue for Parallel Session Starts (`paceNewSessionStart`) 🟢
+
+- **Claim:** Bursting multiple fresh sessions (`turn === 0`) concurrently caused immediate socket drops and throttling.
+- **Shipped (`packages/proxy-lib/src/handler.ts`):** `paceNewSessionStart` staggers new session starts by 15 seconds (`M365_NEW_SESSION_SPACING_MS=15000`) with SSE keepalives, limiting session starts to 4/min to prevent parallel dispatch drops. Follow-up turns (`turn > 0`) bypass the queue and run with zero delay.
+
+### F29 — 7.36M-Line Production Log Empirical Analysis & 30-Minute Leaky Bucket Recovery 🟢
+
+- **Empirical analysis across 7,367,183 log lines (Aug 18 – Sep 11):**
+  - Max sessions per window: 1m = 6, 5m = 17, 10m = 25, 15m = 28, 30m = 32, 60m = 50.
+  - Pre-throttle trigger thresholds: median 5 sessions in prior 10m (P90: 10, max 12).
+  - Leaky bucket recovery: A 10-minute quiet window only recovers ~1 token, causing instant re-throttling on the next request. Full bucket recovery consistently requires 30 to 35 minutes of absolute silence (zero requests sent upstream).
+  - Default cooldown updated to 1,800s (`M365_THROTTLE_COOLDOWN_SEC=1800`), with client-facing `Retry-After: 60` cap (`M365_MAX_RETRY_AFTER_SEC=60`) to keep standard OpenAI clients from aborting.
+
+### F30 — Safety Refusal Separation (`looksLikeSafetyRefusal`) & Fail-Closed Refusals 🟢
+
+- **Claim:** Microsoft content policy refusals ("looks like I can't chat about this", etc.) are distinct from tool confabulation.
+- **Shipped (`packages/core/src/tools.ts` & `packages/proxy-lib/src/handler.ts`):** `looksLikeSafetyRefusal` fast-fails with HTTP 400 `content_policy_refusal` and flushes session context without retries. Unresolved tool confabulations fail closed with HTTP 502 `unresolved_tool_refusal`.
 
