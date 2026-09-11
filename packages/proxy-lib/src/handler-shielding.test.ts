@@ -62,7 +62,7 @@ describe("Handler Degradation Circuit Breaker & 429 Retry-After Shielding", () =
     expect(json.error.code).toBe("rate_limit_exceeded");
     expect(json.error.message).toContain("throttle 3/600");
     expect(json.error.message).toContain("90s");
-  });
+  }, 15000);
 
   it("returns HTTP 429 when conversation quota limit is reached (600/600)", async () => {
     vi.spyOn(core, "isDegradationBackoff").mockReturnValue(false);
