@@ -411,24 +411,42 @@ export function looksLikeRemoteArtifactCompletion(text: string | null): boolean 
   return REMOTE_ARTIFACT_COMPLETION_PATTERNS.some((re) => re.test(t));
 }
 
+const SAFETY_REFUSAL_PATTERNS: RegExp[] = [
+  /looks\s+like\s+I\s+can.?t\s+chat\s+about\s+this/i,
+  /try\s+a\s+different\s+topic/i,
+  /attempts?\s+to\s+expose\s+or\s+override\s+internal\s+execution\s+instructions/i,
+  /(?:exploit|harm|attack\s+vectors?)/i,
+];
+
+export function looksLikeSafetyRefusal(text: string | null): boolean {
+  if (!text) return false;
+  const t = text.trim();
+  if (t.length < 8) return false;
+  return SAFETY_REFUSAL_PATTERNS.some((re) => re.test(t));
+}
+
 /**
  * Segment text into independent syntactic clauses and check if any clause expresses
  * a refusal to act due to missing, disabled, or unattached tools/capabilities.
  */
 function hasClauseRefusal(text: string): boolean {
+  const failSummaryRefusal =
+    /^FAIL\b[\s\S]{0,140}(?:could\s+not\s+be\s+written|not\s+been\s+written|not\s+verified|file-generation\s+capabilities\s+are\s+disabled|does\s+not\s+provide\s+an\s+executable)/i;
+  if (failSummaryRefusal.test(text)) return true;
+
   const toolWords =
-    /(?:\btools?\b|\bshell\b|\bexecution\b|\btool_calls?\b|`<tools>`|`?(?:bash|skill|question|task|edit_file|write_file|read_file|glob|grep|editing|apply_patch)`?|\bfile\s+editing\b|\bfilesystem\b|\bterminal\b|\bcommand\s+execution\b|\bexecutable\b|\bbinary\b)/i;
+    /(?:\btools?\b|\bshell\b|\bexecution\b|\btool_calls?\b|`<tools>`|`?(?:bash|skill|question|task|edit_file|write_file|read_file|glob|grep|editing|apply_patch)`?|\bfile\s+editing\b|\bfilesystem\b|\bterminal\b|\bcommand\s+execution\b|\bexecutable\b|\bbinary\b|\bcapabilities\b|\bfile-?(?:generation|writing)\b|\bscript-?(?:generation|execution)\b|\bshell-?execution\b)/i;
   const directNegStateWords =
-    /\b(?:disabled|unavailable|inactive|unsupported|unmounted|inaccessible|unreachable|unexecutable|disallowed|prohibited)\b/i;
+    /(?:\b(?:disabled|unavailable|inactive|unsupported|unmounted|inaccessible|unreachable|unexecutable|disallowed|prohibited)\b|not\s+(?:available|provided|enabled|operational))/i;
   const negWords =
-    /(?:\b(?:not|no|cannot|can.?t|unable|without|lack|absence|isn.?t|aren.?t|don.?t|never|falsely|decline|impossible|prevented|restricted|couldn.?t|did.?t|didn.?t|won.?t|wouldn.?t)\b)/i;
+    /(?:\b(?:not|no|cannot|can.?t|unable|without|lack|absence|isn.?t|aren.?t|don.?t|never|falsely|decline|impossible|prevented|restricted|couldn.?t|did.?t|didn.?t|won.?t|wouldn.?t)\b|wasn.?t\s+able)/i;
   const availWords =
     /(?:\b(?:enabled|available|attached|provided|active|functional|operational|accessible|installed|configured|present|support|supported|permitted|access|executed|claimed|started|run|interact|callable|expose|exposed|exposes|exposing|mount|mounted|mounts|mounting|include|included|includes|contain|contained|contains|offer|offered|offers|allow|allowed|allows|have|has|exists?|existed)\b)/i;
 
   const accessActionWords =
-    /\b(?:access|inspect|list|read|run|execute|retrieve|fetch|locate|see|open|edit|modify|modifying|write|apply|verify|complete|finish|create|created|creating|perform|performed|performing|proceed|proceeded|proceeding|check|checking|update|updating|mutate|mutating|mutations?|continue\s+with|help\s+with|assist\s+with)\b/i;
+    /\b(?:access|inspect|list|read|run|execute|retrieve|fetch|locate|see|open|edit|modify|modifying|write|apply|verify|complete|finish|create|created|creating|perform|performed|performing|proceed|proceeded|proceeding|check|checking|update|updating|mutate|mutating|mutations?|continue\s+with|help\s+with|assist\s+with|generate|generating|persist|persisting|overwrite|overwriting|provide|providing|facilitate)\b/i;
   const accessTargetWords =
-    /\b(?:files?|directory|directories|folder|environment|session|filesystem|repository|code|cwd|contents?|changes?|edits?|tasks?|task-\d+|worktrees?|branch(?:es)?|preflight|workflow|steps?|phase\s*\d+|stages?|repo|issues?|pr|pull\s+requests?|mr\b|merge\s+requests?|gitlab|github|jira|linear|records?|items?|epics?|state\.json|local\s+state|file\s+updates?|database|server)\b/i;
+    /(?:\b(?:files?|directory|directories|folder|environment|session|filesystem|repository|code|cwd|contents?|changes?|edits?|tasks?|task-\d+|worktrees?|branch(?:es)?|preflight|workflow|steps?|phase\s*\d+|stages?|repo|issues?|pr|pull\s+requests?|mr\b|merge\s+requests?|gitlab|github|jira|linear|records?|items?|epics?|state\.json|local\s+state|file\s+updates?|database|server|artefacts?|artifacts?|reports?|deliverables?|remediation|verdict|critique|audit)\b|[\w-]{2,}\.[a-z0-9]{1,4})/i;
 
   const delegateWords = /\b(?:paste|provide\s+me|send\s+me)\b/i;
   const restartWords = /\b(?:restart|start\s+over|begin\s+again|re-?run)\b/i;
@@ -444,7 +462,7 @@ function hasClauseRefusal(text: string): boolean {
   const interfaceRefusalWords =
     /\b(?:from|in|using)\s+this\s+(?:interface|chat|surface|session|mode|context|response|conversation)\b/i;
   const truthClaimWords =
-    /\b(?:cannot|can.?t|unable\s+to|will\s+not|must\s+not)\s+(?:truthfully|falsely|honestly)\s+(?:claim|state|declare|assert|report)\b/i;
+    /\b(?:cannot|can.?t|unable\s+to|will\s+not|must\s+not)\s+(?:truthfully|falsely|honestly)\s+(?:claim|state|declare|assert|report|provide|complete)\b/i;
   const incompletePassWords =
     /(?:(?:linking|annotation|verification|validation|review|audit|planning|implementation|preflight|task|pass|stage|step|run|workflow)\s+(?:pass\s+)?(?:is|remains|was)?\s*(?:still\s+)?(?:incomplete|unfinished|unverified|unproven|pending|aborted|partial)|(?:pass|stage|step|run|task|workflow|review)\s+(?:did\s+not|could\s+not|failed\s+to)\s+complete|(?:exited|failed|stopped|halted|aborted)\s+while\s+(?:validating|retrieving|checking|running|inspecting|creating|updating|processing|executing)|(?:exited|failed|stopped)\s+before\s+(?:it\s+could|any|the|being|we\s+could))/i;
   const pendingOperationsWords =
@@ -485,7 +503,7 @@ export function looksLikeConfabulation(text: string | null): boolean {
   if (!text) return false;
   const t = text.trim();
   if (t.length < 12) return false;
-  return hasClauseRefusal(t) || CONFABULATION_PATTERNS.some((re) => re.test(t));
+  return looksLikeSafetyRefusal(t) || hasClauseRefusal(t) || CONFABULATION_PATTERNS.some((re) => re.test(t));
 }
 
 /**

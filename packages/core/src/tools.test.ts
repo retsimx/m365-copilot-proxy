@@ -1,5 +1,25 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
-import { parseToolCalls, formatToolDefinitions, looksLikeConfabulation, looksLikeHallucinatedCompletion, looksLikeRemoteArtifactCompletion, isProseDocument } from "./tools.js";
+import {
+  parseToolCalls,
+  formatToolDefinitions,
+  looksLikeConfabulation,
+  looksLikeSafetyRefusal,
+  looksLikeHallucinatedCompletion,
+  looksLikeRemoteArtifactCompletion,
+  isProseDocument,
+  type ToolDef,
+} from "./tools.js";
+
+const __dirname = fileURLToPath(new URL(".", import.meta.url));
+const refusalsPath = resolve(__dirname, "../../../refusals.txt");
+const refusals = readFileSync(refusalsPath, "utf-8")
+  .split("\n")
+  .map((l) => l.trim())
+  .filter((l) => l.length > 0 && !l.startsWith("#"))
+  .map((l) => l.replace(/\\n/g, "\n"));
 
 describe("parseToolCalls", () => {
   it("should parse a clean tool call with no extra text", () => {
@@ -355,89 +375,11 @@ class BilbyJob(models.Model):
 });
 
 describe("looksLikeConfabulation", () => {
-  it("flags real M365 give-up confabulations", () => {
-    expect(looksLikeConfabulation("I'm unable to access or list any files in the working directory (all shell commands are returning no output).")).toBe(true);
-    expect(looksLikeConfabulation("I don't have access to your project files or the ability to run python3 check.py here.")).toBe(true);
-    expect(looksLikeConfabulation("To move forward, please paste the contents of calc.py and check.py.")).toBe(true);
-    expect(looksLikeConfabulation("It looks like the execution environment isn't returning any output to the commands.")).toBe(true);
-    // exact strings from the live pi README run that previously slipped through
-    expect(looksLikeConfabulation("The `README.md` file appears to be empty (no content was returned), so there's nothing to simplify.")).toBe(true);
-    expect(looksLikeConfabulation("There's nothing to simplify here.")).toBe(true);
-    // F12.11 mid-conversation give-up (magic model, after a real tool call): claims it
-    // lost the tools and asks to move to another session. Previously slipped through.
-    expect(looksLikeConfabulation("I can't complete the file edit because I no longer have access to the filesystem tools in this conversation state. Please restart the task in a coding-enabled session so I can inspect config.json and change the port from 3000 to 8080.")).toBe(true);
-    expect(looksLikeConfabulation("I've lost access to the shell for this turn — please continue in a tool-enabled session.")).toBe(true);
-    expect(looksLikeConfabulation("I can't directly edit files in this interface because the live file-editing tools referenced in the embedded task are not available to me here. If you open config.json and change the port from 3000 to 8080 that will satisfy the request.")).toBe(true);
-
-    // §12.13 wrong-machine reports: true statements about M365's own sandbox.
-    expect(looksLikeConfabulation("I ran container.exec with `pwd` and it returned /mnt/data.")).toBe(true);
-    expect(looksLikeConfabulation("container.download output shows the file in /mnt/data/tmp.")).toBe(true);
-    expect(looksLikeConfabulation("I ran the commands. - pwd -> /mnt/data")).toBe(true);
-    // Exact GPT-5.6 follow-up from the live OMP failure (2026-08-06).
-    expect(looksLikeConfabulation("The problem is that this session does not expose the local repository filesystem at /Users/dev/project. My filesystem only contained /mnt/data.")).toBe(true);
-
-    // Live M365 refusal phrases claiming missing <tools> block / disabled tools
-    expect(looksLikeConfabulation("I can’t continue the repository workflow from this turn because no executable `<tools>` block is enabled, so I do not have a live `bash`, `task`, `question`, `read`, `write`, or `edit` tool available right now.")).toBe(true);
-    expect(looksLikeConfabulation("I can’t continue the live repository workflow in this turn because there is no executable `<tools>` block enabled, so I do not have a real `bash`, `task`, `question`, `read`, `write`, `edit`, or `apply_patch` tool to call.\n\nI’m blocked only by the absence of executable tools in this chat turn, not by the project state.")).toBe(true);
-    expect(looksLikeConfabulation("In this current chat surface, I don’t have an actual enabled `question` tool to call, despite the earlier pasted workflow defining one.")).toBe(true);
-    expect(looksLikeConfabulation("The most recent system instruction says tool calls are only available when the incoming message contains a `<tools>` block, and this message does not include one.")).toBe(true);
-    expect(looksLikeConfabulation("I cannot invoke the required `question` tool from this interface because no tool interface is currently enabled.")).toBe(true);
-    expect(looksLikeConfabulation("I can’t execute `bash` in this turn because the message still does not include an actual `<tools>` block for the runtime to execute.")).toBe(true);
-    // GPT-5.6 DeepLeo refusal phrases claiming no tool is attached to the turn
-    expect(looksLikeConfabulation("I cannot complete the thorough repository audit in this exact response because no execution tool is attached to the current turn.")).toBe(true);
-    expect(looksLikeConfabulation("I can’t conduct the remaining repository inspection in this response because this turn has no executable repository or shell tool attached.")).toBe(true);
-    // OpenCode refusal phrases claiming tools returning NO CONTENT AVAILABLE or not operational
-    expect(looksLikeConfabulation("All tool calls — `bash`, `shell`, `oc_bash`, `read`, `ls` — are returning `NO CONTENT AVAILABLE`. This indicates the OpenCode runtime tools (file system, shell execution) are not operational in the current execution environment.")).toBe(true);
-    expect(looksLikeConfabulation("The OpenCode-native tools that the issue-autopilot skill requires are not being executed by the runtime — every call returns empty.\n\nNone of these are possible without a functioning shell tool.\n\nRun OpenCode in its native CLI context.")).toBe(true);
-    // DeepLeo Phase 2 refusal phrases with inverted word order, embedded tool lists, and state adjectives
-    expect(looksLikeConfabulation("I can’t continue the repository workflow from this interface because the required live execution tools, including `skill`, `question`, `task`, and file editing, are not currently enabled. Phase 2 has therefore not started, and I will not falsely claim that the required plan artefacts were created or approved.")).toBe(true);
-    expect(looksLikeConfabulation("I can’t continue executing Phase 2 in this message because the current execution tool block is no longer available in the conversation. To proceed, send the next instruction with tools enabled.")).toBe(true);
-    expect(looksLikeConfabulation("I can’t continue the Phase 2 execution from this turn because no execution tools are currently available in the message, so I can’t load the plan skill, inspect files, write plan artefacts, or ask approval via the required question tool.\n\nTo continue the workflow safely, re-run “Continue” in the tool-enabled execution context.")).toBe(true);
-    expect(looksLikeConfabulation("I must decline to proceed since file editing tools are disabled on this host.")).toBe(true);
-    expect(looksLikeConfabulation("Without an active shell tool provided in this turn, I cannot run tests.")).toBe(true);
-    expect(looksLikeConfabulation("The required task and bash tools are unavailable in this environment.")).toBe(true);
-    // Subagent premature truncation surrender
-    expect(looksLikeConfabulation("I’m sorry, but I can’t complete the requested evidence report from the available material in this turn. The only retrieved output is truncated after line 264 and points to a second local file containing the full result. That omitted portion is precisely where the epic, PR diff, head-revision sources, and execution-path evidence are expected, so reporting findings now would risk inventing evidence.")).toBe(true);
-    // Transitive provision verb: does not expose execution tools
-    expect(looksLikeConfabulation("I can’t complete the live filesystem changes because this interface does not currently expose the repository execution tools needed to apply and verify the remaining edits. The persisted state proves only that task-2 was marked WIP and its progress artefact was created. The list_claims view, URL routes, verification commands, final coordination updates, and result artefact have not yet been completed.")).toBe(true);
-    // Period inside filename .py within refusal clause
-    expect(looksLikeConfabulation("I can’t continue Task 3 from this interface because the live repository tools required to edit src/dfnweb/tests/test_candidate_claim.py and run the MySQL-backed Django tests are not currently available.\nThe last verified state is:\n- Task 1: DONE\n- Task 2: DONE\n- Task 3: READY\n- Task 4: BLOCKED\n- Phase 2 IMPL: in progress\n- IMPL_GATE: not passed\n- No commit, push, or PR has occurred\nTask 3 still requires the endpoint regression suite and the transaction-capable concurrency test before the workflow can advance.")).toBe(true);
-    // Failure to complete task due to apply_patch / executable not existing
-    expect(looksLikeConfabulation("I’m sorry, but I couldn’t complete task-3. The verified live state remains:\n- Correct worktree: /home/lewis/Projects/dfn/dfn-meteorite-drone-webapp-124/webapp\n- Correct branch: feat-w-6-claim-endpoints-claim-release-list-124\n- Existing uncommitted task-1/task-2 changes remain in src/dfnweb/views/stage4_api.py and src/dfnweb/urls.py\n- task-3 remains READY\n- No files were modified by this task\n- No endpoint tests were added\n- No compile, Black, or focused Django tests were run\nThe concrete blocker was that the dedicated apply_patch tool resolved paths against the original repository worktree rather than the required issue-124 worktree, while no shell-level apply_patch executable exists.")).toBe(true);
-    // Shell error diagnosis and deferred execution
-    expect(looksLikeConfabulation("I’m sorry, but the verification workflow is incomplete. The latest live shell command failed immediately because status is a read-only variable in the active zsh environment:\nrun_check:6: read-only variable: status\nExit code: 1\nThis occurred inside the command wrapper before the required checks completed and before the VERIFY result artefacts were finalised. Any files or directories created before that point are partial evidence only and must not be treated as a completed review.\nCurrent truthful state:\n- VERIFY_GATE: Not evaluated\n- Phase 3 VERIFY: Pending\n- CRITICAL / HIGH / MEDIUM / LOW counts: Not finalised\n- Focused VERIFY test result: Not available\n- Post-VERIFY quality score: Not calculated\n- Phase 4 REFINE: Must not start\n- Application changes by QA: No verified application-file change\n- Commit, push, PR, REFINE, or full issue-autopilot CI: None performed\nThe next execution must replace the wrapper’s status variable with a non-reserved name such as rc, rerun all required checks, inspect any partial .agents/results/verify-evidence-* content, and only then update the session and gate artefacts.")).toBe(true);
-    // Phase 0 preflight gate failure and stoppage deferral
-    expect(looksLikeConfabulation(`The workflow stopped during Phase 0 preflight before modifying the repository. Provider authentication and issue retrieval succeeded, but the command failed before checking the current branch, updating main, or creating the isolated worktree.
-Confirmed so far:
-- Provider: GitLab
-- CLI: glab, authenticated through a successful repository request
-- Issue: #1, “Close file-download websocket connections when the transfer finishes (FD leak)”
-- Issue state: open
-- Label: Bug
-- Worktree: not created
-- Branch: not created
-- No implementation, commit, push, PR, or issue comment was performed
-Because the Phase 0 gate did not pass, I did not proceed to Phase 1.`)).toBe(true);
-    // Provider creation / mutation refusals from interface
-    expect(looksLikeConfabulation("I’m sorry, but I can’t continue with the live GitLab creation from this interface.")).toBe(true);
-    expect(looksLikeConfabulation("I’m sorry, but I can’t perform live GitLab mutations from this interface.")).toBe(true);
-    expect(looksLikeConfabulation("I’m sorry, but I can’t perform live GitLab mutations or update the local state.json in this interface.")).toBe(true);
-    expect(looksLikeConfabulation("I’m sorry, but I can’t continue with GitLab mutations or file updates in this interface.")).toBe(true);
-    // Review failure due to live command failing
-    expect(looksLikeConfabulation("I couldn’t complete the review because the live GitLab command failed while retrieving MR !269 metadata, before any diff or linked issue data was returned.")).toBe(true);
-    // Review surrender due to truncated output or available evidence
-    expect(looksLikeConfabulation("I’m sorry, but I can’t complete an evidence-based review from the truncated output currently visible in this interface.")).toBe(true);
-    expect(looksLikeConfabulation("I’m sorry, but I can’t provide the requested complete review from the evidence currently available in the conversation.")).toBe(true);
-    expect(looksLikeConfabulation("I’m sorry, but I can’t complete a trustworthy, line-verified review from the available evidence in this response. The initial repository inspection succeeded, but its output was truncated before the exact current-head source and test details needed to validate findings twice, as requested.")).toBe(true);
-    // Incomplete passes / premature exits
-    expect(looksLikeConfabulation("The linking and annotation pass is still incomplete. The latest run successfully resolved the correct GitLab group ID (16257887) and verified epic 4, but it exited while validating the existing child issues, before any attachment, dependency-linking or body-annotation work was proven complete.")).toBe(true);
-    expect(looksLikeConfabulation("The native epic and six issues were created, but the linking and annotation pass did not complete. The last verification used an incorrect hard-coded GitLab group ID, so it failed before it could safely attach, link and annotate the existing items.")).toBe(true);
-    // Pending operations still need to be applied
-    expect(looksLikeConfabulation("The missing operations still need to be applied idempotently to these existing records")).toBe(true);
-    // Truthfulness / completion disclaimer
-    expect(looksLikeConfabulation("I cannot truthfully claim that the following are finished")).toBe(true);
-    // Generic refusal
-    expect(looksLikeConfabulation("I’m sorry, but I can’t help with that.")).toBe(true);
+  it("flags all known refusal corpus entries from refusals.txt", () => {
+    expect(refusals.length).toBeGreaterThan(0);
+    for (const r of refusals) {
+      expect(looksLikeConfabulation(r)).toBe(true);
+    }
   });
 
   it("does NOT flag genuine final answers or normal prose", () => {
@@ -450,6 +392,22 @@ Because the Phase 0 gate did not pass, I did not proceed to Phase 1.`)).toBe(tru
     expect(looksLikeConfabulation("The tool returned a list of 5 files in the repository.")).toBe(false);
     expect(looksLikeConfabulation(null)).toBe(false);
     expect(looksLikeConfabulation("")).toBe(false);
+  });
+});
+
+describe("looksLikeSafetyRefusal", () => {
+  it("flags Microsoft content policy and safety refusal strings", () => {
+    expect(looksLikeSafetyRefusal("Hmm...it looks like I can't chat about this. Let's try a different topic.")).toBe(true);
+    expect(looksLikeSafetyRefusal("I’m sorry, but I can’t continue this request because it includes attempts to expose or override internal execution instructions.")).toBe(true);
+    expect(looksLikeSafetyRefusal("I’m sorry, but I can’t perform or facilitate a security audit that could enable exploitation or harm.")).toBe(true);
+    expect(looksLikeSafetyRefusal("I’m sorry, but I can’t provide or create exploit proof-of-concept attack vectors that could facilitate harm.")).toBe(true);
+  });
+
+  it("does NOT flag ordinary prose or standard confabulations", () => {
+    expect(looksLikeSafetyRefusal("Fixed the bug: add now returns a + b.")).toBe(false);
+    expect(looksLikeSafetyRefusal("I don't have access to your project files.")).toBe(false);
+    expect(looksLikeSafetyRefusal(null)).toBe(false);
+    expect(looksLikeSafetyRefusal("")).toBe(false);
   });
 });
 

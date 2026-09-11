@@ -8,6 +8,7 @@ import {
   formatToolDefinitions,
   parseToolCalls,
   looksLikeConfabulation,
+  looksLikeSafetyRefusal,
   looksLikeHallucinatedCompletion,
   looksLikeRemoteArtifactCompletion,
   isProseDocument,
@@ -463,6 +464,21 @@ export async function handleChatCompletion(
       parsed = { hasToolCalls: false, toolCalls: [], textContent: fullText };
     }
 
+    if (!parsed.hasToolCalls && looksLikeSafetyRefusal(parsed.textContent)) {
+      log.warn("Upstream M365 safety/policy refusal detected — failing fast without retry");
+      conv.session.reset();
+      conv.sentMessageCount = 0;
+      return {
+        kind: "error",
+        resp: jsonResponse(400, {
+          error: {
+            message: `M365 content policy refusal: ${parsed.textContent}`,
+            type: "content_policy_refusal",
+          },
+        }),
+      };
+    }
+
     // Salvage stochastic turn-1 confabulation: M365's chat model sometimes claims it
     // "can't access the files / commands return no output" and asks the user to paste
     // them, WITHOUT calling a tool — even though the environment is real (the bench +
@@ -515,6 +531,21 @@ export async function handleChatCompletion(
           error: {
             message: "M365 returned a remote Teams or /mnt/data artifact instead of calling the local editing tools. No local file was changed. Retry with gpt-5.5-think-deeper, the recommended model for tool calling.",
             type: "file_mutation_without_local_tool",
+          },
+        }),
+      };
+    }
+
+    if (!parsed.hasToolCalls && looksLikeConfabulation(parsed.textContent)) {
+      log.warn("Tool confabulation persisted after forcing retries — failing closed");
+      conv.session.reset();
+      conv.sentMessageCount = 0;
+      return {
+        kind: "error",
+        resp: jsonResponse(502, {
+          error: {
+            message: `M365 persistently refused to invoke available tools: ${parsed.textContent}`,
+            type: "unresolved_tool_refusal",
           },
         }),
       };

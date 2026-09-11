@@ -72,6 +72,7 @@ export {
   getMessageContent,
   parseToolCalls,
   looksLikeConfabulation,
+  looksLikeSafetyRefusal,
   looksLikeHallucinatedCompletion,
   looksLikeRemoteArtifactCompletion,
   isProseDocument,
