@@ -8,6 +8,7 @@ import {
   classifyTurnResponse,
   setLocalGemmaPromise,
   resetLocalGemma,
+  resetClassifierCache,
 } from "./classifier.js";
 
 describe("Classifier Module", () => {
@@ -16,6 +17,7 @@ describe("Classifier Module", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     resetLocalGemma();
+    resetClassifierCache();
     process.env = { ...originalEnv };
     delete process.env.M365_CLASSIFIER_OPENAI_URL;
     delete process.env.M365_CLASSIFIER_OPENAI_MODEL;
@@ -25,6 +27,7 @@ describe("Classifier Module", () => {
 
   afterEach(() => {
     resetLocalGemma();
+    resetClassifierCache();
     process.env = { ...originalEnv };
   });
 
@@ -439,5 +442,116 @@ describe("Classifier Module", () => {
       expect(result).toBe("REFUSAL");
       expect(localMock.generate).toHaveBeenCalledTimes(1);
     });
+
+    describe("memoization and caching", () => {
+      it("invokes classifier only once for consecutive calls with identical text", async () => {
+        const localMock = {
+          generate: vi.fn().mockResolvedValue({
+            content: "[CLASSIFICATION: DELIVERABLE]",
+          }),
+        };
+        setLocalGemmaPromise(Promise.resolve(localMock));
+
+        const res1 = await classifyTurnResponse("Identical message to classify");
+        const res2 = await classifyTurnResponse("Identical message to classify");
+        const res3 = await classifyTurnResponse("   Identical message to classify \n\t ");
+
+        expect(res1).toBe("DELIVERABLE");
+        expect(res2).toBe("DELIVERABLE");
+        expect(res3).toBe("DELIVERABLE");
+        expect(localMock.generate).toHaveBeenCalledTimes(1);
+      });
+
+      it("shares the same execution promise for concurrent in-flight calls with identical text", async () => {
+        let resolveGenerate: (val: any) => void;
+        const pendingPromise = new Promise((resolve) => {
+          resolveGenerate = resolve;
+        });
+
+        const localMock = {
+          generate: vi.fn().mockImplementation(() => pendingPromise),
+        };
+        setLocalGemmaPromise(Promise.resolve(localMock));
+
+        const promise1 = classifyTurnResponse("Concurrent message check");
+        const promise2 = classifyTurnResponse("Concurrent message check");
+
+        resolveGenerate!({
+          content: "[CLASSIFICATION: REFUSAL]",
+        });
+
+        const [res1, res2] = await Promise.all([promise1, promise2]);
+        expect(res1).toBe("REFUSAL");
+        expect(res2).toBe("REFUSAL");
+        expect(localMock.generate).toHaveBeenCalledTimes(1);
+      });
+
+      it("clears cached classifications when resetClassifierCache is called", async () => {
+        const localMock = {
+          generate: vi.fn().mockResolvedValue({
+            content: "[CLASSIFICATION: DELIVERABLE]",
+          }),
+        };
+        setLocalGemmaPromise(Promise.resolve(localMock));
+
+        const res1 = await classifyTurnResponse("Cache invalidation test");
+        expect(res1).toBe("DELIVERABLE");
+        expect(localMock.generate).toHaveBeenCalledTimes(1);
+
+        resetClassifierCache();
+
+        const res2 = await classifyTurnResponse("Cache invalidation test");
+        expect(res2).toBe("DELIVERABLE");
+        expect(localMock.generate).toHaveBeenCalledTimes(2);
+      });
+
+      it("removes entry from cache on promise rejection so subsequent calls can retry", async () => {
+        const localMock = {
+          generate: vi
+            .fn()
+            .mockRejectedValueOnce(new Error("Transient Gemma failure"))
+            .mockResolvedValueOnce({
+              content: "[CLASSIFICATION: DELIVERABLE]",
+            }),
+        };
+        setLocalGemmaPromise(Promise.resolve(localMock));
+
+        await expect(
+          classifyTurnResponse("Failing transient turn")
+        ).rejects.toThrow("Transient Gemma failure");
+
+        const res = await classifyTurnResponse("Failing transient turn");
+        expect(res).toBe("DELIVERABLE");
+        expect(localMock.generate).toHaveBeenCalledTimes(2);
+      });
+
+      it("evicts oldest entry when cache exceeds MAX_CLASSIFIER_CACHE_SIZE (100)", async () => {
+        const localMock = {
+          generate: vi.fn().mockResolvedValue({
+            content: "[CLASSIFICATION: DELIVERABLE]",
+          }),
+        };
+        setLocalGemmaPromise(Promise.resolve(localMock));
+
+        // Insert 100 entries
+        for (let i = 0; i < 100; i++) {
+          await classifyTurnResponse(`Prompt ${i}`);
+        }
+        expect(localMock.generate).toHaveBeenCalledTimes(100);
+
+        // Accessing Prompt 1 should hit cache
+        await classifyTurnResponse("Prompt 1");
+        expect(localMock.generate).toHaveBeenCalledTimes(100);
+
+        // Insert 101st entry, which evicts "Prompt 0" (oldest inserted entry)
+        await classifyTurnResponse("Prompt 100");
+        expect(localMock.generate).toHaveBeenCalledTimes(101);
+
+        // Prompt 0 was evicted, calling it again should invoke generate
+        await classifyTurnResponse("Prompt 0");
+        expect(localMock.generate).toHaveBeenCalledTimes(102);
+      });
+    });
   });
 });
+

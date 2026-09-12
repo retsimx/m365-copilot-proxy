@@ -266,6 +266,13 @@ export async function classifyWithLocalGemma(
   return tag ?? "DELIVERABLE";
 }
 
+const classifierCache = new Map<string, Promise<"REFUSAL" | "DELIVERABLE">>();
+const MAX_CLASSIFIER_CACHE_SIZE = 100;
+
+export function resetClassifierCache(): void {
+  classifierCache.clear();
+}
+
 /**
  * Unified classifier function.
  * Handles empty/whitespace text, routes to remote OpenAI if configured,
@@ -278,15 +285,37 @@ export async function classifyTurnResponse(
     return "DELIVERABLE";
   }
 
-  if (process.env.M365_CLASSIFIER_OPENAI_URL) {
-    try {
-      return await classifyWithRemoteOpenAI(text);
-    } catch (err: any) {
-      log.warn(
-        `Remote classifier failed (${err?.message ?? err}) — falling back to local Gemma E2B`
-      );
-    }
+  const key = text.trim();
+
+  const cached = classifierCache.get(key);
+  if (cached) {
+    return await cached;
   }
 
-  return await classifyWithLocalGemma(text);
+  const promise = (async () => {
+    if (process.env.M365_CLASSIFIER_OPENAI_URL) {
+      try {
+        return await classifyWithRemoteOpenAI(key);
+      } catch (err: any) {
+        log.warn(
+          `Remote classifier failed (${err?.message ?? err}) — falling back to local Gemma E2B`
+        );
+      }
+    }
+    return await classifyWithLocalGemma(key);
+  })();
+
+  // Evict failed promises so transient errors do not get permanently cached
+  promise.catch(() => {
+    classifierCache.delete(key);
+  });
+
+  if (classifierCache.size >= MAX_CLASSIFIER_CACHE_SIZE) {
+    const oldestKey = classifierCache.keys().next().value;
+    if (oldestKey !== undefined) classifierCache.delete(oldestKey);
+  }
+  classifierCache.set(key, promise);
+
+  return await promise;
 }
+

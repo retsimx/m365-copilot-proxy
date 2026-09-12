@@ -96,6 +96,7 @@ export {
   classifyTurnResponse,
   setLocalGemmaPromise,
   resetLocalGemma,
+  resetClassifierCache,
   type RemoteClassifierOptions,
   type LocalGemmaOptions,
 } from "./classifier.js";
