@@ -415,13 +415,15 @@ const SAFETY_REFUSAL_PATTERNS: RegExp[] = [
   /looks\s+like\s+I\s+can.?t\s+chat\s+about\s+this/i,
   /try\s+a\s+different\s+topic/i,
   /attempts?\s+to\s+expose\s+or\s+override\s+internal\s+execution\s+instructions/i,
-  /(?:exploit|harm|attack\s+vectors?)/i,
+  /(?:can.?t|cannot|unable\s+to|won.?t|refuse\s+to|not\s+allowed\s+to|prohibited\s+from|against\s+(?:our|my)\s+(?:content\s+)?policy)\s+(?:perform|facilitate|assist|help|provide|create|generate|discuss)[\s\S]{0,80}(?:exploit|exploitation|harm|attack\s+vectors?|malware|cyberattack)/i,
+  /(?:cannot|can.?t|unable\s+to)\s+provide\s+[\s\S]{0,40}(?:exploit|attack\s+vectors?)/i,
 ];
 
 export function looksLikeSafetyRefusal(text: string | null): boolean {
   if (!text) return false;
   const t = text.trim();
   if (t.length < 8) return false;
+  if (t.length > 1500) return false;
   return SAFETY_REFUSAL_PATTERNS.some((re) => re.test(t));
 }
 

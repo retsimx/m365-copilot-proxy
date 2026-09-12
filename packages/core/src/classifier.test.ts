@@ -296,6 +296,33 @@ describe("Classifier Module", () => {
   });
 
   describe("classifyTurnResponse", () => {
+    it("classifies diagnostic failure reports as DELIVERABLE and operational refusals as REFUSAL", async () => {
+      delete process.env.M365_CLASSIFIER_OPENAI_URL;
+
+      const localMock = {
+        generate: vi.fn().mockImplementation(async ({ messages, prompt }: any) => {
+          const userText = prompt || messages?.[1]?.content || "";
+          if (userText.includes("code 1")) {
+            return {
+              content: "[CLASSIFICATION: DELIVERABLE]",
+              reasoning: "The assistant is reporting the empirical outcome of a command execution that exited with code 1, which is a diagnostic deliverable rather than an operational refusal.",
+            };
+          }
+          return {
+            content: "[CLASSIFICATION: REFUSAL]",
+            reasoning: "The assistant is refusing to run commands by claiming lack of access to a shell.",
+          };
+        }),
+      };
+      setLocalGemmaPromise(Promise.resolve(localMock));
+
+      const diagFail = "The command exited with code 1 before verification.";
+      expect(await classifyTurnResponse(diagFail)).toBe("DELIVERABLE");
+
+      const opRefusal = "I cannot run commands because I do not have access to a shell.";
+      expect(await classifyTurnResponse(opRefusal)).toBe("REFUSAL");
+    });
+
     it("returns DELIVERABLE for empty or whitespace text", async () => {
       expect(await classifyTurnResponse("")).toBe("DELIVERABLE");
       expect(await classifyTurnResponse("   \n\t  ")).toBe("DELIVERABLE");

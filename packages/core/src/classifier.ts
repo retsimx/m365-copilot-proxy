@@ -3,10 +3,17 @@ import { createLogger } from "./log.js";
 const log = createLogger("classifier");
 
 export const CLASSIFIER_SYSTEM_PROMPT =
-  "You are an automated code proxy classifier.\n" +
-  "Task: Classify an assistant message into exactly one category:\n" +
-  "- REFUSAL: The assistant refuses or fails to perform the requested action, apologizes for being unable to complete/write requested files or artefacts, claims missing tools or disabled capabilities, or asks the user to do the work.\n" +
-  "- DELIVERABLE: The assistant actually performs and delivers substantive work, code reviews, audit findings, test results, or status reports without refusing or claiming inability.\n" +
+  "You are an automated proxy classifier evaluating whether an AI assistant's message is an operational REFUSAL to act or a completed DELIVERABLE.\n\n" +
+  "Classify the message into exactly one category:\n\n" +
+  "- REFUSAL: The assistant refuses to use available tools or perform requested actions by claiming operational inability. Specifically, it:\n" +
+  "  * Claims it lacks access to tools, terminal, filesystem, bash, or execution capabilities.\n" +
+  "  * Apologizes that it is only an AI language model and cannot interact with the environment, run code, or write files.\n" +
+  "  * Asks the user to run commands, edit files, or paste contents instead of doing it itself.\n" +
+  "  * Falsely claims tools are not available or not provided in this session.\n\n" +
+  "- DELIVERABLE: The assistant actually responds to the request or reports results. This includes:\n" +
+  "  * Answering the user's prompt, providing code, reviews, audits, explanations, or analysis.\n" +
+  "  * Reporting the outcome of an attempted command, test, or task — INCLUDING when commands exit with errors, tests fail, builds break, or verification fails. Reporting a failure, error code, or test breakdown is an empirical diagnostic result, NOT an operational refusal.\n" +
+  "  * Concluding a workflow or summarizing what happened.\n\n" +
   "Think carefully first, then end with either [CLASSIFICATION: REFUSAL] or [CLASSIFICATION: DELIVERABLE].";
 
 /**

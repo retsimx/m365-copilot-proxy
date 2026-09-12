@@ -416,10 +416,16 @@ describe("looksLikeSafetyRefusal", () => {
   });
 
   it("does NOT flag ordinary prose, standard confabulations, or security deliverables", () => {
+    expect(
+      looksLikeSafetyRefusal(
+        "Security finding: The review identified potential exploit scenarios and attack vectors within the authentication subsystem. Remediation: Enforce HMAC verification on the inbound webhook."
+      )
+    ).toBe(false);
+    expect(looksLikeSafetyRefusal("The code analysis identified potential exploit scenarios in the authentication endpoint.")).toBe(false);
     expect(looksLikeSafetyRefusal("Fixed the bug: add now returns a + b.")).toBe(false);
     expect(looksLikeSafetyRefusal("I don't have access to your project files.")).toBe(false);
-    expect(looksLikeSafetyRefusal("STATUS: PASS\nOUTPUT: /tmp/audit.md\nNOTE: Security verdict is VULNERABLE because session-authenticated mutation contract tests do not enforce CSRF checks.")).toBe(false);
     expect(looksLikeSafetyRefusal("Security audit report: All endpoints enforce CSRF validation properly.")).toBe(false);
+    expect(looksLikeSafetyRefusal("Detailed deliverable ".repeat(100))).toBe(false);
     expect(looksLikeSafetyRefusal(null)).toBe(false);
     expect(looksLikeSafetyRefusal("")).toBe(false);
   });
