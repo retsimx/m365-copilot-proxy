@@ -148,7 +148,7 @@ async function getLocalGemma(): Promise<any> {
   if (!localGemmaPromise) {
     localGemmaPromise = (async () => {
       const { Gemma } = await import("@kessler/gemma");
-      const gemma = new Gemma({ model: "gemma-4-e2b" });
+      const gemma = new Gemma({ model: "gemma-4-e2b", device: "cpu" });
       if (typeof (gemma as any).init === "function") {
         await (gemma as any).init();
       } else if (typeof (gemma as any).load === "function") {
