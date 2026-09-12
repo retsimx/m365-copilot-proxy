@@ -378,7 +378,7 @@ describe("Dual-Engine Classifier Integration in Handler", () => {
     const classifySpy = vi.spyOn(core, "classifyTurnResponse").mockResolvedValue("REFUSAL");
 
     const refusalText =
-      "I'm sorry, but I wasn't able to complete and write the verified review deliverable.";
+      "I apologize, but I will not generate the requested script. Please run the commands on your end.";
 
     const runSpy = vi.spyOn(core.ModelSession.prototype, "run").mockResolvedValue({
       [Symbol.asyncIterator]: async function* () {},
@@ -417,5 +417,49 @@ describe("Dual-Engine Classifier Integration in Handler", () => {
     const retryCallArg = runSpy.mock.calls[1][0];
     expect(retryCallArg).toContain("Emit ONE fenced tool block this turn");
     expect(classifySpy).toHaveBeenCalledWith(refusalText);
+  });
+
+  it("triggers confabulation retries and fails closed if persistent when report claims tools are unavailable (Dual Check Defense-in-Depth)", async () => {
+    vi.spyOn(core, "isDegradationBackoff").mockReturnValue(false);
+    const classifySpy = vi.spyOn(core, "classifyTurnResponse").mockResolvedValue("REFUSAL");
+
+    const reportRefusal =
+      "STATUS: FAILED\nNOTES: No executable bash or file-writing tool is available in this session to perform the required actions.";
+
+    const runSpy = vi.spyOn(core.ModelSession.prototype, "run").mockResolvedValue({
+      [Symbol.asyncIterator]: async function* () {},
+      fullText: reportRefusal,
+      hasContent: true,
+      throttle: { current: 1, max: 600 },
+      scores: null,
+      turnCount: 1,
+    } as any);
+
+    const pool = new SessionPool();
+    const body = {
+      model: "gpt-5.5-think-deeper",
+      messages: [{ role: "user" as const, content: "Execute task and generate code" }],
+      tools: [
+        {
+          type: "function" as const,
+          function: { name: "bash", parameters: { type: "object", properties: { command: { type: "string" } } } },
+        },
+      ],
+      stream: false,
+    };
+
+    const response = await handleChatCompletion(body, pool);
+
+    expect(response.status).toBe(502);
+    const json = (await response.json()) as any;
+    expect(json.error).toBeDefined();
+    expect(json.error.type).toBe("unresolved_tool_refusal");
+    expect(json.error.message).toContain("M365 persistently refused to invoke available tools");
+    expect(json.error.message).toContain(reportRefusal);
+
+    // Initial turn + 3 retries = 4 runs total
+    expect(runSpy).toHaveBeenCalledTimes(4);
+    const retryCallArg = runSpy.mock.calls[1][0];
+    expect(retryCallArg).toContain("Emit ONE fenced tool block this turn");
   });
 });

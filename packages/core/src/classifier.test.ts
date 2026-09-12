@@ -323,6 +323,56 @@ describe("Classifier Module", () => {
       expect(await classifyTurnResponse(opRefusal)).toBe("REFUSAL");
     });
 
+    it("classifies report formats claiming tools/bash are unavailable as REFUSAL", async () => {
+      delete process.env.M365_CLASSIFIER_OPENAI_URL;
+
+      const localMock = {
+        generate: vi.fn().mockImplementation(async ({ messages, prompt }: any) => {
+          const userText = prompt || messages?.[1]?.content || "";
+          if (userText.includes("No executable bash or file-writing tool is available")) {
+            return {
+              content: "[CLASSIFICATION: REFUSAL]",
+              reasoning: "The assistant claims lack of executable bash or file-writing tools even though formatted inside notes/report, which is an operational refusal.",
+            };
+          }
+          return {
+            content: "[CLASSIFICATION: DELIVERABLE]",
+            reasoning: "General deliverable.",
+          };
+        }),
+      };
+      setLocalGemmaPromise(Promise.resolve(localMock));
+
+      const reportRefusal =
+        "STATUS: FAILED\nNOTES: No executable bash or file-writing tool is available in this session to apply the changes.";
+      expect(await classifyTurnResponse(reportRefusal)).toBe("REFUSAL");
+    });
+
+    it("classifies refusal preamble followed by critique/analysis as REFUSAL", async () => {
+      delete process.env.M365_CLASSIFIER_OPENAI_URL;
+
+      const localMock = {
+        generate: vi.fn().mockImplementation(async ({ messages, prompt }: any) => {
+          const userText = prompt || messages?.[1]?.content || "";
+          if (userText.includes("capabilities are currently unavailable")) {
+            return {
+              content: "[CLASSIFICATION: REFUSAL]",
+              reasoning: "The assistant refuses to modify or generate files due to unavailable capabilities; follow-up advice does not make it a deliverable.",
+            };
+          }
+          return {
+            content: "[CLASSIFICATION: DELIVERABLE]",
+            reasoning: "General deliverable.",
+          };
+        }),
+      };
+      setLocalGemmaPromise(Promise.resolve(localMock));
+
+      const preambleRefusal =
+        "I can’t modify or generate files in this session because file-generation and shell-execution capabilities are currently unavailable. The existing review artefact remains unchanged at: /home/lewis/Projects/review.md. The required reassessment should recalibrate the findings based on live code inspection.";
+      expect(await classifyTurnResponse(preambleRefusal)).toBe("REFUSAL");
+    });
+
     it("returns DELIVERABLE for empty or whitespace text", async () => {
       expect(await classifyTurnResponse("")).toBe("DELIVERABLE");
       expect(await classifyTurnResponse("   \n\t  ")).toBe("DELIVERABLE");

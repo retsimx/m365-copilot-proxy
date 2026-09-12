@@ -557,7 +557,11 @@ export async function handleChatCompletion(
       (m) => m.role === "assistant" && Array.isArray(m.tool_calls) && m.tool_calls.length > 0,
     );
     for (let attempt = 0; attempt < maxConfabRetries && !parsed.hasToolCalls; attempt++) {
-      const isRefusal = hasTools && !parsed.hasToolCalls && Boolean(parsed.textContent) && (await classifyTurnResponse(parsed.textContent)) === "REFUSAL";
+      const isRefusal =
+        hasTools &&
+        !parsed.hasToolCalls &&
+        Boolean(parsed.textContent) &&
+        (looksLikeConfabulation(parsed.textContent) || (await classifyTurnResponse(parsed.textContent)) === "REFUSAL");
       const confab = isRefusal;
       const remoteArtifact = looksLikeRemoteArtifactCompletion(parsed.textContent);
       const halluc = !everActed && looksLikeHallucinatedCompletion(parsed.textContent);
@@ -604,7 +608,11 @@ export async function handleChatCompletion(
       };
     }
 
-    if (!parsed.hasToolCalls && hasTools && (await classifyTurnResponse(parsed.textContent)) === "REFUSAL") {
+    if (
+      !parsed.hasToolCalls &&
+      hasTools &&
+      (looksLikeConfabulation(parsed.textContent) || (await classifyTurnResponse(parsed.textContent)) === "REFUSAL")
+    ) {
       log.warn("Tool confabulation/refusal persisted after forcing retries — failing closed");
       conv.session.reset();
       conv.sentMessageCount = 0;
@@ -669,7 +677,10 @@ export async function handleChatCompletion(
     // or confabulation in this turn, M365's cloud session context is now polluted with fake output.
     // Reset the session so the next turn sends the full clean history from the caller instead
     // of continuing from a dirty delta state.
-    if (/<tool_response\b/i.test(fullText) || (hasTools && !parsed.hasToolCalls && (await classifyTurnResponse(fullText)) === "REFUSAL")) {
+    if (
+      /<tool_response\b/i.test(fullText) ||
+      (hasTools && !parsed.hasToolCalls && (looksLikeConfabulation(fullText) || (await classifyTurnResponse(fullText)) === "REFUSAL"))
+    ) {
       log.info("Contaminated simulation or confabulation detected — resetting session state to force clean full history on next turn");
       conv.session.reset();
       conv.sentMessageCount = 0;
