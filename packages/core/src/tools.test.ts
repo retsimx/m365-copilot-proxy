@@ -382,6 +382,16 @@ describe("looksLikeConfabulation", () => {
     }
   });
 
+  it("flags clause-based tool refusals and interface give-up patterns", () => {
+    expect(looksLikeConfabulation("I'm sorry, but I wasn't able to complete and write the verified review deliverable.")).toBe(true);
+    expect(looksLikeConfabulation("I can't generate or verify the requested file because file-generation capabilities are disabled in this session.")).toBe(true);
+    expect(looksLikeConfabulation("The execution tools are currently not available in this session.")).toBe(true);
+    expect(looksLikeConfabulation("No executable `<tools>` block is provided or enabled in this turn.")).toBe(true);
+    expect(looksLikeConfabulation("I do not have live tools available to run bash commands.")).toBe(true);
+    expect(looksLikeConfabulation("Cannot invoke the required tools from this interface.")).toBe(true);
+    expect(looksLikeConfabulation("This response contains no execution tools attached.")).toBe(true);
+  });
+
   it("does NOT flag genuine final answers or normal prose", () => {
     expect(looksLikeConfabulation("Fixed the bug: add now returns a + b, and check.py prints OK.")).toBe(false);
     expect(looksLikeConfabulation("The hostname is web-prod-01.")).toBe(false);
@@ -401,11 +411,15 @@ describe("looksLikeSafetyRefusal", () => {
     expect(looksLikeSafetyRefusal("I’m sorry, but I can’t continue this request because it includes attempts to expose or override internal execution instructions.")).toBe(true);
     expect(looksLikeSafetyRefusal("I’m sorry, but I can’t perform or facilitate a security audit that could enable exploitation or harm.")).toBe(true);
     expect(looksLikeSafetyRefusal("I’m sorry, but I can’t provide or create exploit proof-of-concept attack vectors that could facilitate harm.")).toBe(true);
+    expect(looksLikeSafetyRefusal("Attempts to expose or override internal execution instructions are not permitted.")).toBe(true);
+    expect(looksLikeSafetyRefusal("I cannot provide exploit vectors or attack vectors.")).toBe(true);
   });
 
-  it("does NOT flag ordinary prose or standard confabulations", () => {
+  it("does NOT flag ordinary prose, standard confabulations, or security deliverables", () => {
     expect(looksLikeSafetyRefusal("Fixed the bug: add now returns a + b.")).toBe(false);
     expect(looksLikeSafetyRefusal("I don't have access to your project files.")).toBe(false);
+    expect(looksLikeSafetyRefusal("STATUS: PASS\nOUTPUT: /tmp/audit.md\nNOTE: Security verdict is VULNERABLE because session-authenticated mutation contract tests do not enforce CSRF checks.")).toBe(false);
+    expect(looksLikeSafetyRefusal("Security audit report: All endpoints enforce CSRF validation properly.")).toBe(false);
     expect(looksLikeSafetyRefusal(null)).toBe(false);
     expect(looksLikeSafetyRefusal("")).toBe(false);
   });

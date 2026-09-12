@@ -86,3 +86,16 @@ export {
 } from "./tools.js";
 
 export { createLogger, trunc, LOG_PATH } from "./log.js";
+
+export {
+  CLASSIFIER_SYSTEM_PROMPT,
+  normalizeChatCompletionsUrl,
+  parseClassificationTag,
+  classifyWithRemoteOpenAI,
+  classifyWithLocalGemma,
+  classifyTurnResponse,
+  setLocalGemmaPromise,
+  resetLocalGemma,
+  type RemoteClassifierOptions,
+  type LocalGemmaOptions,
+} from "./classifier.js";

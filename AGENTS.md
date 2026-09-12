@@ -211,6 +211,14 @@ pnpm test:live      # M365_LIVE=1; live tests that hit real M365 (uses quota)
 - **Assistant-simulated `<tool_response>` tags are rejected & flush session context:** When
   a model produces a hallucinated simulation with fake `<tool_response>` tags, the proxy strips
   them and resets the session to force a clean full-history replay on the next turn.
+- **Dual-Engine SLM Turn Classifier (`packages/core/src/classifier.ts`):** Distinguishes genuine
+  prose deliverables (e.g. security audits, test diagnostics) from tool confabulations using Gemma 4
+  E2B with Chain-of-Thought (`thinking: true`, `max_tokens: 1000`). If `M365_CLASSIFIER_OPENAI_URL`
+  is configured, queries the remote OpenAI endpoint (e.g. GPU host with Ollama) with a 10s timeout
+  (`M365_CLASSIFIER_TIMEOUT_MS`); otherwise seamlessly falls back to in-process `@kessler/gemma`
+  ONNX execution. Bypasses completely for tool-calling turns (~95% of traffic has 0ms overhead). Deliverables
+  immediately return HTTP 200 without retrying, protecting conversational turn quotas.
+
 
 ## Verifying changes end-to-end
 

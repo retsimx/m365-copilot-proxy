@@ -383,6 +383,10 @@ Three token scopes are acquired:
 | `M365_THROTTLE_COOLDOWN_SEC` | Degradation cooldown window in seconds (default `1800`, i.e. 30 minutes). |
 | `M365_MAX_RETRY_AFTER_SEC` | Maximum `Retry-After` header value sent to clients (default `60`). |
 | `M365_NEW_SESSION_SPACING_MS` | Minimum spacing between new session (`turn === 0`) starts in milliseconds (default `15000`, i.e. 15s). |
+| `M365_CLASSIFIER_OPENAI_URL` | Base URL for remote OpenAI-compatible turn classifier (e.g. `http://gpu-host:11434/v1`). If unset, uses in-process `@kessler/gemma` E2B ONNX. |
+| `M365_CLASSIFIER_OPENAI_MODEL` | Model name requested at the remote classifier endpoint (default `gemma4:e2b`). |
+| `M365_CLASSIFIER_TIMEOUT_MS` | Max milliseconds to wait for remote GPU classifier before falling back to in-process Gemma E2B (default `10000`, i.e. 10s). |
+| `M365_CLASSIFIER_MAX_TOKENS` | Token budget for classifier reasoning and tag output (default `1000`). |
 | `M365_BROWSER_PROFILE` / `M365_LOGIN_UA` | Override the persistent browser-profile dir and the login User-Agent used for the (rare) automated interactive login. The persistent profile keeps AAD SSO/device cookies so repeat logins are silent and look like a familiar device ([§11 H-R3](docs/hypotheses.md)). |
 | `M365_ENABLE_INTERACTIVE_APPROVAL` | Set to `1` to allow a **visible** browser window for sign-in when the automated login can't work or fails — the fallback for tenants with no TOTP option (push-only MFA, FIDO2, Okta/Ping/Duo). You complete SSO/MFA by hand once; tokens refresh silently afterwards. Off by default so headless hosts fail loudly rather than hang. See [If your tenant has no TOTP option](#if-your-tenant-has-no-totp-option). |
 | `M365_NO_INTERACTIVE` | Set to `1` to hard-disable any visible browser login, overriding the flag above. For systemd/CI hosts where a window must never open. |

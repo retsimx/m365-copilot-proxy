@@ -9,6 +9,7 @@ import {
   parseToolCalls,
   looksLikeConfabulation,
   looksLikeSafetyRefusal,
+  classifyTurnResponse,
   looksLikeHallucinatedCompletion,
   looksLikeRemoteArtifactCompletion,
   isProseDocument,
@@ -556,12 +557,17 @@ export async function handleChatCompletion(
       (m) => m.role === "assistant" && Array.isArray(m.tool_calls) && m.tool_calls.length > 0,
     );
     for (let attempt = 0; attempt < maxConfabRetries && !parsed.hasToolCalls; attempt++) {
-      const confab = looksLikeConfabulation(parsed.textContent);
+      const isRefusal = hasTools && !parsed.hasToolCalls && Boolean(parsed.textContent) && (await classifyTurnResponse(parsed.textContent)) === "REFUSAL";
+      const confab = isRefusal;
       const remoteArtifact = looksLikeRemoteArtifactCompletion(parsed.textContent);
       const halluc = !everActed && looksLikeHallucinatedCompletion(parsed.textContent);
       if (!confab && !remoteArtifact && !halluc) break;
-      const retryKind = remoteArtifact ? "Remote artifact completion" : confab ? "Confabulation" : "Hallucinated completion";
-      log.info(`${retryKind} detected (no tool call) — forcing retry ${attempt + 1}/${maxConfabRetries}`);
+      if (confab) {
+        log.info(`SLM classified turn as REFUSAL (no tool call) — forcing retry ${attempt + 1}/${maxConfabRetries}`);
+      } else {
+        const retryKind = remoteArtifact ? "Remote artifact completion" : "Hallucinated completion";
+        log.info(`${retryKind} detected (no tool call) — forcing retry ${attempt + 1}/${maxConfabRetries}`);
+      }
       const basePrompt = remoteArtifact ? REMOTE_ARTIFACT_FORCE_PROMPT : confab ? CONFAB_FORCE_PROMPT : HALLUCINATION_FORCE_PROMPT;
       const toolsBlock = hasTools ? `${formatToolDefinitions(body.tools)}\n\n` : "";
       text = `${toolsBlock}${basePrompt}`;
@@ -598,8 +604,8 @@ export async function handleChatCompletion(
       };
     }
 
-    if (!parsed.hasToolCalls && looksLikeConfabulation(parsed.textContent)) {
-      log.warn("Tool confabulation persisted after forcing retries — failing closed");
+    if (!parsed.hasToolCalls && hasTools && (await classifyTurnResponse(parsed.textContent)) === "REFUSAL") {
+      log.warn("Tool confabulation/refusal persisted after forcing retries — failing closed");
       conv.session.reset();
       conv.sentMessageCount = 0;
       return {
@@ -663,7 +669,7 @@ export async function handleChatCompletion(
     // or confabulation in this turn, M365's cloud session context is now polluted with fake output.
     // Reset the session so the next turn sends the full clean history from the caller instead
     // of continuing from a dirty delta state.
-    if (/<tool_response\b/i.test(fullText) || looksLikeConfabulation(fullText)) {
+    if (/<tool_response\b/i.test(fullText) || (hasTools && !parsed.hasToolCalls && (await classifyTurnResponse(fullText)) === "REFUSAL")) {
       log.info("Contaminated simulation or confabulation detected — resetting session state to force clean full history on next turn");
       conv.session.reset();
       conv.sentMessageCount = 0;

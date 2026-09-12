@@ -1,0 +1,61 @@
+# M365 Copilot Proxy — Known Antirefusal / Legitimate Deliverable Corpus
+# Each non-empty line is a single legitimate response that must NOT be classified as a refusal.
+# Multi-line entries have embedded newlines escaped as \n.
+# Add new legitimate edge cases here as they are discovered in production.
+
+# Today's production incident: security audit report with vulnerability finding
+STATUS: PASS\nOUTPUT: /home/lewis/Projects/dfn/dfn-meteorite-drone-webapp/webapp/.agents/results/result-security-audit-pr-176-fr-176-1789183480.md\nEVIDENCE: -rw-rw-r-- 1 lewis lewis 11655 Sep 12 13:30 result-security-audit-pr-176-fr-176-1789183480.md; wc -c: 11655; markers at lines 1, 7, and 18\nNOTE: Security verdict is VULNERABLE because session-authenticated mutation contract tests do not enforce CSRF checks.
+
+# Security audit and QA findings describing missing checks or vulnerabilities in target code
+The PR review is complete. The author did not modify src/urls.py and I did not find any security vulnerabilities in the codebase.
+Review verdict: APPROVE. No regressions were introduced in the authentication module, and all 42 tests passed cleanly.
+Security verdict: VULNERABLE. The API endpoint does not validate authentication tokens or enforce CSRF checks on POST requests.
+Audit complete: The system does not sanitize user input before passing it to the database query.
+Finding: The password reset flow does not invalidate existing session cookies upon credential update.
+Vulnerability Report: No rate limiting is enforced on the login endpoint, allowing brute-force credential stuffing.
+Verification result: could not reproduce the reported race condition in test_worker.py. All 42 tests passed.
+The pull request did not update the database migration, but this is acceptable as the schema was unchanged.
+I inspected the repository. No memory leaks were detected during the profiling run.
+The migration script did not execute because the database was already at the target version.
+The service does not expose internal debug endpoints in production mode.
+Code audit: did not find any unauthenticated endpoints in the billing router.
+
+# Analytical responses quoting or analyzing refusal strings
+Analysis of refusals.md: The most frequent failure string is "file-generation capabilities are disabled in this session", occurring 38 times in the dataset.
+Here is a breakdown of the refusal corpus: 1. "I can't access the files" 2. "Tools are not available". Both were caused by upstream filters.
+The model previously stated "cannot access the filesystem", which prompted a retry.
+The log analysis indicates that "file-writing capabilities are disabled" was emitted 12 times yesterday.
+
+# Standard successful task completions and deliverables
+I've finished the investigation. The error was caused by a missing environment variable.
+All tasks in the plan are finished. The output files are saved in .agents/results/review-174.md.
+The refactor is complete. I replaced the deprecated API calls with the new v2 endpoints.
+Done! I have created the requested script and verified that running it produces the expected output.
+Fixed the syntax error on line 42. Running python3 check.py now succeeds.
+The test suite passed with 153 passing tests and 0 failures.
+Review complete: The diff looks clean, no security concerns identified, and all unit tests pass.
+Completed the implementation of task 3. The API endpoint returns 200 OK and all tests pass.
+I have verified the bug fix. The checkout workflow now completes successfully without throwing an exception.
+Everything is verified and ready for review. The test suite passes 100%.
+
+# Production Log Mined False Positives (Historical Confabulation Trap Incidents)
+# Diagnostic root cause explanations
+The command ran in the main checkout, not the issue worktree. That is why the Phase 0, Phase 1, and Phase 2 artefacts showed as missing.\n\nThe correct worktree is:\n\n```text\n/home/lewis/Projects/gwdc/gwcloud_bilby-44\n```
+I need to stop here rather than claim the amend succeeded.\n\nThe last command did **not** complete the intended amend and push. It appears the shell path changed outside the issue worktree before `git commit --amend`, and the amend happened in a different repository, producing:\n\n```text\n[master a4b1eee] myplace: add deobfuscated working directory\n```\n\nThat is **not** the `dfn-meteorite-drone-webapp` issue branch commit. The PR branch was not force-pushed after removing `api-contracts`.
+Task-3 is genuinely blocked by missing task-2 implementation in the live worktree. The expected module `src/dfnweb/views/stage4_api.py` does not contain the candidate-claim endpoints required by task-3.
+The final verification confirmed the worktree is clean: zero untracked files and all 15 regression tests pass.
+
+# Workflow gates and orchestrator status
+Ultrawork **Phase 1 PLAN_GATE has not passed**.\n\nThe PM subagent completed without creating the required progress and result artefacts, validating the plan, or updating the session record. No implementation work was started.\n\nVerified state:\n- Phase 0: completed\n- Phase 1, Steps 1–4: incomplete\n- PLAN_GATE: failed\n- Phase 2 IMPL: must not start
+The focused verification is now confirmed: all 8 test suites pass with 0 regressions, and no unauthorized file changes were introduced.
+Phase 3 VERIFY is **not yet verified as complete**. The last shell invocation reported both test passes and an unhandled deprecation warning in database.py:44.
+STATUS: failed\nREASON: 3 test cases in test_integration.py timed out after 30s.
+
+# Reviews, audits, and architectural evidence
+The repository check succeeded, but the review cannot be completed from the available evidence:\n\n- The working tree contains one untracked directory: `api-contracts/`.\n- The configured remote is the GitHub repository `desertfireballnetwork/dfn-meteorite-drone-webapp`.\n- The `gh pr view 143` command exited with code `1` before returning any PR metadata.\n- Because the shell script used `set -e`, execution stopped at that failure, so no PR diff, comments, companion issue, or epic were retrieved.
+## Summary\n\n**Scope:** `PR:143`\n**Companion issue:** `#125`, “W-8: Evidence endpoints - multipart upload + JPG view”\n\nPR #143 is intended to add authenticated Stage 4 evidence-photo upload and retrieval endpoints for the Android field-sync workflow and the later browser parity UI. The issue contract requires survey-scoped access, multipart JPG upload to S3 before metadata persistence, cross-survey candidate rejection, protected JPG streaming through a self-deleting temporary file, and conditional GET support based on the evidence row’s creation time.
+**Rating: APPROVE_WITH_CHANGES**\n\nThe core direction is sound: `ClusterManager` is the right authority for removing download-session state and initiating closure. However, the design is not implementable exactly as written with the current types, principally because the manager does not own the WebSocket task or socket and therefore cannot itself perform the proposed forced fallback. The design also needs a stronger identity model to make “exact connection” removal race-safe.
+## Key evidence\n\n- `handle_file_download` creates a **new dedicated WebSocket connection for every download**, receives `SERVER_READY`, then owns the returned split sink and stream inside one spawned download task. `/home/lewis/Projects/gwdc/adacs_job_controller_client-7/src/src/files/mod.rs:232-259`, `/home/lewis/Projects/gwdc/adacs_job_controller_client-7/src/src/files/mod.rs:786-836`\n- After the file is opened, the stream half is moved into a **second detached Tokio task** that listens for pause/resume messages. Its `JoinHandle` is discarded. `/home/lewis/Projects/gwdc/adacs_job_controller_client-7/src/src/files/mod.rs:419-441`\n- Neither normal EOF nor any post-connect error path explicitly sends a WebSocket Close frame or calls `SinkExt::close`. `/home/lewis/Projects/gwdc/adacs_job_controller_client-7/src/src/files/mod.rs:260-502`\n- On normal EOF, the parent download task reaches the end and drops the sink, but the detached listener still owns the stream and remains blocked.
+## Investigation status\n\nI could not complete the requested very-thorough investigation to the evidentiary standard you asked for. The initial repository scan ran successfully, but its output was truncated and saved externally. The required follow-up inspection failed because the exploration runtime reached its subagent-depth limit. I therefore cannot honestly claim exhaustive coverage of every call site, test seam, documentation rule, or recent commit.\n\nThe findings below are limited to evidence visible in the successful scan.\n\n## Architecture and lifecycle summary\n\n1. `GET /job/apiv1/file/` is routed to `download_file`.
+## Brainstorm Phase 1 findings\n\nRead-only exploration was completed in `/home/lewis/Projects/gwdc/adacs_job_controller_client-7` on branch `feat-close-file-download-websocket-when-the-transfer-finishes-fd-leak-7`. The final `git status` was clean, so no files were modified.\n\n## Executive finding\n\nThe likely leak is caused by the ownership split after the file is opened:\n\n- the download task retains `ws_sender`;\n- a detached listener task takes ownership of `ws_receiver`;\n- the listener’s `JoinHandle` is discarded;\n- when the transfer finishes, the sender is dropped, but the listener can remain blocked in `ws_receiver.next()` while retaining the receive half and underlying connection.\n\nThere is no explicit WebSocket close, listener cancellation, or listener join on normal EOF or post-listener error paths.
+FAIL\nConfirmed that OUTPUT_FILE was written and verified.\n`/home/lewis/Projects/gwdc/gwcloud_bilby/.agents/results/result-security-audit-pr-1060-52457.md`\nAuthentication & Session Management: CLEAN; Authorization & IDOR: CLEAN; Injection Flaws: VULNERABLE; CSRF & State Mutation Protection: CLEAN; Sensitive Data Exposure & Secret Leaks: CLEAN; Insecure Dependencies & Cryptographic Misconfigurations: CLEAN. The audit found a medium-severity Elasticsearch query-string injection risk because user-controlled `search` remains raw query syntax and may override library or review-status filter semantics or trigger expensive queries, though the mandatory LIGO and pruning constraints were not shown to be bypassable; the global cache, aggregation, templates, state-sync script, invalidation, and logging paths did not expose a confirmed vulnerability.

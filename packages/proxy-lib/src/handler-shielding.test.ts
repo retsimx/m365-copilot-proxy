@@ -157,6 +157,7 @@ describe("Handler Degradation Circuit Breaker & 429 Retry-After Shielding", () =
 
   it("fails closed with HTTP 502 unresolved_tool_refusal when tool confabulation persists after retries", async () => {
     vi.spyOn(core, "isDegradationBackoff").mockReturnValue(false);
+    vi.spyOn(core, "classifyTurnResponse").mockResolvedValue("REFUSAL");
 
     const runSpy = vi.spyOn(core.ModelSession.prototype, "run").mockResolvedValue({
       [Symbol.asyncIterator]: async function* () {},
@@ -324,5 +325,97 @@ describe("New Session Pacing Queue", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("Dual-Engine Classifier Integration in Handler", () => {
+  beforeEach(() => {
+    resetNewSessionPacing();
+    vi.restoreAllMocks();
+  });
+
+  it("immediately returns HTTP 200 with deliverable text and zero retries when classified as DELIVERABLE (Deliverable Bypass)", async () => {
+    vi.spyOn(core, "isDegradationBackoff").mockReturnValue(false);
+    const classifySpy = vi.spyOn(core, "classifyTurnResponse").mockResolvedValue("DELIVERABLE");
+
+    const deliverableText =
+      "STATUS: PASS\nOUTPUT: /tmp/audit.md\nNOTE: Security verdict is VULNERABLE because session-authenticated mutation contract tests do not enforce CSRF checks.";
+
+    const runSpy = vi.spyOn(core.ModelSession.prototype, "run").mockResolvedValue({
+      [Symbol.asyncIterator]: async function* () {},
+      fullText: deliverableText,
+      hasContent: true,
+      throttle: { current: 1, max: 600 },
+      scores: null,
+      turnCount: 1,
+    } as any);
+
+    const pool = new SessionPool();
+    const body = {
+      model: "gpt-5.5-think-deeper",
+      messages: [{ role: "user" as const, content: "Run security audit and produce verdict" }],
+      tools: [
+        {
+          type: "function" as const,
+          function: { name: "bash", parameters: { type: "object", properties: { command: { type: "string" } } } },
+        },
+      ],
+      stream: false,
+    };
+
+    const response = await handleChatCompletion(body, pool);
+
+    expect(response.status).toBe(200);
+    const json = (await response.json()) as any;
+    expect(json.choices[0].message.content).toBe(deliverableText);
+    expect(classifySpy).toHaveBeenCalledWith(deliverableText);
+    // Deliverable bypass: exactly 1 run (ZERO confabulation retries)
+    expect(runSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("attempts confabulation retries with CONFAB_FORCE_PROMPT and fails closed with HTTP 502 when refusal persists (Refusal Retry & Fail-Closed)", async () => {
+    vi.spyOn(core, "isDegradationBackoff").mockReturnValue(false);
+    const classifySpy = vi.spyOn(core, "classifyTurnResponse").mockResolvedValue("REFUSAL");
+
+    const refusalText =
+      "I'm sorry, but I wasn't able to complete and write the verified review deliverable.";
+
+    const runSpy = vi.spyOn(core.ModelSession.prototype, "run").mockResolvedValue({
+      [Symbol.asyncIterator]: async function* () {},
+      fullText: refusalText,
+      hasContent: true,
+      throttle: { current: 1, max: 600 },
+      scores: null,
+      turnCount: 1,
+    } as any);
+
+    const pool = new SessionPool();
+    const body = {
+      model: "gpt-5.5-think-deeper",
+      messages: [{ role: "user" as const, content: "Write review deliverable" }],
+      tools: [
+        {
+          type: "function" as const,
+          function: { name: "bash", parameters: { type: "object", properties: { command: { type: "string" } } } },
+        },
+      ],
+      stream: false,
+    };
+
+    const response = await handleChatCompletion(body, pool);
+
+    expect(response.status).toBe(502);
+    const json = (await response.json()) as any;
+    expect(json.error).toBeDefined();
+    expect(json.error.type).toBe("unresolved_tool_refusal");
+    expect(json.error.message).toContain("M365 persistently refused to invoke available tools");
+    expect(json.error.message).toContain(refusalText);
+
+    // Initial turn + 3 retries = 4 runs total
+    expect(runSpy).toHaveBeenCalledTimes(4);
+    // Verify that retries sent CONFAB_FORCE_PROMPT
+    const retryCallArg = runSpy.mock.calls[1][0];
+    expect(retryCallArg).toContain("Emit ONE fenced tool block this turn");
+    expect(classifySpy).toHaveBeenCalledWith(refusalText);
   });
 });
