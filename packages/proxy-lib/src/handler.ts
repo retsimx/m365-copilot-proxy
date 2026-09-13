@@ -207,16 +207,57 @@ function formatDeltaMessages(messages: ParsedMessage[], tools?: ChatBody["tools"
   return parts.join("\n\n");
 }
 
+let sessionTokens = Number(process.env.M365_SESSION_BUCKET_CAPACITY ?? 10);
+let lastTokenRefillAt = Date.now();
 let nextNewSessionAllowedAt = 0;
+
+export function resetNewSessionPacing(): void {
+  const capacity = Number(process.env.M365_SESSION_BUCKET_CAPACITY ?? 10);
+  sessionTokens = capacity;
+  lastTokenRefillAt = Date.now();
+  nextNewSessionAllowedAt = 0;
+}
+
 export async function paceNewSessionStart(signal?: AbortSignal): Promise<number> {
-  const intervalMs = Number(process.env.M365_NEW_SESSION_SPACING_MS ?? 15_000);
-  if (intervalMs <= 0) return 0;
+  const capacity = Number(process.env.M365_SESSION_BUCKET_CAPACITY ?? 10);
+  const refillMs = Number(process.env.M365_SESSION_REFILL_MS ?? 150_000);
+  const minSpacingMs = Number(process.env.M365_NEW_SESSION_SPACING_MS ?? 15_000);
+
+  if (capacity <= 0 && minSpacingMs <= 0) return 0;
+
   const now = Date.now();
-  const scheduledAt = Math.max(now, nextNewSessionAllowedAt);
-  nextNewSessionAllowedAt = scheduledAt + intervalMs;
-  const delayMs = scheduledAt - now;
-  if (delayMs > 0) {
-    log.info(`Pacing new session start: delaying turn 0 by ${(delayMs / 1000).toFixed(1)}s to prevent parallel dispatch throttle`);
+  if (refillMs > 0 && capacity > 0) {
+    const elapsed = now - lastTokenRefillAt;
+    const tokensToAdd = Math.floor(elapsed / refillMs);
+    if (tokensToAdd > 0) {
+      sessionTokens = Math.min(capacity, sessionTokens + tokensToAdd);
+      lastTokenRefillAt += tokensToAdd * refillMs;
+    }
+  }
+
+  let tokenWaitMs = 0;
+  if (capacity > 0 && refillMs > 0) {
+    if (sessionTokens < 1) {
+      const timeToNext = refillMs - (now - lastTokenRefillAt);
+      tokenWaitMs = Math.max(1000, timeToNext);
+      lastTokenRefillAt += refillMs;
+    } else {
+      sessionTokens -= 1;
+    }
+  }
+
+  const earliestDispatch = now + tokenWaitMs;
+  const scheduledAt = Math.max(earliestDispatch, nextNewSessionAllowedAt);
+  nextNewSessionAllowedAt = scheduledAt + Math.max(0, minSpacingMs);
+  const totalDelayMs = scheduledAt - now;
+
+  if (totalDelayMs > 0) {
+    if (tokenWaitMs > 0) {
+      log.info(`Session token bucket empty: holding new session start for ${(totalDelayMs / 1000).toFixed(1)}s until token refills to prevent PerScenarioThrottled`);
+    } else {
+      log.info(`Pacing new session start: delaying turn 0 by ${(totalDelayMs / 1000).toFixed(1)}s to prevent parallel dispatch throttle`);
+    }
+
     await new Promise<void>((resolve, reject) => {
       let timer: NodeJS.Timeout | undefined;
       const onAbort = () => {
@@ -226,17 +267,14 @@ export async function paceNewSessionStart(signal?: AbortSignal): Promise<number>
       timer = setTimeout(() => {
         signal?.removeEventListener("abort", onAbort);
         resolve();
-      }, delayMs);
+      }, totalDelayMs);
       if (signal) {
         if (signal.aborted) onAbort();
         else signal.addEventListener("abort", onAbort, { once: true });
       }
     });
   }
-  return delayMs;
-}
-export function resetNewSessionPacing(): void {
-  nextNewSessionAllowedAt = 0;
+  return totalDelayMs;
 }
 
 let recentTurnTimestamps: number[] = [];

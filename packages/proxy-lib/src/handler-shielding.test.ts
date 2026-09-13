@@ -305,6 +305,7 @@ describe("New Session Pacing Queue", () => {
     try {
       let now = 10_000;
       vi.spyOn(Date, "now").mockImplementation(() => now);
+      resetNewSessionPacing();
 
       // Call 1: immediate (delay 0)
       const p1 = paceNewSessionStart();
@@ -349,6 +350,7 @@ describe("New Session Pacing Queue", () => {
     try {
       let now = 5000;
       vi.spyOn(Date, "now").mockImplementation(() => now);
+      resetNewSessionPacing();
 
       const delay1 = await paceNewSessionStart();
       expect(delay1).toBe(0);
@@ -369,6 +371,7 @@ describe("New Session Pacing Queue", () => {
     try {
       let now = 1000;
       vi.spyOn(Date, "now").mockImplementation(() => now);
+      resetNewSessionPacing();
 
       await paceNewSessionStart(); // prime slot 1
 
@@ -381,7 +384,167 @@ describe("New Session Pacing Queue", () => {
       vi.useRealTimers();
     }
   });
+
+  it("allows 10 sessions to burst with only 15s micro-stagger between consecutive starts", async () => {
+    vi.useFakeTimers();
+    try {
+      let now = 10_000;
+      vi.spyOn(Date, "now").mockImplementation(() => now);
+      resetNewSessionPacing();
+
+      const delays: number[] = [];
+      const promises = Array.from({ length: 10 }, (_, i) =>
+        paceNewSessionStart().then((d) => {
+          delays[i] = d;
+        })
+      );
+
+      // Yield to microtasks so delay 0 resolves
+      await Promise.resolve();
+      expect(delays[0]).toBe(0);
+
+      // Each subsequent session i is staggered by exactly i * 15s
+      for (let i = 1; i < 10; i++) {
+        expect(delays[i]).toBeUndefined();
+        now += 15_000;
+        await vi.advanceTimersByTimeAsync(15_000);
+        expect(delays[i]).toBe(i * 15_000);
+      }
+
+      await Promise.all(promises);
+      expect(delays).toEqual([
+        0,
+        15_000,
+        30_000,
+        45_000,
+        60_000,
+        75_000,
+        90_000,
+        105_000,
+        120_000,
+        135_000,
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("enforces token refill wait (~150s) when bucket capacity of 10 is exhausted on session 11", async () => {
+    vi.useFakeTimers();
+    try {
+      let now = 10_000;
+      vi.spyOn(Date, "now").mockImplementation(() => now);
+      resetNewSessionPacing();
+
+      // Exhaust all 10 tokens in burst at t=10_000
+      const burstPromises = Array.from({ length: 10 }, () => paceNewSessionStart());
+
+      // Call 11 at t=10_000: bucket is empty (0 tokens remaining)
+      let p11Resolved = false;
+      let delay11 = 0;
+      const p11 = paceNewSessionStart().then((d) => {
+        p11Resolved = true;
+        delay11 = d;
+      });
+
+      // Session 11 cannot resolve before token refill interval (150s = 150_000ms)
+      expect(p11Resolved).toBe(false);
+
+      // Advance by 135s (when session 10 dispatched) — session 11 must still be pending
+      now += 135_000;
+      await vi.advanceTimersByTimeAsync(135_000);
+      expect(p11Resolved).toBe(false);
+
+      // Advance remaining 15s to reach 150s total from start
+      now += 15_000;
+      await vi.advanceTimersByTimeAsync(15_000);
+      await p11;
+      expect(p11Resolved).toBe(true);
+      expect(delay11).toBe(150_000);
+
+      await Promise.all(burstPromises);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("continuously replenishes tokens over time (advancing 300s replenishes 2 tokens)", async () => {
+    vi.useFakeTimers();
+    try {
+      let now = 10_000;
+      vi.spyOn(Date, "now").mockImplementation(() => now);
+      resetNewSessionPacing();
+
+      // Exhaust all 10 tokens in burst at t=10_000
+      const initialBurst = Array.from({ length: 10 }, () => paceNewSessionStart());
+      // Advance by 300s (300_000ms), resolving all 10 initial sessions and replenishing floor(300000 / 150000) = 2 tokens.
+      now += 300_000;
+      await vi.advanceTimersByTimeAsync(300_000);
+      await Promise.all(initialBurst);
+
+      // Next session at t=310_000 consumes token 1 of 2: delay should be 0ms
+      const delay1 = await paceNewSessionStart();
+      expect(delay1).toBe(0);
+
+      // Next session at t=310_000 consumes token 2 of 2: only delayed by 15s micro-stagger, not token refill
+      let p2Resolved = false;
+      const p2 = paceNewSessionStart().then((d) => {
+        p2Resolved = true;
+        return d;
+      });
+      expect(p2Resolved).toBe(false);
+      now += 15_000;
+      await vi.advanceTimersByTimeAsync(15_000);
+      const delay2 = await p2;
+      expect(p2Resolved).toBe(true);
+      expect(delay2).toBe(15_000);
+
+      // Third session at t=325_000 has 0 tokens left: must wait for the next token refill (~150s - 15s = 135s)
+      let p3Resolved = false;
+      const p3 = paceNewSessionStart().then((d) => {
+        p3Resolved = true;
+        return d;
+      });
+      expect(p3Resolved).toBe(false);
+
+      // Advance by 134s: still waiting
+      now += 134_000;
+      await vi.advanceTimersByTimeAsync(134_000);
+      expect(p3Resolved).toBe(false);
+
+      // Advance by 1s (reaching 135s since start of third session): resolves
+      now += 1000;
+      await vi.advanceTimersByTimeAsync(1000);
+      const delay3 = await p3;
+      expect(p3Resolved).toBe(true);
+      expect(delay3).toBe(135_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("aborts when signal is cancelled while waiting for token refill", async () => {
+    vi.useFakeTimers();
+    try {
+      let now = 1000;
+      vi.spyOn(Date, "now").mockImplementation(() => now);
+      resetNewSessionPacing();
+
+      // Exhaust 10 tokens in burst
+      Array.from({ length: 10 }, () => paceNewSessionStart());
+
+      const ac = new AbortController();
+      const p11 = paceNewSessionStart(ac.signal);
+
+      ac.abort();
+      await expect(p11).rejects.toThrow("Aborted while waiting in new session pacing queue");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
 });
+
 
 describe("Sliding-Window Velocity Governor (paceTurnVelocity)", () => {
   beforeEach(() => {

@@ -382,6 +382,8 @@ Three token scopes are acquired:
 | `M365_BACKOFF_THRESHOLD` / `M365_BACKOFF_WINDOW_MS` / `M365_BACKOFF_BASE_MS` / `M365_BACKOFF_MAX_MS` | Tune backoff: distinct-conversation empties to trigger (default `3`), the window they must fall in (default `120000`), the initial pacing window (default `90000`), and its escalation cap (default `600000`). |
 | `M365_THROTTLE_COOLDOWN_SEC` | Degradation cooldown window in seconds (default `1800`, i.e. 30 minutes). |
 | `M365_MAX_RETRY_AFTER_SEC` | Maximum `Retry-After` header value sent to clients (default `60`). |
+| `M365_SESSION_BUCKET_CAPACITY` | Maximum conversation burst tokens for fresh sessions (default `10`). |
+| `M365_SESSION_REFILL_MS` | Refill duration per conversation token in milliseconds (default `150000`, 2.5 minutes). |
 | `M365_NEW_SESSION_SPACING_MS` | Minimum spacing between new session (`turn === 0`) starts in milliseconds (default `15000`, i.e. 15s). |
 | `M365_CLASSIFIER_OPENAI_URL` | Base URL for remote OpenAI-compatible turn classifier (e.g. `http://gpu-host:11434/v1`). If unset, uses in-process `@kessler/gemma` E2B ONNX. |
 | `M365_CLASSIFIER_OPENAI_MODEL` | Model name requested at the remote classifier endpoint (default `gemma4:e2b`). |

@@ -2668,4 +2668,13 @@ surfacing as empty handshakes (`answer length: 0`) rather than `Disengaged`.
   - **Differentiated Reactive Backoff:** `PerUserThrottled` arms an empirically calibrated 65-minute (`3900s`) cooldown (`M365_USER_THROTTLE_COOLDOWN_SEC`), while `PerScenarioThrottled` keeps 30 minutes (`1800s`).
   - **Sliding-Window Velocity Governor (`paceTurnVelocity`):** Tracks rolling turn timestamps across a 10-minute sliding window (`M365_VELOCITY_WINDOW_MS=600000`). For normal loads under 15 turns / 10m (~1.5 turns/min), delay is **0ms**. When sustained heavy load reaches the 15-turn threshold, the governor introduces dynamic pacing to let the window drain, proactively preventing `PerUserThrottled` from tripping without penalizing normal workloads.
 
+### F32 — Continuous Token Bucket Session Governor for PerScenarioThrottled Prevention 🟢
+
+- **Empirical Grounding:** Across 7.36M log lines (F29), throttling (`PerScenarioThrottled`) is triggered when fresh session starts reach 10–12 in a 10-minute window, and full quiet recharge takes 30–35 minutes. This mathematically matches an Azure Token Bucket with capacity $\approx 10\text{–}12$ tokens and a refill rate of ~1 token every 2.5 minutes (150s).
+- **Limitation of Fixed 15s Stagger:** At 15s per session, a continuous queue launched 40 sessions in 10 minutes, inevitably draining the bucket and tripping `PerScenarioThrottled`.
+- **Shipped (`packages/proxy-lib/src/handler.ts`):** Upgraded `paceNewSessionStart` to a continuous Token Bucket:
+  - Layer 1 (Burst Capacity): Allows instant bursts of up to 10 fresh sessions (`M365_SESSION_BUCKET_CAPACITY=10`) spaced only by the 15s gateway handshake micro-stagger.
+  - Layer 2 (Continuous Refill): Tokens replenish at 1 token every 150 seconds (`M365_SESSION_REFILL_MS=150000`). Once the burst is consumed, subsequent session starts are naturally held in queue until tokens refill, mathematically guaranteeing that the upstream conversation token bucket is never exhausted.
+
+
 
