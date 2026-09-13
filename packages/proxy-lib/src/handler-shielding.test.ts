@@ -552,45 +552,143 @@ describe("Sliding-Window Velocity Governor (paceTurnVelocity)", () => {
     vi.restoreAllMocks();
   });
 
-  it("returns 0 delay immediately under 15 turns threshold", async () => {
+  it("resolves immediately with 0ms delay for turns 1 to 29", async () => {
     let now = 1_000_000;
     vi.spyOn(Date, "now").mockImplementation(() => now);
 
-    for (let i = 0; i < 14; i++) {
+    for (let i = 1; i <= 29; i++) {
       const delay = await paceTurnVelocity();
       expect(delay).toBe(0);
       now += 1000;
     }
   });
 
-  it("pauses and enforces delay to drain window upon reaching 15 turns threshold", async () => {
+  it("enforces soft elastic spacing (3s, 6s, 9s, 12s, 15s) for turns 30 to 34", async () => {
+    vi.useFakeTimers();
+    try {
+      let now = 1_000_000;
+      vi.spyOn(Date, "now").mockImplementation(() => now);
+
+      // Execute 30 turns to populate the burst window up to burstSoft (30)
+      for (let i = 1; i <= 30; i++) {
+        const delay = await paceTurnVelocity();
+        expect(delay).toBe(0);
+        now += 1000;
+      }
+
+      // Turns with burstCount 30..34 receive progressive soft spacing:
+      // excess * 3000ms -> 3s, 6s, 9s, 12s, 15s
+      const expectedDelays = [3000, 6000, 9000, 12000, 15000];
+      for (const expectedDelay of expectedDelays) {
+        const p = paceTurnVelocity();
+        let resolved = false;
+        p.then(() => {
+          resolved = true;
+        });
+        expect(resolved).toBe(false);
+
+        now += expectedDelay;
+        await vi.advanceTimersByTimeAsync(expectedDelay);
+
+        const delay = await p;
+        expect(resolved).toBe(true);
+        expect(delay).toBe(expectedDelay);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("incurs burst drain delay on turn 35", async () => {
     vi.useFakeTimers();
     try {
       let now = 10_000;
       vi.spyOn(Date, "now").mockImplementation(() => now);
 
-      // 15 turns within the window
-      for (let i = 0; i < 15; i++) {
+      // Run 30 turns with 0 delay (t = 10_000, 11_000, ..., 39_000)
+      for (let i = 1; i <= 30; i++) {
         const delay = await paceTurnVelocity();
         expect(delay).toBe(0);
-        now += 1000; // t = 10_000, 11_000, ..., 24_000
+        now += 1000;
       }
 
-      // Turn 16 at t = 25_000: oldest turn is at t = 10_000
-      // 10_000 + 600_000 - 25_000 = 585_000 ms delay
-      const p16 = paceTurnVelocity();
-      let p16Resolved = false;
-      p16.then(() => {
-        p16Resolved = true;
+      // Run 5 turns with soft spacing (burstCount 30..34)
+      for (let count = 30; count <= 34; count++) {
+        const spacing = (count - 30 + 1) * 3000;
+        const p = paceTurnVelocity();
+        now += spacing;
+        await vi.advanceTimersByTimeAsync(spacing);
+        await p;
+      }
+
+      // Now burstCount === 35 (burstMax is 35)
+      // oldestBurst is at t = 10_000
+      // burstWindowMs = 600_000
+      // drainDelay = (10_000 + 600_000) - now
+      const oldestBurst = 10_000;
+      const expectedDrainDelay = Math.max(1000, (oldestBurst + 600_000) - now);
+
+      const p35 = paceTurnVelocity();
+      let p35Resolved = false;
+      p35.then(() => {
+        p35Resolved = true;
       });
-      expect(p16Resolved).toBe(false);
+      expect(p35Resolved).toBe(false);
 
-      now += 585_000;
-      await vi.advanceTimersByTimeAsync(585_000);
+      now += expectedDrainDelay;
+      await vi.advanceTimersByTimeAsync(expectedDrainDelay);
 
-      const delay16 = await p16;
-      expect(p16Resolved).toBe(true);
-      expect(delay16).toBe(585_000);
+      const delay35 = await p35;
+      expect(p35Resolved).toBe(true);
+      expect(delay35).toBe(expectedDrainDelay);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("applies graduated resistance (5s..25s) when 60m count reaches 90 turns", async () => {
+    vi.useFakeTimers();
+    try {
+      let now = 1_000_000;
+      vi.spyOn(Date, "now").mockImplementation(() => now);
+
+      // Space 89 turns by 21s across ~31 minutes
+      // In any 10-minute window (600s), there are at most 28 turns (< 30 burstSoft), so all resolve with 0ms
+      for (let i = 0; i < 89; i++) {
+        now = 1_000_000 + i * 21_000;
+        const delay = await paceTurnVelocity();
+        expect(delay).toBe(0);
+      }
+
+      // Advance by 650s: all 89 prior turns are now older than the 10m burst window (> 600s),
+      // but well within the 60m sustained window (< 3600s)
+      now += 650_000;
+
+      // Turn brings sustainedCount from 89 to 90
+      const delay89 = await paceTurnVelocity();
+      expect(delay89).toBe(0);
+
+      // Now sustainedCount is 90!
+      // Progress = (90 - 90 + 1) / (120 - 90) = 1 / 30
+      // Expected delay: Math.round(5000 + (1 / 30) * 20000) = 5667 ms
+      const expectedDelay90 = Math.round(5000 + (1 / 30) * 20000);
+      expect(expectedDelay90).toBe(5667);
+      expect(expectedDelay90).toBeGreaterThanOrEqual(5000);
+      expect(expectedDelay90).toBeLessThanOrEqual(25000);
+
+      const p90 = paceTurnVelocity();
+      let p90Resolved = false;
+      p90.then(() => {
+        p90Resolved = true;
+      });
+      expect(p90Resolved).toBe(false);
+
+      now += expectedDelay90;
+      await vi.advanceTimersByTimeAsync(expectedDelay90);
+
+      const delay90 = await p90;
+      expect(p90Resolved).toBe(true);
+      expect(delay90).toBe(expectedDelay90);
     } finally {
       vi.useRealTimers();
     }
@@ -602,7 +700,8 @@ describe("Sliding-Window Velocity Governor (paceTurnVelocity)", () => {
       let now = 10_000;
       vi.spyOn(Date, "now").mockImplementation(() => now);
 
-      for (let i = 0; i < 15; i++) {
+      // Run 30 turns so the next call triggers soft spacing
+      for (let i = 1; i <= 30; i++) {
         await paceTurnVelocity();
         now += 1000;
       }
@@ -611,7 +710,7 @@ describe("Sliding-Window Velocity Governor (paceTurnVelocity)", () => {
       const p = paceTurnVelocity(ac.signal);
 
       ac.abort();
-      await expect(p).rejects.toThrow("Aborted while waiting in turn velocity pacing queue");
+      await expect(p).rejects.toThrow("Aborted while waiting in velocity pacing queue");
     } finally {
       vi.useRealTimers();
     }
@@ -621,9 +720,10 @@ describe("Sliding-Window Velocity Governor (paceTurnVelocity)", () => {
     let now = 10_000;
     vi.spyOn(Date, "now").mockImplementation(() => now);
 
-    for (let i = 0; i < 15; i++) {
+    for (let i = 1; i <= 30; i++) {
       const delay = await paceTurnVelocity();
       expect(delay).toBe(0);
+      now += 1000;
     }
 
     resetTurnVelocityPacing();

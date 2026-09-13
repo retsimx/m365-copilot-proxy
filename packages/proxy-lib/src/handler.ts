@@ -278,47 +278,78 @@ export async function paceNewSessionStart(signal?: AbortSignal): Promise<number>
 }
 
 let recentTurnTimestamps: number[] = [];
-export async function paceTurnVelocity(signal?: AbortSignal): Promise<number> {
-  const windowMs = Number(process.env.M365_VELOCITY_WINDOW_MS ?? 600_000);
-  const maxTurns = Number(process.env.M365_MAX_TURNS_PER_WINDOW ?? 15);
-  if (maxTurns <= 0 || windowMs <= 0) return 0;
 
-  const now = Date.now();
-  recentTurnTimestamps = recentTurnTimestamps.filter((t) => now - t < windowMs);
-
-  if (recentTurnTimestamps.length < maxTurns) {
-    recentTurnTimestamps.push(now);
-    return 0;
-  }
-
-  const oldestInWindow = recentTurnTimestamps[recentTurnTimestamps.length - maxTurns];
-  const drainDelay = (oldestInWindow + windowMs) - now;
-  const delayMs = Math.max(1000, drainDelay);
-
-  log.info(`Velocity governor active: ${recentTurnTimestamps.length} turns in prior 10m window exceeds ${maxTurns} threshold — pacing turn by ${(delayMs / 1000).toFixed(1)}s`);
-
-  await new Promise<void>((resolve, reject) => {
-    let timer: NodeJS.Timeout | undefined;
-    const onAbort = () => {
-      if (timer) clearTimeout(timer);
-      reject(new Error("Aborted while waiting in turn velocity pacing queue"));
-    };
-    timer = setTimeout(() => {
-      signal?.removeEventListener("abort", onAbort);
-      resolve();
-    }, delayMs);
-    if (signal) {
-      if (signal.aborted) onAbort();
-      else signal.addEventListener("abort", onAbort, { once: true });
-    }
-  });
-
-  const scheduledNow = Date.now();
-  recentTurnTimestamps.push(scheduledNow);
-  return delayMs;
-}
 export function resetTurnVelocityPacing(): void {
   recentTurnTimestamps = [];
+}
+
+export async function paceTurnVelocity(signal?: AbortSignal): Promise<number> {
+  const burstWindowMs = Number(process.env.M365_BURST_WINDOW_MS ?? 600_000); // 10 minutes
+  const burstMax = Number(process.env.M365_BURST_MAX_TURNS ?? 35);
+  const burstSoft = Math.max(1, burstMax - 5); // 30 turns
+
+  const sustainedWindowMs = Number(process.env.M365_SUSTAINED_WINDOW_MS ?? 3_600_000); // 60 minutes
+  const sustainedMax = Number(process.env.M365_SUSTAINED_MAX_TURNS ?? 120);
+  const sustainedWarn = Number(process.env.M365_SUSTAINED_WARN_TURNS ?? 90);
+
+  if (burstMax <= 0 && sustainedMax <= 0) return 0;
+
+  const now = Date.now();
+  // Evict entries older than the longest window (sustained 60m)
+  recentTurnTimestamps = recentTurnTimestamps.filter((t) => now - t < sustainedWindowMs);
+
+  // Count entries in each horizon
+  const burstEntries = recentTurnTimestamps.filter((t) => now - t < burstWindowMs);
+  const burstCount = burstEntries.length;
+  const sustainedCount = recentTurnTimestamps.length;
+
+  let burstDelayMs = 0;
+  if (burstMax > 0 && burstWindowMs > 0) {
+    if (burstCount >= burstMax) {
+      const oldestBurst = burstEntries[burstEntries.length - burstMax];
+      burstDelayMs = Math.max(1000, (oldestBurst + burstWindowMs) - now);
+    } else if (burstCount >= burstSoft) {
+      // Soft elastic spacing: 3s per turn over burstSoft (3s, 6s, 9s, 12s, 15s)
+      const excess = burstCount - burstSoft + 1;
+      burstDelayMs = excess * 3000;
+    }
+  }
+
+  let sustainedDelayMs = 0;
+  if (sustainedMax > 0 && sustainedWindowMs > 0) {
+    if (sustainedCount >= sustainedMax) {
+      const oldestSustained = recentTurnTimestamps[recentTurnTimestamps.length - sustainedMax];
+      sustainedDelayMs = Math.max(1000, (oldestSustained + sustainedWindowMs) - now);
+    } else if (sustainedCount >= sustainedWarn) {
+      // Graduated resistance: 5s to 25s scaling linearly from sustainedWarn (90) to sustainedMax (120)
+      const progress = (sustainedCount - sustainedWarn + 1) / (sustainedMax - sustainedWarn);
+      sustainedDelayMs = Math.round(5000 + Math.min(1, progress) * 20000);
+    }
+  }
+
+  const delayMs = Math.max(burstDelayMs, sustainedDelayMs);
+
+  if (delayMs > 0) {
+    log.info(`Velocity governor active: ${burstCount}/${burstMax} (10m), ${sustainedCount}/${sustainedMax} (60m) — progressive pacing by ${(delayMs / 1000).toFixed(1)}s`);
+    await new Promise<void>((resolve, reject) => {
+      let timer: NodeJS.Timeout | undefined;
+      const onAbort = () => {
+        if (timer) clearTimeout(timer);
+        reject(new Error("Aborted while waiting in velocity pacing queue"));
+      };
+      timer = setTimeout(() => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve();
+      }, delayMs);
+      if (signal) {
+        if (signal.aborted) onAbort();
+        else signal.addEventListener("abort", onAbort, { once: true });
+      }
+    });
+  }
+
+  recentTurnTimestamps.push(Date.now());
+  return delayMs;
 }
 
 // --- Main handler ---

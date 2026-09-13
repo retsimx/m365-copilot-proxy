@@ -385,6 +385,11 @@ Three token scopes are acquired:
 | `M365_SESSION_BUCKET_CAPACITY` | Maximum conversation burst tokens for fresh sessions (default `10`). |
 | `M365_SESSION_REFILL_MS` | Refill duration per conversation token in milliseconds (default `150000`, 2.5 minutes). |
 | `M365_NEW_SESSION_SPACING_MS` | Minimum spacing between new session (`turn === 0`) starts in milliseconds (default `15000`, i.e. 15s). |
+| `M365_BURST_MAX_TURNS` | Maximum burst turns in the 10-minute window before drain wait (default `35`). |
+| `M365_BURST_WINDOW_MS` | Burst window duration in milliseconds (default `600000`, 10 minutes). |
+| `M365_SUSTAINED_MAX_TURNS` | Maximum sustained turns across the 60-minute macro-window (default `120`). |
+| `M365_SUSTAINED_WINDOW_MS` | Sustained window duration in milliseconds (default `3600000`, 60 minutes). |
+| `M365_SUSTAINED_WARN_TURNS` | Turn threshold where progressive 5s..25s resistance begins (default `90`). |
 | `M365_CLASSIFIER_OPENAI_URL` | Base URL for remote OpenAI-compatible turn classifier (e.g. `http://gpu-host:11434/v1`). If unset, uses in-process `@kessler/gemma` E2B ONNX. |
 | `M365_CLASSIFIER_OPENAI_MODEL` | Model name requested at the remote classifier endpoint (default `gemma4:e2b`). |
 | `M365_CLASSIFIER_TIMEOUT_MS` | Max milliseconds to wait for remote GPU classifier before falling back to in-process Gemma E2B (default `10000`, i.e. 10s). |

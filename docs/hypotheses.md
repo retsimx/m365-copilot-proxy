@@ -2676,5 +2676,10 @@ surfacing as empty handshakes (`answer length: 0`) rather than `Disengaged`.
   - Layer 1 (Burst Capacity): Allows instant bursts of up to 10 fresh sessions (`M365_SESSION_BUCKET_CAPACITY=10`) spaced only by the 15s gateway handshake micro-stagger.
   - Layer 2 (Continuous Refill): Tokens replenish at 1 token every 150 seconds (`M365_SESSION_REFILL_MS=150000`). Once the burst is consumed, subsequent session starts are naturally held in queue until tokens refill, mathematically guaranteeing that the upstream conversation token bucket is never exhausted.
 
+### F33 — Dual-Horizon Progressive Leaky Bucket Governor (35-Turn Burst & 120-Turn Sustained) 🟢
 
-
+- **Empirical Grounding:** Analyzing production windows leading to the `PerUserThrottled` lockout revealed that Microsoft easily tolerated bursts of **40–45 turns in 10 minutes** (4.5 turns/min) without throttling. The lockout occurred only after sustaining **164 turns over 60 minutes** (2.73 turns/min).
+- **Limitation of Static 15-Turn Limit:** A flat 15-turn ceiling in 10m clamped at only ~33% of Microsoft's true burst capacity, and inflicted a jarring 7-minute freeze on multi-subagent workflows.
+- **Shipped (`packages/proxy-lib/src/handler.ts`):** Upgraded `paceTurnVelocity` to a Dual-Horizon Progressive Leaky Bucket:
+  - **Horizon 1 (10-Minute Burst):** Up to 29 turns execute with 0.0ms delay. Turns 30–34 experience soft elastic spacing (3s..15s), preventing cliff freezes. Hard drain delay only engages if sustained bursts exceed 35 turns.
+  - **Horizon 2 (60-Minute Sustained Macro Ceiling):** Enforces a safe 120-turn/hour ceiling (well below the 164-turn cliff). When rolling hourly count reaches 90 turns, graduated resistance gently scales turn spacing from 5s to 25s, keeping multi-agent workloads smooth and 100% resilient.
