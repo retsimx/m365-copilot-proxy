@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { foldStreamText } from "./session.js";
+import { foldStreamText, isThrottled } from "./session.js";
 import { MessageUpdate } from "./schemas.js";
 
 /** Replay a sequence of raw M365 frames (deltas as {d}, snapshots as {s}) through
@@ -109,5 +109,29 @@ describe("GraphicArt image frame parsing (§14)", () => {
     expect(parsed.success).toBe(true);
     const m = parsed.data!.messages[0] as any;
     expect(m.contentGenerationProgressList).toBeUndefined();
+  });
+});
+
+describe("isThrottled", () => {
+  it("returns true when errorCode is PerUserThrottled", () => {
+    expect(isThrottled({ errorCode: "PerUserThrottled" })).toBe(true);
+  });
+
+  it("returns true when errorCode is PerScenarioThrottled", () => {
+    expect(isThrottled({ errorCode: "PerScenarioThrottled" })).toBe(true);
+  });
+
+  it("returns true when value is Throttled", () => {
+    expect(isThrottled({ value: "Throttled" })).toBe(true);
+  });
+
+  it("returns true when turnState is Failed and value is Throttled", () => {
+    expect(isThrottled({ value: "Throttled" }, "Failed")).toBe(true);
+  });
+
+  it("returns false for normal non-throttled results", () => {
+    expect(isThrottled({ value: "Success" })).toBe(false);
+    expect(isThrottled(null)).toBe(false);
+    expect(isThrottled(undefined)).toBe(false);
   });
 });

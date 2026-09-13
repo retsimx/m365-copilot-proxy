@@ -2648,3 +2648,24 @@ surfacing as empty handshakes (`answer length: 0`) rather than `Disengaged`.
 - **Claim:** Microsoft content policy refusals ("looks like I can't chat about this", etc.) are distinct from tool confabulation.
 - **Shipped (`packages/core/src/tools.ts` & `packages/proxy-lib/src/handler.ts`):** `looksLikeSafetyRefusal` fast-fails with HTTP 400 `content_policy_refusal` and flushes session context without retries. Unresolved tool confabulations fail closed with HTTP 502 `unresolved_tool_refusal`.
 
+---
+
+## 17. September 13 2026 — PerUserThrottled Volume Velocity Limit, 62m Empirical Recovery & Sliding-Window Velocity Governor
+
+### F31 — PerUserThrottled Volume Rate Limit, 62m Empirical Recovery & Sliding-Window Velocity Governor 🟢
+
+- **Dual-Throttle Discovery:** Microsoft enforces two distinct rate-limiting regimes:
+  - `PerScenarioThrottled` (thread spawn rate, tracked across fresh conversations `turn === 0`): recovers in 30–35 minutes (`1800s`).
+  - `PerUserThrottled` (volume velocity, tracked across sustained turns even within a single thread): triggered when high-frequency reasoning turns are sustained (e.g. 57 turns in 31 minutes, ~2 turns/min).
+- **Empirical Recovery Curve:**
+  - In a live production probe sequence following a `PerUserThrottled` event:
+    - 53m 20s: 🔴 429 Throttled (killed 30m, 45m, and 50m recovery hypotheses).
+    - 59m 19s: 🔴 429 Throttled (crossing the `:00` clock hour did not reset the bucket, disproving clock-boundary resets).
+    - 60m 24s: 🔴 429 Throttled (60m is strictly insufficient).
+    - 62m 09s: 🟢 HTTP 200 `PONG` (fully recovered).
+  - Probes during the throttle window do **not** reset the recovery timer, confirming a pure rolling leaky bucket.
+- **Shipped (`packages/core/src/session.ts` & `packages/proxy-lib/src/handler.ts`):**
+  - **Differentiated Reactive Backoff:** `PerUserThrottled` arms an empirically calibrated 65-minute (`3900s`) cooldown (`M365_USER_THROTTLE_COOLDOWN_SEC`), while `PerScenarioThrottled` keeps 30 minutes (`1800s`).
+  - **Sliding-Window Velocity Governor (`paceTurnVelocity`):** Tracks rolling turn timestamps across a 10-minute sliding window (`M365_VELOCITY_WINDOW_MS=600000`). For normal loads under 15 turns / 10m (~1.5 turns/min), delay is **0ms**. When sustained heavy load reaches the 15-turn threshold, the governor introduces dynamic pacing to let the window drain, proactively preventing `PerUserThrottled` from tripping without penalizing normal workloads.
+
+

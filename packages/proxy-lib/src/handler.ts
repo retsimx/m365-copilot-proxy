@@ -239,6 +239,50 @@ export function resetNewSessionPacing(): void {
   nextNewSessionAllowedAt = 0;
 }
 
+let recentTurnTimestamps: number[] = [];
+export async function paceTurnVelocity(signal?: AbortSignal): Promise<number> {
+  const windowMs = Number(process.env.M365_VELOCITY_WINDOW_MS ?? 600_000);
+  const maxTurns = Number(process.env.M365_MAX_TURNS_PER_WINDOW ?? 15);
+  if (maxTurns <= 0 || windowMs <= 0) return 0;
+
+  const now = Date.now();
+  recentTurnTimestamps = recentTurnTimestamps.filter((t) => now - t < windowMs);
+
+  if (recentTurnTimestamps.length < maxTurns) {
+    recentTurnTimestamps.push(now);
+    return 0;
+  }
+
+  const oldestInWindow = recentTurnTimestamps[recentTurnTimestamps.length - maxTurns];
+  const drainDelay = (oldestInWindow + windowMs) - now;
+  const delayMs = Math.max(1000, drainDelay);
+
+  log.info(`Velocity governor active: ${recentTurnTimestamps.length} turns in prior 10m window exceeds ${maxTurns} threshold — pacing turn by ${(delayMs / 1000).toFixed(1)}s`);
+
+  await new Promise<void>((resolve, reject) => {
+    let timer: NodeJS.Timeout | undefined;
+    const onAbort = () => {
+      if (timer) clearTimeout(timer);
+      reject(new Error("Aborted while waiting in turn velocity pacing queue"));
+    };
+    timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs);
+    if (signal) {
+      if (signal.aborted) onAbort();
+      else signal.addEventListener("abort", onAbort, { once: true });
+    }
+  });
+
+  const scheduledNow = Date.now();
+  recentTurnTimestamps.push(scheduledNow);
+  return delayMs;
+}
+export function resetTurnVelocityPacing(): void {
+  recentTurnTimestamps = [];
+}
+
 // --- Main handler ---
 
 /**
@@ -358,6 +402,12 @@ export async function handleChatCompletion(
       }
     }
 
+    try {
+      await paceTurnVelocity(opts.signal);
+    } catch (err: any) {
+      return { error: jsonResponse(499, { error: { message: err.message, type: "client_closed_request" } }) };
+    }
+
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       let copilotStream;
       try {
@@ -404,8 +454,11 @@ export async function handleChatCompletion(
       lastTurnCount = copilotStream.turnCount;
 
       if (copilotStream.isThrottled) {
-        const throttleSec = Number(process.env.M365_THROTTLE_COOLDOWN_SEC ?? 1800);
         const errCode = copilotStream.result?.errorCode ?? copilotStream.result?.value ?? "Throttled";
+        const throttleSec =
+          errCode === "PerUserThrottled"
+            ? Number(process.env.M365_USER_THROTTLE_COOLDOWN_SEC ?? 3900)
+            : Number(process.env.M365_THROTTLE_COOLDOWN_SEC ?? 1800);
         const errMsg = copilotStream.result?.message ?? "We're currently experiencing high traffic. Please try again later.";
         log.warn(`Upstream M365 rate limit detected: ${errCode} (${errMsg}) — arming ${throttleSec}s cooldown and fast-failing with 429`);
         triggerDegradationBackoff(throttleSec * 1000, errCode);

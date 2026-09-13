@@ -189,6 +189,18 @@ export interface CopilotSessionOptions {
   nativeActions?: NativeActionConfig;
 }
 
+export function isThrottled(
+  resultInfo?: { value?: string; errorCode?: string } | null,
+  turnState?: string,
+): boolean {
+  return (
+    resultInfo?.value === "Throttled" ||
+    resultInfo?.errorCode === "PerScenarioThrottled" ||
+    resultInfo?.errorCode === "PerUserThrottled" ||
+    (turnState === "Failed" && resultInfo?.value === "Throttled")
+  );
+}
+
 /**
  * A persistent conversation session with M365 Copilot.
  * Reuses the same sessionId/conversationId across turns,
@@ -389,11 +401,7 @@ export class CopilotSession {
           return resultInfo;
         },
         get isThrottled() {
-          return (
-            resultInfo?.value === "Throttled" ||
-            resultInfo?.errorCode === "PerScenarioThrottled" ||
-            (turnState === "Failed" && resultInfo?.value === "Throttled")
-          );
+          return isThrottled(resultInfo, turnState);
         },
 
         [Symbol.asyncIterator]() {

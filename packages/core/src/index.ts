@@ -45,6 +45,7 @@ export {
 
 export {
   CopilotSession,
+  isThrottled,
   type CopilotSessionOptions,
   type ChatTurnOptions,
   type NativeActionConfig,

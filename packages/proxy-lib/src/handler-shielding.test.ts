@@ -1,10 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { handleChatCompletion, SessionPool, paceNewSessionStart, resetNewSessionPacing } from "./handler.js";
+import {
+  handleChatCompletion,
+  SessionPool,
+  paceNewSessionStart,
+  resetNewSessionPacing,
+  paceTurnVelocity,
+  resetTurnVelocityPacing,
+} from "./handler.js";
 import * as core from "@m365-copilot/core";
 
 describe("Handler Degradation Circuit Breaker & 429 Retry-After Shielding", () => {
   beforeEach(() => {
     resetNewSessionPacing();
+    resetTurnVelocityPacing();
     vi.restoreAllMocks();
   });
 
@@ -237,11 +245,58 @@ describe("Handler Degradation Circuit Breaker & 429 Retry-After Shielding", () =
     expect(resetSpy).toHaveBeenCalled();
     expect(triggerSpy).toHaveBeenCalledWith(1_800_000, "PerScenarioThrottled");
   });
+
+  it("fails fast with HTTP 429 when copilotStream errorCode is PerUserThrottled, arming 3900s cooldown by default", async () => {
+    vi.spyOn(core, "isDegradationBackoff").mockReturnValue(false);
+    const triggerSpy = vi.spyOn(core, "triggerDegradationBackoff").mockImplementation(() => {});
+
+    const mockStream: any = {
+      [Symbol.asyncIterator]: async function* () {},
+      fullText: "",
+      hasContent: false,
+      throttle: null,
+      scores: null,
+      turnCount: 0,
+      turnState: "Failed",
+      result: {
+        value: "Throttled",
+        errorCode: "PerUserThrottled",
+        message: "Rate limit exceeded for user",
+      },
+      isThrottled: true,
+    };
+
+    const runSpy = vi.spyOn(core.ModelSession.prototype, "run").mockResolvedValue(mockStream);
+    const resetSpy = vi.spyOn(core.ModelSession.prototype, "reset");
+
+    const pool = new SessionPool();
+    const body = {
+      model: "gpt-5.5-quick",
+      messages: [{ role: "user" as const, content: "Test prompt" }],
+      stream: false,
+    };
+
+    const response = await handleChatCompletion(body, pool);
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("Retry-After")).toBe("60");
+    const json = (await response.json()) as any;
+    expect(json.error).toBeDefined();
+    expect(json.error.type).toBe("rate_limit_error");
+    expect(json.error.code).toBe("rate_limit_exceeded");
+    expect(json.error.message).toContain("3900s remaining");
+
+    // Fast-fail: exactly 1 attempt (no "Please continue." retries)
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expect(resetSpy).toHaveBeenCalled();
+    expect(triggerSpy).toHaveBeenCalledWith(3_900_000, "PerUserThrottled");
+  });
 });
 
 describe("New Session Pacing Queue", () => {
   beforeEach(() => {
     resetNewSessionPacing();
+    resetTurnVelocityPacing();
     vi.restoreAllMocks();
   });
 
@@ -328,9 +383,97 @@ describe("New Session Pacing Queue", () => {
   });
 });
 
+describe("Sliding-Window Velocity Governor (paceTurnVelocity)", () => {
+  beforeEach(() => {
+    resetTurnVelocityPacing();
+    vi.restoreAllMocks();
+  });
+
+  it("returns 0 delay immediately under 15 turns threshold", async () => {
+    let now = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+
+    for (let i = 0; i < 14; i++) {
+      const delay = await paceTurnVelocity();
+      expect(delay).toBe(0);
+      now += 1000;
+    }
+  });
+
+  it("pauses and enforces delay to drain window upon reaching 15 turns threshold", async () => {
+    vi.useFakeTimers();
+    try {
+      let now = 10_000;
+      vi.spyOn(Date, "now").mockImplementation(() => now);
+
+      // 15 turns within the window
+      for (let i = 0; i < 15; i++) {
+        const delay = await paceTurnVelocity();
+        expect(delay).toBe(0);
+        now += 1000; // t = 10_000, 11_000, ..., 24_000
+      }
+
+      // Turn 16 at t = 25_000: oldest turn is at t = 10_000
+      // 10_000 + 600_000 - 25_000 = 585_000 ms delay
+      const p16 = paceTurnVelocity();
+      let p16Resolved = false;
+      p16.then(() => {
+        p16Resolved = true;
+      });
+      expect(p16Resolved).toBe(false);
+
+      now += 585_000;
+      await vi.advanceTimersByTimeAsync(585_000);
+
+      const delay16 = await p16;
+      expect(p16Resolved).toBe(true);
+      expect(delay16).toBe(585_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("aborts and rejects when signal is cancelled while in pacing wait", async () => {
+    vi.useFakeTimers();
+    try {
+      let now = 10_000;
+      vi.spyOn(Date, "now").mockImplementation(() => now);
+
+      for (let i = 0; i < 15; i++) {
+        await paceTurnVelocity();
+        now += 1000;
+      }
+
+      const ac = new AbortController();
+      const p = paceTurnVelocity(ac.signal);
+
+      ac.abort();
+      await expect(p).rejects.toThrow("Aborted while waiting in turn velocity pacing queue");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("resetTurnVelocityPacing resets state and clears history", async () => {
+    let now = 10_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+
+    for (let i = 0; i < 15; i++) {
+      const delay = await paceTurnVelocity();
+      expect(delay).toBe(0);
+    }
+
+    resetTurnVelocityPacing();
+
+    const delay = await paceTurnVelocity();
+    expect(delay).toBe(0);
+  });
+});
+
 describe("Dual-Engine Classifier Integration in Handler", () => {
   beforeEach(() => {
     resetNewSessionPacing();
+    resetTurnVelocityPacing();
     vi.restoreAllMocks();
   });
 
