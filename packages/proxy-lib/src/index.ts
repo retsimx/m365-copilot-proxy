@@ -1,15 +1,53 @@
 import { type ModelSessionOptions, getAvailableModels } from "@m365-copilot/core";
 import { ChatCompletionRequest } from "./schemas.js";
 import { SessionPool, handleChatCompletion } from "./handler.js";
+import { getMetricsSnapshot } from "./metrics.js";
+import { getDashboardHtml } from "./dashboard-html.js";
 
+export { getDashboardHtml } from "./dashboard-html.js";
 export {
   SessionPool,
   handleChatCompletion,
   paceNewSessionStart,
   resetNewSessionPacing,
+  getStaggerQueueState,
+  getStaggerQueueInternalState,
+  setStaggerQueueInternalState,
   paceTurnVelocity,
   resetTurnVelocityPacing,
+  getGovernorState,
+  getRecentTurnTimestamps,
+  setRecentTurnTimestamps,
 } from "./handler.js";
+export {
+  getMetricsSnapshot,
+  recordTurn,
+  recordNewSession,
+  recordThrottle,
+  resetMetrics,
+  getMetricsBuckets,
+  setMetricsBuckets,
+  getMetricsTotals,
+  setMetricsTotals,
+  getNewSessionsInWindow,
+  getTurnsInWindow,
+  getSystemMetricsConfig,
+  MetricsCollector,
+  defaultMetricsCollector,
+  type MetricsSnapshot,
+  type TimeBucketPoint,
+  type SessionItemSnapshot,
+  type SystemMetricsConfig,
+} from "./metrics.js";
+export {
+  loadProxyState,
+  saveProxyState,
+  scheduleStateSave,
+  flushStateSave,
+  cancelScheduledSave,
+  getProxyStatePath,
+  type PersistentProxyState,
+} from "./persistence.js";
 export { ChatCompletionRequest, ChatMessage, ToolCall, ToolDefinition } from "./schemas.js";
 
 // Re-export tool utilities from core
@@ -107,12 +145,31 @@ export function createApp(sessionOptions: ModelSessionOptions = {}): FetchApp {
       return withCors(new Response(null, { status: 204 }));
     }
 
+    if (method === "GET" && (pathname === "/" || pathname === "/dashboard")) {
+      return withCors(
+        new Response(getDashboardHtml(), {
+          status: 200,
+          headers: { "Content-Type": "text/html; charset=utf-8" },
+        }),
+      );
+    }
+
     if (method === "GET" && pathname === "/health") {
       return withCors(json(200, HEALTH_PAYLOAD));
     }
 
     if (method === "GET" && pathname === "/v1/models") {
       return withCors(json(200, buildModelsPayload()));
+    }
+
+    if (
+      method === "GET" &&
+      (pathname === "/metrics" || pathname === "/api/metrics" || pathname === "/v1/metrics")
+    ) {
+      const url = new URL(req.url);
+      const rangeParam = url.searchParams.get("range");
+      const range = rangeParam === "6h" || rangeParam === "24h" ? rangeParam : "1h";
+      return withCors(json(200, getMetricsSnapshot(pool, range)));
     }
 
     if (method === "POST" && pathname === "/v1/chat/completions") {

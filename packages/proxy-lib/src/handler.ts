@@ -24,6 +24,15 @@ import {
   type CapturedImage,
 } from "@m365-copilot/core";
 import { ChatCompletionRequest } from "./schemas.js";
+import {
+  recordTurn,
+  recordNewSession,
+  recordThrottle,
+  getNewSessionsInWindow,
+  getTurnsInWindow,
+  type SessionItemSnapshot,
+} from "./metrics.js";
+import { scheduleStateSave } from "./persistence.js";
 import type { z } from "zod/v4";
 
 const log = createLogger("handler");
@@ -96,6 +105,10 @@ interface ConversationState {
   session: ModelSession;
   sentMessageCount: number;
   lastAccessedAt: number;
+  sessionId?: string;
+  fingerprint?: string;
+  turnCount?: number;
+  status?: "streaming" | "governor" | "stagger" | "idle";
 }
 
 // --- Session pool: maps conversation fingerprint → M365 session ---
@@ -138,9 +151,32 @@ export class SessionPool {
       session: new ModelSession(this.sessionOptions),
       sentMessageCount: 0,
       lastAccessedAt: Date.now(),
+      sessionId: sessionId?.trim() || fingerprint,
+      fingerprint,
+      status: "idle",
     };
     this.conversations.set(fingerprint, state);
     return state;
+  }
+
+  getSessionsSnapshot(): SessionItemSnapshot[] {
+    this.evictStale();
+    const now = Date.now();
+    const maxTurns = Number(process.env.M365_MAX_TURNS_PER_CONVERSATION ?? 600);
+    const snapshots: SessionItemSnapshot[] = [];
+    for (const [key, state] of this.conversations) {
+      snapshots.push({
+        fingerprint: state.fingerprint || key,
+        sessionId: state.sessionId || state.fingerprint || key,
+        conversationId: state.session.conversationId,
+        turnCount: state.turnCount ?? state.session.turnCount,
+        maxTurns,
+        lastAccessedAt: state.lastAccessedAt,
+        idleSeconds: Math.round((now - state.lastAccessedAt) / 1000),
+        status: state.status ?? "idle",
+      });
+    }
+    return snapshots;
   }
 
   private fingerprint(messages: ParsedMessage[], tools?: ChatBody["tools"], sessionId?: string): string {
@@ -210,12 +246,78 @@ function formatDeltaMessages(messages: ParsedMessage[], tools?: ChatBody["tools"
 let sessionTokens = Number(process.env.M365_SESSION_BUCKET_CAPACITY ?? 10);
 let lastTokenRefillAt = Date.now();
 let nextNewSessionAllowedAt = 0;
+let recentSessionTimestamps: number[] = [];
 
 export function resetNewSessionPacing(): void {
   const capacity = Number(process.env.M365_SESSION_BUCKET_CAPACITY ?? 10);
   sessionTokens = capacity;
   lastTokenRefillAt = Date.now();
   nextNewSessionAllowedAt = 0;
+  recentSessionTimestamps = [];
+}
+
+export function getStaggerQueueInternalState(): {
+  sessionTokens: number;
+  lastTokenRefillAt: number;
+  nextNewSessionAllowedAt: number;
+  recentSessionTimestamps: number[];
+} {
+  return {
+    sessionTokens,
+    lastTokenRefillAt,
+    nextNewSessionAllowedAt,
+    recentSessionTimestamps: [...recentSessionTimestamps],
+  };
+}
+
+export function setStaggerQueueInternalState(state: {
+  sessionTokens?: number;
+  lastTokenRefillAt?: number;
+  nextNewSessionAllowedAt?: number;
+  recentSessionTimestamps?: number[];
+}): void {
+  if (typeof state.sessionTokens === "number") sessionTokens = state.sessionTokens;
+  if (typeof state.lastTokenRefillAt === "number") lastTokenRefillAt = state.lastTokenRefillAt;
+  if (typeof state.nextNewSessionAllowedAt === "number") nextNewSessionAllowedAt = state.nextNewSessionAllowedAt;
+  if (Array.isArray(state.recentSessionTimestamps)) recentSessionTimestamps = [...state.recentSessionTimestamps];
+}
+
+export function getStaggerQueueState(): {
+  delayMs: number;
+  sessionTokens: number;
+  tokenCapacity: number;
+  minSpacingMs: number;
+} {
+  const capacity = Number(process.env.M365_SESSION_BUCKET_CAPACITY ?? 10);
+  const refillMs = Number(process.env.M365_SESSION_REFILL_MS ?? 150_000);
+  const minSpacingMs = Number(process.env.M365_NEW_SESSION_SPACING_MS ?? 15_000);
+
+  const now = Date.now();
+  let currentTokens = sessionTokens;
+  if (refillMs > 0 && capacity > 0) {
+    const elapsed = now - lastTokenRefillAt;
+    const tokensToAdd = Math.floor(elapsed / refillMs);
+    if (tokensToAdd > 0) {
+      currentTokens = Math.min(capacity, currentTokens + tokensToAdd);
+    }
+  }
+
+  let tokenWaitMs = 0;
+  if (capacity > 0 && refillMs > 0 && currentTokens < 1) {
+    const timeToNext = refillMs - (now - lastTokenRefillAt);
+    tokenWaitMs = Math.max(0, timeToNext);
+  }
+
+  const earliestDispatch = now + tokenWaitMs;
+  const scheduledAt = Math.max(earliestDispatch, nextNewSessionAllowedAt);
+  const delayMs = Math.max(0, scheduledAt - now);
+
+  return {
+    delayMs,
+    sessionTokens: currentTokens,
+    tokenCapacity: capacity,
+    minSpacingMs,
+  };
 }
 
 export async function paceNewSessionStart(signal?: AbortSignal): Promise<number> {
@@ -223,9 +325,17 @@ export async function paceNewSessionStart(signal?: AbortSignal): Promise<number>
   const refillMs = Number(process.env.M365_SESSION_REFILL_MS ?? 150_000);
   const minSpacingMs = Number(process.env.M365_NEW_SESSION_SPACING_MS ?? 15_000);
 
-  if (capacity <= 0 && minSpacingMs <= 0) return 0;
-
   const now = Date.now();
+  recentSessionTimestamps.push(now);
+  const sustainedWindowMs = Number(process.env.M365_SUSTAINED_WINDOW_MS ?? 3_600_000);
+  recentSessionTimestamps = recentSessionTimestamps.filter((t) => now - t < sustainedWindowMs);
+  scheduleStateSave();
+
+  if (capacity <= 0 && minSpacingMs <= 0) {
+    recordNewSession(now, 0);
+    return 0;
+  }
+
   if (refillMs > 0 && capacity > 0) {
     const elapsed = now - lastTokenRefillAt;
     const tokensToAdd = Math.floor(elapsed / refillMs);
@@ -250,6 +360,8 @@ export async function paceNewSessionStart(signal?: AbortSignal): Promise<number>
   const scheduledAt = Math.max(earliestDispatch, nextNewSessionAllowedAt);
   nextNewSessionAllowedAt = scheduledAt + Math.max(0, minSpacingMs);
   const totalDelayMs = scheduledAt - now;
+
+  recordNewSession(now, totalDelayMs);
 
   if (totalDelayMs > 0) {
     if (tokenWaitMs > 0) {
@@ -283,25 +395,54 @@ export function resetTurnVelocityPacing(): void {
   recentTurnTimestamps = [];
 }
 
-export async function paceTurnVelocity(signal?: AbortSignal): Promise<number> {
+export function getRecentTurnTimestamps(): number[] {
+  return [...recentTurnTimestamps];
+}
+
+export function setRecentTurnTimestamps(ts: number[]): void {
+  recentTurnTimestamps = [...ts];
+}
+
+export function getGovernorState(): {
+  tenMinute: {
+    turns: number;
+    maxTurns: number;
+    softTurns: number;
+    freshSessions: number;
+    dangerSessions: number;
+    currentDelayMs: number;
+    status: "safe" | "guarded" | "danger";
+  };
+  sixtyMinute: {
+    turns: number;
+    maxTurns: number;
+    warnTurns: number;
+    freshSessions: number;
+    dangerSessions: number;
+    currentDelayMs: number;
+    status: "safe" | "guarded" | "danger";
+  };
+} {
   const burstWindowMs = Number(process.env.M365_BURST_WINDOW_MS ?? 600_000); // 10 minutes
   const burstMax = Number(process.env.M365_BURST_MAX_TURNS ?? 35);
-  const burstSoft = Math.max(1, burstMax - 5); // 30 turns
+  const burstSoft = Number(process.env.M365_BURST_SOFT_TURNS ?? Math.max(1, burstMax - 5));
 
   const sustainedWindowMs = Number(process.env.M365_SUSTAINED_WINDOW_MS ?? 3_600_000); // 60 minutes
   const sustainedMax = Number(process.env.M365_SUSTAINED_MAX_TURNS ?? 120);
   const sustainedWarn = Number(process.env.M365_SUSTAINED_WARN_TURNS ?? 90);
 
-  if (burstMax <= 0 && sustainedMax <= 0) return 0;
+  const dangerSessions10m = Number(process.env.M365_10M_DANGER_SESSIONS ?? 15);
+  const dangerSessions60m = Number(process.env.M365_60M_DANGER_SESSIONS ?? 50);
 
   const now = Date.now();
   // Evict entries older than the longest window (sustained 60m)
   recentTurnTimestamps = recentTurnTimestamps.filter((t) => now - t < sustainedWindowMs);
 
-  // Count entries in each horizon
   const burstEntries = recentTurnTimestamps.filter((t) => now - t < burstWindowMs);
-  const burstCount = burstEntries.length;
-  const sustainedCount = recentTurnTimestamps.length;
+  const metricTurns10m = getTurnsInWindow(burstWindowMs, now);
+  const metricTurns60m = getTurnsInWindow(sustainedWindowMs, now);
+  const burstCount = Math.max(burstEntries.length, metricTurns10m);
+  const sustainedCount = Math.max(recentTurnTimestamps.length, metricTurns60m);
 
   let burstDelayMs = 0;
   if (burstMax > 0 && burstWindowMs > 0) {
@@ -309,7 +450,6 @@ export async function paceTurnVelocity(signal?: AbortSignal): Promise<number> {
       const oldestBurst = burstEntries[burstEntries.length - burstMax];
       burstDelayMs = Math.max(1000, (oldestBurst + burstWindowMs) - now);
     } else if (burstCount >= burstSoft) {
-      // Soft elastic spacing: 3s per turn over burstSoft (3s, 6s, 9s, 12s, 15s)
       const excess = burstCount - burstSoft + 1;
       burstDelayMs = excess * 3000;
     }
@@ -321,6 +461,96 @@ export async function paceTurnVelocity(signal?: AbortSignal): Promise<number> {
       const oldestSustained = recentTurnTimestamps[recentTurnTimestamps.length - sustainedMax];
       sustainedDelayMs = Math.max(1000, (oldestSustained + sustainedWindowMs) - now);
     } else if (sustainedCount >= sustainedWarn) {
+      const progress = (sustainedCount - sustainedWarn + 1) / (sustainedMax - sustainedWarn);
+      sustainedDelayMs = Math.round(5000 + Math.min(1, progress) * 20000);
+    }
+  }
+
+  const freshSessions10m = getNewSessionsInWindow(burstWindowMs, now);
+  const freshSessions60m = getNewSessionsInWindow(sustainedWindowMs, now);
+
+  const is10mDanger = burstCount >= burstMax || freshSessions10m >= dangerSessions10m;
+  const is10mGuarded =
+    !is10mDanger &&
+    (burstCount >= burstSoft || burstDelayMs > 0 || freshSessions10m >= Math.max(1, dangerSessions10m - 5));
+  const status10m: "safe" | "guarded" | "danger" = is10mDanger ? "danger" : is10mGuarded ? "guarded" : "safe";
+
+  const is60mDanger = sustainedCount >= sustainedMax || freshSessions60m >= dangerSessions60m;
+  const is60mGuarded =
+    !is60mDanger &&
+    (sustainedCount >= sustainedWarn || sustainedDelayMs > 0 || freshSessions60m >= Math.max(1, dangerSessions60m - 15));
+  const status60m: "safe" | "guarded" | "danger" = is60mDanger ? "danger" : is60mGuarded ? "guarded" : "safe";
+
+  return {
+    tenMinute: {
+      turns: burstCount,
+      maxTurns: burstMax,
+      softTurns: burstSoft,
+      freshSessions: freshSessions10m,
+      dangerSessions: dangerSessions10m,
+      currentDelayMs: burstDelayMs,
+      status: status10m,
+    },
+    sixtyMinute: {
+      turns: sustainedCount,
+      maxTurns: sustainedMax,
+      warnTurns: sustainedWarn,
+      freshSessions: freshSessions60m,
+      dangerSessions: dangerSessions60m,
+      currentDelayMs: sustainedDelayMs,
+      status: status60m,
+    },
+  };
+}
+
+export async function paceTurnVelocity(signal?: AbortSignal): Promise<number> {
+  const burstWindowMs = Number(process.env.M365_BURST_WINDOW_MS ?? 600_000); // 10 minutes
+  const burstMax = Number(process.env.M365_BURST_MAX_TURNS ?? 35);
+  const burstSoft = Number(process.env.M365_BURST_SOFT_TURNS ?? Math.max(1, burstMax - 5));
+
+  const sustainedWindowMs = Number(process.env.M365_SUSTAINED_WINDOW_MS ?? 3_600_000); // 60 minutes
+  const sustainedMax = Number(process.env.M365_SUSTAINED_MAX_TURNS ?? 120);
+  const sustainedWarn = Number(process.env.M365_SUSTAINED_WARN_TURNS ?? 90);
+
+  const now = Date.now();
+  if (burstMax <= 0 && sustainedMax <= 0) {
+    recordTurn(now, 0);
+    recentTurnTimestamps.push(now);
+    return 0;
+  }
+
+  // Evict entries older than the longest window (sustained 60m)
+  recentTurnTimestamps = recentTurnTimestamps.filter((t) => now - t < sustainedWindowMs);
+
+  // Count entries in each horizon
+  const burstEntries = recentTurnTimestamps.filter((t) => now - t < burstWindowMs);
+  const burstCount = burstEntries.length;
+  const sustainedCount = recentTurnTimestamps.length;
+
+  let burstDelayMs = 0;
+  if (burstMax > 0 && burstWindowMs > 0) {
+    if (burstCount >= burstMax) {
+      const oldestBurst =
+        burstEntries.length >= burstMax
+          ? burstEntries[burstEntries.length - burstMax]
+          : (now - burstWindowMs + 1000);
+      burstDelayMs = Math.max(1000, (oldestBurst + burstWindowMs) - now);
+    } else if (burstCount >= burstSoft) {
+      // Soft elastic spacing: 3s per turn over burstSoft (3s, 6s, 9s, 12s, 15s)
+      const excess = burstCount - burstSoft + 1;
+      burstDelayMs = excess * 3000;
+    }
+  }
+
+  let sustainedDelayMs = 0;
+  if (sustainedMax > 0 && sustainedWindowMs > 0) {
+    if (sustainedCount >= sustainedMax) {
+      const oldestSustained =
+        recentTurnTimestamps.length >= sustainedMax
+          ? recentTurnTimestamps[recentTurnTimestamps.length - sustainedMax]
+          : (now - sustainedWindowMs + 1000);
+      sustainedDelayMs = Math.max(1000, (oldestSustained + sustainedWindowMs) - now);
+    } else if (sustainedCount >= sustainedWarn) {
       // Graduated resistance: 5s to 25s scaling linearly from sustainedWarn (90) to sustainedMax (120)
       const progress = (sustainedCount - sustainedWarn + 1) / (sustainedMax - sustainedWarn);
       sustainedDelayMs = Math.round(5000 + Math.min(1, progress) * 20000);
@@ -328,6 +558,7 @@ export async function paceTurnVelocity(signal?: AbortSignal): Promise<number> {
   }
 
   const delayMs = Math.max(burstDelayMs, sustainedDelayMs);
+  recordTurn(now, delayMs);
 
   if (delayMs > 0) {
     log.info(`Velocity governor active: ${burstCount}/${burstMax} (10m), ${sustainedCount}/${sustainedMax} (60m) — progressive pacing by ${(delayMs / 1000).toFixed(1)}s`);
@@ -349,6 +580,7 @@ export async function paceTurnVelocity(signal?: AbortSignal): Promise<number> {
   }
 
   recentTurnTimestamps.push(Date.now());
+  scheduleStateSave();
   return delayMs;
 }
 
@@ -465,17 +697,23 @@ export async function handleChatCompletion(
     if (turn === 0 && isFirst && !sessionPaced) {
       sessionPaced = true;
       try {
+        conv.status = "stagger";
         await paceNewSessionStart(opts.signal);
       } catch (err: any) {
+        conv.status = "idle";
         return { error: jsonResponse(499, { error: { message: err.message, type: "client_closed_request" } }) };
       }
     }
 
     try {
+      conv.status = "governor";
       await paceTurnVelocity(opts.signal);
     } catch (err: any) {
+      conv.status = "idle";
       return { error: jsonResponse(499, { error: { message: err.message, type: "client_closed_request" } }) };
     }
+
+    conv.status = "streaming";
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       let copilotStream;
@@ -523,6 +761,7 @@ export async function handleChatCompletion(
       lastTurnCount = copilotStream.turnCount;
 
       if (copilotStream.isThrottled) {
+        recordThrottle(Date.now());
         const errCode = copilotStream.result?.errorCode ?? copilotStream.result?.value ?? "Throttled";
         const throttleSec =
           errCode === "PerUserThrottled"
@@ -631,8 +870,9 @@ export async function handleChatCompletion(
   // caller). Tool mode ignores it: the raw text is parsed for tool-call fences and
   // can't be shown verbatim, so it stays fully buffered.
   async function produce(onDelta?: (delta: string) => void): Promise<Produced> {
-  // When tools are present, buffer full response to detect tool calls
-  if (hasTools) {
+    try {
+      // When tools are present, buffer full response to detect tool calls
+      if (hasTools) {
     const result = await runBuffered();
     if ("error" in result) return { kind: "error", resp: result.error };
     conv.sentMessageCount = body.messages.length;
@@ -818,6 +1058,9 @@ export async function handleChatCompletion(
     if ("error" in result) return { kind: "error", resp: result.error };
     conv.sentMessageCount = body.messages.length;
     return { kind: "text", text: result.fullText };
+  }
+  } finally {
+    conv.status = "idle";
   }
   } // end produce()
 
