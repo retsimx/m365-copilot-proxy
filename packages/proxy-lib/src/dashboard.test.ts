@@ -81,14 +81,30 @@ describe("Web Dashboard & Telemetry API", () => {
       expect(html).toContain('id="queueBar"');
     });
 
-    it("contains historical timeline with pure SVG chart and range toggles", () => {
+    it("contains historical timeline with pure SVG chart and view/range toggles", () => {
       const html = getDashboardHtml();
       expect(html).toContain("Historical Timeline &amp; Risk Zones");
+
+      // View mode toggle buttons
+      expect(html).toContain('id="viewSplitBtn"');
+      expect(html).toContain('id="viewCombinedBtn"');
+      expect(html).toContain("view-toggle");
+      expect(html).toContain("range-toggle");
+
+      // Range selector buttons
       expect(html).toContain('data-range="1h"');
       expect(html).toContain('data-range="6h"');
       expect(html).toContain('data-range="24h"');
+
+      // SVG charts for Split View and Combined View
+      expect(html).toContain('id="chartSvgTurns"');
+      expect(html).toContain('id="chartSvgSessions"');
       expect(html).toContain('id="chartSvg"');
+      expect(html).toContain('id="splitViewContainer"');
+      expect(html).toContain('id="combinedViewContainer"');
       expect(html).toContain('id="chartTooltip"');
+
+      // Legend items
       expect(html).toContain("Turns Filled Area");
       expect(html).toContain("New Sessions (Turn 0)");
       expect(html).toContain("Throttle Event (PerScenarioThrottled)");
@@ -142,7 +158,7 @@ describe("Web Dashboard & Telemetry API", () => {
       expect(html).toContain("cfg.throttleCooldownSec");
     });
 
-    it("renders dual independent scaled axes and cumulative rolling 10-minute velocity components", () => {
+    it("renders zero-bleed inside-plot zone badges, clean numeric ticks, and synchronized split crosshairs", () => {
       const html = getDashboardHtml();
       // Timeline header with cumulative rolling velocity
       expect(html).toContain("Cumulative Rolling 10-Minute Velocity (Upstream Sliding Window)");
@@ -155,22 +171,45 @@ describe("Web Dashboard & Telemetry API", () => {
       // SVG dual-axis mapping functions and logic
       expect(html).toContain("points[i].rolling10mTurns = rTurns");
       expect(html).toContain("points[i].rolling10mSessions = rSessions");
-      expect(html).toContain("getYTurn(val)");
-      expect(html).toContain("getYSession(val)");
+      expect(html).toContain("getYTurnSplit(val)");
+      expect(html).toContain("getYSessionSplit(val)");
+      expect(html).toContain("getYTurnComb(val)");
+      expect(html).toContain("getYSessionComb(val)");
       expect(html).toContain("pinnedMaxTurns");
       expect(html).toContain("pinnedMaxSessions");
 
-      // Ticks and column headers
-      expect(html).toContain("(Burst Max)");
-      expect(html).toContain("(Burst Warn)");
-      expect(html).toContain("(Session Danger)");
+      // Zone badges positioned inside plot area with dark pill background
+      expect(html).toContain("renderZoneBadge(x, y, text, color)");
+      expect(html).toContain("🔴 DANGER (≥");
+      expect(html).toContain("🟡 GUARDED (");
+      expect(html).toContain("🟢 SAFE (0-");
+      expect(html).toContain('text-anchor="end"');
+
+      // Ticks are pure numbers without text bleed
+      expect(html).toContain("splitPadL - 8");
+      expect(html).toContain("combPadL - 8");
+      expect(html).toContain("combPadL + combPlotW + 8");
+      expect(html).not.toContain("val + \" (Burst Max)\"");
+      expect(html).not.toContain("val + \" (Session Danger)\"");
+
+      // Column headers
       expect(html).toContain("TURNS (10m · max");
       expect(html).toContain("SESSIONS (10m · max");
+
+      // Synchronized crosshairs and hover dots on both split charts
+      expect(html).toContain('id="crosshairTurn"');
+      expect(html).toContain('id="crosshairSession"');
+      expect(html).toContain('id="dotTurn"');
+      expect(html).toContain('id="dotSession"');
+      expect(html).toContain("handleSplitPointer(evt, activeSvg)");
 
       // Tooltip items
       expect(html).toContain("Rolling 10m Turns:");
       expect(html).toContain("Rolling 10m Sessions:");
       expect(html).toContain("Discrete 1m Delta:");
+
+      // View mode persistence
+      expect(html).toContain("proxy_dashboard_view_mode");
     });
   });
 

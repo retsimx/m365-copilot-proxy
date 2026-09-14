@@ -409,6 +409,52 @@ export function getDashboardHtml(): string {
       gap: 0.5rem;
     }
 
+    .chart-controls {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+    }
+
+    .btn-group {
+      display: flex;
+      background: #0f172a;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 3px;
+      gap: 3px;
+    }
+
+    .btn {
+      background: transparent;
+      border: none;
+      color: var(--text-dim);
+      padding: 0.35rem 0.85rem;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+    }
+
+    .btn-sm {
+      padding: 0.25rem 0.65rem;
+      font-size: 0.775rem;
+    }
+
+    .btn:hover {
+      color: var(--text-main);
+    }
+
+    .btn.active {
+      background: var(--card-header);
+      color: var(--cyan);
+      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+    }
+
     .range-selector {
       display: flex;
       background: #0f172a;
@@ -442,14 +488,78 @@ export function getDashboardHtml(): string {
 
     .chart-container {
       width: 100%;
-      height: 280px;
+      position: relative;
+      overflow: hidden;
+      border-radius: 8px;
+    }
+
+    .split-view-container {
+      display: flex;
+      flex-direction: column;
+      gap: 0.85rem;
+      width: 100%;
+    }
+
+    .split-chart-pane {
+      background: rgba(15, 23, 42, 0.45);
+      border: 1px solid rgba(35, 47, 69, 0.55);
+      border-radius: 8px;
+      padding: 0.5rem 0.65rem 0.35rem;
+      position: relative;
+    }
+
+    .split-chart-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.25rem;
+      padding: 0 0.4rem;
+      font-size: 0.775rem;
+    }
+
+    .split-chart-title {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .split-chart-tag {
+      font-weight: 700;
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      letter-spacing: 0.03em;
+    }
+
+    .split-chart-desc {
+      font-size: 0.725rem;
+      color: var(--text-dim);
+    }
+
+    .split-chart-axis-info {
+      font-size: 0.725rem;
+      font-family: var(--font-mono);
+      color: var(--text-muted);
+    }
+
+    .split-svg-wrap {
+      width: 100%;
+      height: 150px;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .combined-view-container {
+      width: 100%;
+      height: 240px;
+      overflow: hidden;
       position: relative;
     }
 
     .chart-svg {
       width: 100%;
       height: 100%;
-      overflow: visible;
+      overflow: hidden;
+      display: block;
     }
 
     .chart-legend {
@@ -833,15 +943,51 @@ export function getDashboardHtml(): string {
             Displays the rolling 10m load evaluated by Microsoft's leaky bucket limiters at each point in time.
           </div>
         </div>
-        <div class="range-selector">
-          <button class="range-btn active" data-range="1h">1 Hour</button>
-          <button class="range-btn" data-range="6h">6 Hours</button>
-          <button class="range-btn" data-range="24h">24 Hours</button>
+        <div class="chart-controls">
+          <div class="btn-group view-toggle">
+            <button class="btn btn-sm active" id="viewSplitBtn" title="Split into dedicated synchronized charts for Turns and Sessions">⊞ Split View</button>
+            <button class="btn btn-sm" id="viewCombinedBtn" title="Composite both series onto one dual-axis chart">⊡ Combined</button>
+          </div>
+          <div class="btn-group range-toggle">
+            <button class="btn btn-sm active" data-range="1h">1h</button>
+            <button class="btn btn-sm" data-range="6h">6h</button>
+            <button class="btn btn-sm" data-range="24h">24h</button>
+          </div>
         </div>
       </div>
 
       <div class="chart-container" id="chartWrapper">
-        <svg class="chart-svg" id="chartSvg" preserveAspectRatio="none" viewBox="0 0 1000 240"></svg>
+        <div id="splitViewContainer" class="split-view-container">
+          <div class="split-chart-pane">
+            <div class="split-chart-header">
+              <div class="split-chart-title">
+                <span class="split-chart-tag" style="color: var(--cyan);">◀ TURNS</span>
+                <span class="split-chart-desc">Rolling 10m Velocity · Leaky Bucket Burst Horizon</span>
+              </div>
+              <span id="splitTurnsCeiling" class="split-chart-axis-info">Left Axis: 0-40</span>
+            </div>
+            <div class="split-svg-wrap">
+              <svg class="chart-svg" id="chartSvgTurns" preserveAspectRatio="none" viewBox="0 0 1000 150"></svg>
+            </div>
+          </div>
+          <div class="split-chart-pane">
+            <div class="split-chart-header">
+              <div class="split-chart-title">
+                <span class="split-chart-tag" style="color: var(--amber);">◀ FRESH SESSIONS</span>
+                <span class="split-chart-desc">Turn 0 Handshake Rate · New Session Stagger Rate</span>
+              </div>
+              <span id="splitSessionsCeiling" class="split-chart-axis-info">Left Axis: 0-20</span>
+            </div>
+            <div class="split-svg-wrap">
+              <svg class="chart-svg" id="chartSvgSessions" preserveAspectRatio="none" viewBox="0 0 1000 150"></svg>
+            </div>
+          </div>
+        </div>
+
+        <div id="combinedViewContainer" class="combined-view-container" style="display: none;">
+          <svg class="chart-svg" id="chartSvg" preserveAspectRatio="none" viewBox="0 0 1000 240"></svg>
+        </div>
+
         <div class="chart-tooltip" id="chartTooltip"></div>
       </div>
 
@@ -1040,8 +1186,56 @@ export function getDashboardHtml(): string {
       const sessionsTableBody = document.getElementById("sessionsTableBody");
 
       const chartSvg = document.getElementById("chartSvg");
+      const chartSvgTurns = document.getElementById("chartSvgTurns");
+      const chartSvgSessions = document.getElementById("chartSvgSessions");
       const chartTooltip = document.getElementById("chartTooltip");
       const chartWrapper = document.getElementById("chartWrapper");
+      const splitViewContainer = document.getElementById("splitViewContainer");
+      const combinedViewContainer = document.getElementById("combinedViewContainer");
+      const viewSplitBtn = document.getElementById("viewSplitBtn");
+      const viewCombinedBtn = document.getElementById("viewCombinedBtn");
+
+      let lastMetricsData = null;
+      let viewMode = "split";
+      try {
+        const savedView = localStorage.getItem("proxy_dashboard_view_mode");
+        if (savedView === "combined" || savedView === "split") {
+          viewMode = savedView;
+        }
+      } catch (e) {}
+
+      function applyViewMode() {
+        if (viewMode === "split") {
+          if (viewSplitBtn) viewSplitBtn.classList.add("active");
+          if (viewCombinedBtn) viewCombinedBtn.classList.remove("active");
+          if (splitViewContainer) splitViewContainer.style.display = "flex";
+          if (combinedViewContainer) combinedViewContainer.style.display = "none";
+        } else {
+          if (viewSplitBtn) viewSplitBtn.classList.remove("active");
+          if (viewCombinedBtn) viewCombinedBtn.classList.add("active");
+          if (splitViewContainer) splitViewContainer.style.display = "none";
+          if (combinedViewContainer) combinedViewContainer.style.display = "block";
+        }
+      }
+
+      applyViewMode();
+
+      if (viewSplitBtn) {
+        viewSplitBtn.addEventListener("click", function () {
+          viewMode = "split";
+          try { localStorage.setItem("proxy_dashboard_view_mode", "split"); } catch (e) {}
+          applyViewMode();
+          if (lastMetricsData) renderSvgChart(lastMetricsData);
+        });
+      }
+      if (viewCombinedBtn) {
+        viewCombinedBtn.addEventListener("click", function () {
+          viewMode = "combined";
+          try { localStorage.setItem("proxy_dashboard_view_mode", "combined"); } catch (e) {}
+          applyViewMode();
+          if (lastMetricsData) renderSvgChart(lastMetricsData);
+        });
+      }
 
       // Setup Accordion toggles
       document.querySelectorAll(".accordion-toggle").forEach(function (btn) {
@@ -1052,9 +1246,9 @@ export function getDashboardHtml(): string {
       });
 
       // Setup Range Selector buttons
-      document.querySelectorAll(".range-btn").forEach(function (btn) {
+      document.querySelectorAll(".range-toggle button, .range-btn, [data-range]").forEach(function (btn) {
         btn.addEventListener("click", function () {
-          document.querySelectorAll(".range-btn").forEach(function (b) { b.classList.remove("active"); });
+          document.querySelectorAll(".range-toggle button, .range-btn, [data-range]").forEach(function (b) { b.classList.remove("active"); });
           this.classList.add("active");
           selectedRange = this.getAttribute("data-range");
           fetchMetrics();
@@ -1335,6 +1529,7 @@ export function getDashboardHtml(): string {
           });
         }
 
+        lastMetricsData = data;
         // 7. Render Pure SVG Chart
         renderSvgChart(data);
       }
@@ -1366,17 +1561,6 @@ export function getDashboardHtml(): string {
           points[i].rolling10mSessions = rSessions;
         }
 
-        const svgW = 1000;
-        const svgH = 240;
-        const padL = 54;
-        const padR = 52;
-        const padT = 24;
-        const padB = 26;
-        const plotW = svgW - padL - padR;
-        const plotH = svgH - padT - padB;
-        const yZero = padT + plotH;
-
-        // 2. Dual Independent Pinned Scales
         // Left Axis: Turns (Cyan)
         const burstMax = cfg.burstMaxTurns || 35;
         const burstSoft = cfg.burstSoftTurns || Math.max(1, burstMax - 5); // 30
@@ -1399,177 +1583,31 @@ export function getDashboardHtml(): string {
         }
         const maxSessionsY = Math.max(pinnedMaxSessions, Math.ceil(maxObservedSessions * 1.1));
 
-        // Update dynamic legend labels
+        // Dynamic legend & subtitle labels
         const legendTurns = document.getElementById("legendTurnsLabel");
         if (legendTurns) legendTurns.textContent = "Turns Filled Area (Left Axis: 0-" + maxTurnsY + ")";
         const legendSessions = document.getElementById("legendSessionsLabel");
         if (legendSessions) legendSessions.textContent = "New Sessions (Turn 0) · Right Axis: 0-" + maxSessionsY + ")";
+        const splitTurnsCeil = document.getElementById("splitTurnsCeiling");
+        if (splitTurnsCeil) splitTurnsCeil.textContent = "Left Axis: 0-" + maxTurnsY + " · Leaky Bucket Burst Ceiling";
+        const splitSessionsCeil = document.getElementById("splitSessionsCeiling");
+        if (splitSessionsCeil) splitSessionsCeil.textContent = "Left Axis: 0-" + maxSessionsY + " · Handshake Rate Limit";
 
-        function getX(index) {
-          if (points.length <= 1) return padL;
-          return padL + (index / (points.length - 1)) * plotW;
+        // Zone Badge Helper: Positions badges strictly INSIDE the plot area with safe margin and dark pill
+        function renderZoneBadge(x, y, text, color) {
+          const charCount = text.length;
+          const pillW = charCount * 6.2 + 12;
+          const pillH = 16;
+          const pillX = x - pillW;
+          const pillY = y - 11;
+          return '<g class="zone-badge" pointer-events="none">' +
+            '<rect x="' + pillX + '" y="' + pillY + '" width="' + pillW + '" height="' + pillH + '" rx="3" fill="rgba(15, 23, 42, 0.72)" stroke="' + color + '" stroke-opacity="0.25" stroke-width="0.5" />' +
+            '<text x="' + (x - 6) + '" y="' + y + '" fill="' + color + '" font-size="9" font-family="monospace" font-weight="600" text-anchor="end">' + text + '</text>' +
+          '</g>';
         }
 
-        function getYTurn(val) {
-          const clamped = Math.min(val, maxTurnsY);
-          return padT + plotH - (clamped / maxTurnsY) * plotH;
-        }
-
-        function getYSession(val) {
-          const clamped = Math.min(val, maxSessionsY);
-          return padT + plotH - (clamped / maxSessionsY) * plotH;
-        }
-
-        let svgContent = '';
-
-        // Definitions: Gradients and Markers
-        svgContent += '<defs>' +
-          '<linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">' +
-            '<stop offset="0%" stop-color="#06b6d4" stop-opacity="0.35"/>' +
-            '<stop offset="100%" stop-color="#06b6d4" stop-opacity="0.02"/>' +
-          '</linearGradient>' +
-          '<filter id="glow" x="-20%" y="-20%" width="140%" height="140%">' +
-            '<feDropShadow dx="0" dy="0" stdDeviation="3" flood-color="#a855f7" flood-opacity="0.8"/>' +
-          '</filter>' +
-        '</defs>';
-
-        // 3. Aligned Background Risk Zones (Based on Left Turn Horizon)
-        const yBurstSoft = getYTurn(burstSoft);
-        const yBurstMax = getYTurn(burstMax);
-
-        // Safe Zone (0 to burstSoft)
-        const safeH = Math.max(0, yZero - yBurstSoft);
-        svgContent += '<rect x="' + padL + '" y="' + yBurstSoft + '" width="' + plotW + '" height="' + safeH + '" fill="rgba(16, 185, 129, 0.05)" />';
-
-        // Guarded Zone (burstSoft to burstMax)
-        const guardedH = Math.max(0, yBurstSoft - yBurstMax);
-        svgContent += '<rect x="' + padL + '" y="' + yBurstMax + '" width="' + plotW + '" height="' + guardedH + '" fill="rgba(245, 158, 11, 0.07)" />';
-
-        // Danger Zone (burstMax to maxTurnsY)
-        const dangerH = Math.max(0, yBurstMax - padT);
-        svgContent += '<rect x="' + padL + '" y="' + padT + '" width="' + plotW + '" height="' + dangerH + '" fill="rgba(244, 63, 94, 0.09)" />';
-
-        // 4. Horizontal Gridlines & Left Axis Ticks (Turns - Cyan)
-        const leftTicks = [0, 15, burstSoft, burstMax, maxTurnsY];
-        const uniqueLeftTicks = Array.from(new Set(leftTicks)).sort(function (a, b) { return a - b; });
-        for (let i = 0; i < uniqueLeftTicks.length; i++) {
-          const val = uniqueLeftTicks[i];
-          const y = getYTurn(val);
-          svgContent += '<line x1="' + padL + '" y1="' + y + '" x2="' + (padL + plotW) + '" y2="' + y + '" stroke="rgba(35, 47, 69, 0.45)" stroke-dasharray="3,3" />';
-          let labelText = String(val);
-          let labelFill = "var(--text-dim)";
-          if (val === burstMax) { labelText = val + " (Burst Max)"; labelFill = "var(--rose)"; }
-          else if (val === burstSoft) { labelText = val + " (Burst Warn)"; labelFill = "var(--amber)"; }
-          else if (val === 15) { labelText = "15"; labelFill = "var(--text-dim)"; }
-          else if (val === maxTurnsY) { labelText = maxTurnsY === pinnedMaxTurns ? val + " (Pinned Ceiling)" : val + " (Ceiling)"; labelFill = "var(--cyan)"; }
-          svgContent += '<text x="' + (padL - 6) + '" y="' + (y + 3) + '" fill="' + labelFill + '" font-size="10" font-family="monospace" text-anchor="end">' + labelText + '</text>';
-        }
-
-        // 5. Right Axis Ticks (Fresh Sessions - Amber)
-        const rightTicks = [0, 5, warnSessions, dangerSessions, maxSessionsY];
-        const uniqueRightTicks = Array.from(new Set(rightTicks)).sort(function (a, b) { return a - b; });
-        for (let i = 0; i < uniqueRightTicks.length; i++) {
-          const val = uniqueRightTicks[i];
-          const y = getYSession(val);
-          svgContent += '<line x1="' + (padL + plotW) + '" y1="' + y + '" x2="' + (padL + plotW + 4) + '" y2="' + y + '" stroke="rgba(245, 158, 11, 0.4)" stroke-width="1" />';
-          let labelText = String(val);
-          let labelFill = "var(--text-dim)";
-          if (val === dangerSessions) { labelText = val + " (Session Danger)"; labelFill = "var(--rose)"; }
-          else if (val === warnSessions) { labelText = val + " (Warn)"; labelFill = "var(--amber)"; }
-          else if (val === maxSessionsY) { labelText = maxSessionsY === pinnedMaxSessions ? val + " (Pinned)" : val + " (Ceiling)"; labelFill = "var(--amber)"; }
-          svgContent += '<text x="' + (padL + plotW + 6) + '" y="' + (y + 3) + '" fill="' + labelFill + '" font-size="10" font-family="monospace" text-anchor="start">' + labelText + '</text>';
-        }
-
-        // Axis Column Headers
-        svgContent += '<text x="' + padL + '" y="' + (padT - 8) + '" fill="var(--cyan)" font-size="9.5" font-family="monospace" font-weight="600" text-anchor="start">◀ TURNS (10m · max ' + maxTurnsY + ')</text>';
-        svgContent += '<text x="' + (padL + plotW) + '" y="' + (padT - 8) + '" fill="var(--amber)" font-size="9.5" font-family="monospace" font-weight="600" text-anchor="end">SESSIONS (10m · max ' + maxSessionsY + ') ▶</text>';
-
-        // 6. Turns Filled Area (Cyan, Left Axis)
-        let pathD = 'M ' + getX(0) + ' ' + getYTurn(points[0].rolling10mTurns || 0);
-        for (let i = 1; i < points.length; i++) {
-          pathD += ' L ' + getX(i) + ' ' + getYTurn(points[i].rolling10mTurns || 0);
-        }
-        const areaD = pathD + ' L ' + getX(points.length - 1) + ' ' + yZero + ' L ' + getX(0) + ' ' + yZero + ' Z';
-        svgContent += '<path d="' + areaD + '" fill="url(#areaGrad)" />';
-
-        // 7. Fresh Sessions Vertical Pillar Bars (Amber, Right Axis)
-        const barWidth = Math.max(2.5, (plotW / points.length) * 0.45);
-        for (let i = 0; i < points.length; i++) {
-          const p = points[i];
-          const sVal = p.rolling10mSessions || 0;
-          if (sVal > 0) {
-            const x = getX(i) - barWidth / 2;
-            const y = getYSession(sVal);
-            const h = yZero - y;
-            svgContent += '<rect class="bar-session" data-idx="' + i + '" x="' + x + '" y="' + y + '" width="' + barWidth + '" height="' + h + '" fill="var(--amber)" opacity="0.85" rx="1" />';
-          }
-        }
-
-        // 8. Turns Smooth Area Stroke (Cyan)
-        svgContent += '<path d="' + pathD + '" fill="none" stroke="var(--cyan)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />';
-
-        // 9. Throttle Markers (Purple Lightning Bolt pinned at top of column)
-        for (let i = 0; i < points.length; i++) {
-          const p = points[i];
-          if (p.throttles > 0) {
-            const tx = getX(i);
-            const ty = padT + 2;
-            svgContent += '<line x1="' + tx + '" y1="' + (padT + 12) + '" x2="' + tx + '" y2="' + yZero + '" stroke="var(--purple)" stroke-dasharray="2,2" stroke-width="1" opacity="0.6" />';
-            svgContent += '<g transform="translate(' + (tx - 6) + ',' + ty + ')" filter="url(#glow)">' +
-              '<path d="M7 1L1 8h5l-1 7 7-8H7l1-6z" fill="var(--purple)" stroke="#ffffff" stroke-width="0.75" />' +
-            '</g>';
-          }
-        }
-
-        // 10. Interactive Crosshair & Hover Dots
-        svgContent += '<line id="chartCrosshair" x1="0" y1="' + padT + '" x2="' + yZero + '" stroke="#cbd5e1" stroke-width="1.2" stroke-dasharray="3,3" opacity="0" pointer-events="none" />';
-        svgContent += '<circle id="chartHoverDotTurn" cx="0" cy="0" r="4.5" fill="#ffffff" stroke="var(--cyan)" stroke-width="2.5" opacity="0" pointer-events="none" />';
-        svgContent += '<circle id="chartHoverDotSession" cx="0" cy="0" r="4" fill="#ffffff" stroke="var(--amber)" stroke-width="2.5" opacity="0" pointer-events="none" />';
-
-        // 11. Transparent Overlay for Pointer Events
-        svgContent += '<rect id="chartEventOverlay" x="' + padL + '" y="' + padT + '" width="' + plotW + '" height="' + plotH + '" fill="transparent" pointer-events="all" style="cursor:crosshair;" />';
-
-        chartSvg.innerHTML = svgContent;
-
-        // Attach Mouse Hover Events on Overlay
-        const overlay = document.getElementById("chartEventOverlay");
-        const crosshair = document.getElementById("chartCrosshair");
-        const hoverDotTurn = document.getElementById("chartHoverDotTurn");
-        const hoverDotSession = document.getElementById("chartHoverDotSession");
-
-        function handlePointer(evt) {
-          const rect = chartSvg.getBoundingClientRect();
-          const clientX = evt.clientX || (evt.touches && evt.touches[0] && evt.touches[0].clientX);
-          if (!clientX) return;
-
-          const mouseSvgX = ((clientX - rect.left) / rect.width) * svgW;
-          const clampedX = Math.max(padL, Math.min(padL + plotW, mouseSvgX));
-          const ratio = (clampedX - padL) / plotW;
-          const index = Math.round(ratio * (points.length - 1));
-          const p = points[index];
-          if (!p) return;
-
-          const pointX = getX(index);
-          const turnY = getYTurn(p.rolling10mTurns || 0);
-          const sessionY = getYSession(p.rolling10mSessions || 0);
-
-          crosshair.setAttribute("x1", pointX);
-          crosshair.setAttribute("x2", pointX);
-          crosshair.setAttribute("opacity", "0.85");
-
-          hoverDotTurn.setAttribute("cx", pointX);
-          hoverDotTurn.setAttribute("cy", turnY);
-          hoverDotTurn.setAttribute("opacity", "1");
-
-          if ((p.rolling10mSessions || 0) > 0) {
-            hoverDotSession.setAttribute("cx", pointX);
-            hoverDotSession.setAttribute("cy", sessionY);
-            hoverDotSession.setAttribute("opacity", "1");
-          } else {
-            hoverDotSession.setAttribute("opacity", "0");
-          }
-
-          // Tooltip formatting
+        // Shared Tooltip HTML generator
+        function getTooltipHtml(p) {
           const date = new Date(p.timestamp);
           const timeUtc = date.toISOString().substring(11, 16) + " UTC";
           const timeLocal = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -1590,39 +1628,457 @@ export function getDashboardHtml(): string {
             statusColor = "var(--amber)";
           }
 
-          let tooltipHtml = '<div style="font-weight:700; color:var(--text-main); margin-bottom:6px; font-size:0.8rem;">' + timeLocal + ' (' + timeUtc + ')</div>' +
+          return '<div style="font-weight:700; color:var(--text-main); margin-bottom:6px; font-size:0.8rem;">' + timeLocal + ' (' + timeUtc + ')</div>' +
             '<div style="display:flex; justify-content:space-between; gap:12px; margin-bottom:2px;"><span style="color:var(--cyan);">Rolling 10m Turns:</span><strong>' + rTurns + ' / ' + burstMax + ' max</strong></div>' +
             '<div style="display:flex; justify-content:space-between; gap:12px; margin-bottom:2px;"><span style="color:var(--amber);">Rolling 10m Sessions:</span><strong>' + rSessions + ' / ' + dangerSessions + ' danger</strong></div>' +
             '<div style="font-size:0.72rem; color:var(--text-dim); margin-bottom:4px; padding-left:2px;">(Discrete 1m Delta: +' + iTurns + ' turns, +' + iSessions + ' sessions)</div>' +
             '<div style="display:flex; justify-content:space-between; gap:12px; margin-bottom:2px;"><span style="color:var(--text-dim);">Pacing Delay:</span><strong>' + delaySec + '</strong></div>' +
             (p.throttles > 0 ? '<div style="display:flex; justify-content:space-between; gap:12px; color:var(--purple); margin-bottom:2px;"><span>Throttles:</span><strong>' + p.throttles + ' ⚡</strong></div>' : '') +
             '<div style="display:flex; justify-content:space-between; gap:12px; margin-top:4px; padding-top:4px; border-top:1px solid rgba(255,255,255,0.1);"><span>Status:</span><strong style="color:' + statusColor + ';">' + statusText + '</strong></div>';
+        }
 
-          chartTooltip.innerHTML = tooltipHtml;
-          chartTooltip.style.opacity = "1";
-
-          // Position tooltip relative to container
+        function positionTooltip(clientX, clientY) {
           const wrapperRect = chartWrapper.getBoundingClientRect();
-          const tooltipW = chartTooltip.offsetWidth || 230;
+          const tooltipW = chartTooltip.offsetWidth || 240;
           let leftPx = (clientX - wrapperRect.left) + 14;
           if (leftPx + tooltipW > wrapperRect.width - 10) {
             leftPx = (clientX - wrapperRect.left) - tooltipW - 14;
           }
           chartTooltip.style.left = Math.max(10, leftPx) + "px";
-          chartTooltip.style.top = "15px";
+
+          if (clientY && wrapperRect) {
+            let topPx = (clientY - wrapperRect.top) - 40;
+            if (topPx < 10) topPx = 15;
+            if (topPx + 160 > wrapperRect.height) topPx = Math.max(10, wrapperRect.height - 170);
+            chartTooltip.style.top = topPx + "px";
+          } else {
+            chartTooltip.style.top = "15px";
+          }
         }
 
-        function hidePointer() {
-          crosshair.setAttribute("opacity", "0");
-          hoverDotTurn.setAttribute("opacity", "0");
-          hoverDotSession.setAttribute("opacity", "0");
+        /* -------------------------------------------------------------
+         * PART A: SPLIT VIEW (Stacked Synchronized Charts)
+         * ----------------------------------------------------------- */
+        const splitSvgW = 1000;
+        const splitSvgH = 150;
+        const splitPadL = 56;
+        const splitPadR = 24;
+        const splitPadT = 16;
+        const splitPadB = 22;
+        const splitPlotW = splitSvgW - splitPadL - splitPadR;
+        const splitPlotH = splitSvgH - splitPadT - splitPadB;
+        const splitYZero = splitPadT + splitPlotH;
+
+        function getSplitX(index) {
+          if (points.length <= 1) return splitPadL;
+          return splitPadL + (index / (points.length - 1)) * splitPlotW;
+        }
+
+        function getYTurnSplit(val) {
+          const clamped = Math.min(val, maxTurnsY);
+          return splitPadT + splitPlotH - (clamped / maxTurnsY) * splitPlotH;
+        }
+
+        function getYSessionSplit(val) {
+          const clamped = Math.min(val, maxSessionsY);
+          return splitPadT + splitPlotH - (clamped / maxSessionsY) * splitPlotH;
+        }
+
+        // --- Split Top: Turns ---
+        let svgTurns = '<defs>' +
+          '<linearGradient id="areaGradTurns" x1="0" y1="0" x2="0" y2="1">' +
+            '<stop offset="0%" stop-color="#06b6d4" stop-opacity="0.38"/>' +
+            '<stop offset="100%" stop-color="#06b6d4" stop-opacity="0.02"/>' +
+          '</linearGradient>' +
+        '</defs>';
+
+        const yBurstSoftSplit = getYTurnSplit(burstSoft);
+        const yBurstMaxSplit = getYTurnSplit(burstMax);
+
+        // Risk bands
+        const safeHTurns = Math.max(0, splitYZero - yBurstSoftSplit);
+        svgTurns += '<rect x="' + splitPadL + '" y="' + yBurstSoftSplit + '" width="' + splitPlotW + '" height="' + safeHTurns + '" fill="rgba(16, 185, 129, 0.05)" />';
+        const guardedHTurns = Math.max(0, yBurstSoftSplit - yBurstMaxSplit);
+        svgTurns += '<rect x="' + splitPadL + '" y="' + yBurstMaxSplit + '" width="' + splitPlotW + '" height="' + guardedHTurns + '" fill="rgba(245, 158, 11, 0.07)" />';
+        const dangerHTurns = Math.max(0, yBurstMaxSplit - splitPadT);
+        svgTurns += '<rect x="' + splitPadL + '" y="' + splitPadT + '" width="' + splitPlotW + '" height="' + dangerHTurns + '" fill="rgba(244, 63, 94, 0.09)" />';
+
+        // Inside-plot Zone Badges
+        const badgeXSplit = splitPadL + splitPlotW - 12;
+        svgTurns += renderZoneBadge(badgeXSplit, Math.max(splitPadT + 12, splitPadT + dangerHTurns / 2 + 3.5), '🔴 DANGER (≥' + burstMax + ')', 'var(--rose)');
+        svgTurns += renderZoneBadge(badgeXSplit, yBurstMaxSplit + guardedHTurns / 2 + 3.5, '🟡 GUARDED (' + burstSoft + '-' + (burstMax - 1) + ')', 'var(--amber)');
+        svgTurns += renderZoneBadge(badgeXSplit, yBurstSoftSplit + safeHTurns / 2 + 3.5, '🟢 SAFE (0-' + (burstSoft - 1) + ')', 'var(--emerald)');
+
+        // Gridlines & Clean Numeric Ticks (Zero bleed)
+        const leftTicks = [0, 15, burstSoft, burstMax, maxTurnsY];
+        const uniqueLeftTicks = Array.from(new Set(leftTicks)).sort(function (a, b) { return a - b; });
+        for (let i = 0; i < uniqueLeftTicks.length; i++) {
+          const val = uniqueLeftTicks[i];
+          const y = getYTurnSplit(val);
+          svgTurns += '<line x1="' + splitPadL + '" y1="' + y + '" x2="' + (splitPadL + splitPlotW) + '" y2="' + y + '" stroke="rgba(35, 47, 69, 0.45)" stroke-dasharray="3,3" />';
+          let labelFill = "var(--text-dim)";
+          if (val === burstMax) labelFill = "var(--rose)";
+          else if (val === burstSoft) labelFill = "var(--amber)";
+          else if (val === maxTurnsY) labelFill = "var(--cyan)";
+          svgTurns += '<text x="' + (splitPadL - 8) + '" y="' + (y + 3.5) + '" fill="' + labelFill + '" font-size="10" font-family="monospace" text-anchor="end">' + val + '</text>';
+        }
+
+        // Curves
+        let pathDTurns = 'M ' + getSplitX(0) + ' ' + getYTurnSplit(points[0].rolling10mTurns || 0);
+        for (let i = 1; i < points.length; i++) {
+          pathDTurns += ' L ' + getSplitX(i) + ' ' + getYTurnSplit(points[i].rolling10mTurns || 0);
+        }
+        const areaDTurns = pathDTurns + ' L ' + getSplitX(points.length - 1) + ' ' + splitYZero + ' L ' + getSplitX(0) + ' ' + splitYZero + ' Z';
+        svgTurns += '<path d="' + areaDTurns + '" fill="url(#areaGradTurns)" />';
+        svgTurns += '<path d="' + pathDTurns + '" fill="none" stroke="var(--cyan)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />';
+
+        // Crosshair & Hover Dot
+        svgTurns += '<line id="crosshairTurn" x1="0" y1="' + splitPadT + '" x2="0" y2="' + splitYZero + '" stroke="#cbd5e1" stroke-width="1.2" stroke-dasharray="3,3" opacity="0" pointer-events="none" />';
+        svgTurns += '<circle id="dotTurn" cx="0" cy="0" r="4.5" fill="#ffffff" stroke="var(--cyan)" stroke-width="2.5" opacity="0" pointer-events="none" />';
+        svgTurns += '<rect id="overlayTurns" x="' + splitPadL + '" y="' + splitPadT + '" width="' + splitPlotW + '" height="' + splitPlotH + '" fill="transparent" pointer-events="all" style="cursor:crosshair;" />';
+
+        if (chartSvgTurns) chartSvgTurns.innerHTML = svgTurns;
+
+        // --- Split Bottom: Fresh Sessions ---
+        let svgSessions = '<defs>' +
+          '<linearGradient id="areaGradSessions" x1="0" y1="0" x2="0" y2="1">' +
+            '<stop offset="0%" stop-color="#f59e0b" stop-opacity="0.35"/>' +
+            '<stop offset="100%" stop-color="#f59e0b" stop-opacity="0.02"/>' +
+          '</linearGradient>' +
+          '<filter id="glowSplit" x="-20%" y="-20%" width="140%" height="140%">' +
+            '<feDropShadow dx="0" dy="0" stdDeviation="3" flood-color="#a855f7" flood-opacity="0.8"/>' +
+          '</filter>' +
+        '</defs>';
+
+        const yWarnSplit = getYSessionSplit(warnSessions);
+        const yDangerSplit = getYSessionSplit(dangerSessions);
+
+        // Risk bands
+        const safeHSess = Math.max(0, splitYZero - yWarnSplit);
+        svgSessions += '<rect x="' + splitPadL + '" y="' + yWarnSplit + '" width="' + splitPlotW + '" height="' + safeHSess + '" fill="rgba(16, 185, 129, 0.05)" />';
+        const guardedHSess = Math.max(0, yWarnSplit - yDangerSplit);
+        svgSessions += '<rect x="' + splitPadL + '" y="' + yDangerSplit + '" width="' + splitPlotW + '" height="' + guardedHSess + '" fill="rgba(245, 158, 11, 0.07)" />';
+        const dangerHSess = Math.max(0, yDangerSplit - splitPadT);
+        svgSessions += '<rect x="' + splitPadL + '" y="' + splitPadT + '" width="' + splitPlotW + '" height="' + dangerHSess + '" fill="rgba(244, 63, 94, 0.09)" />';
+
+        // Inside-plot Zone Badges
+        svgSessions += renderZoneBadge(badgeXSplit, Math.max(splitPadT + 12, splitPadT + dangerHSess / 2 + 3.5), '🔴 DANGER (≥' + dangerSessions + ')', 'var(--rose)');
+        svgSessions += renderZoneBadge(badgeXSplit, yDangerSplit + guardedHSess / 2 + 3.5, '🟡 GUARDED (' + warnSessions + '-' + (dangerSessions - 1) + ')', 'var(--amber)');
+        svgSessions += renderZoneBadge(badgeXSplit, yWarnSplit + safeHSess / 2 + 3.5, '🟢 SAFE (0-' + (warnSessions - 1) + ')', 'var(--emerald)');
+
+        // Gridlines & Clean Numeric Ticks (Zero bleed)
+        const rightTicks = [0, 5, warnSessions, dangerSessions, maxSessionsY];
+        const uniqueRightTicks = Array.from(new Set(rightTicks)).sort(function (a, b) { return a - b; });
+        for (let i = 0; i < uniqueRightTicks.length; i++) {
+          const val = uniqueRightTicks[i];
+          const y = getYSessionSplit(val);
+          svgSessions += '<line x1="' + splitPadL + '" y1="' + y + '" x2="' + (splitPadL + splitPlotW) + '" y2="' + y + '" stroke="rgba(35, 47, 69, 0.45)" stroke-dasharray="3,3" />';
+          let labelFill = "var(--text-dim)";
+          if (val === dangerSessions) labelFill = "var(--rose)";
+          else if (val === warnSessions) labelFill = "var(--amber)";
+          else if (val === maxSessionsY) labelFill = "var(--amber)";
+          svgSessions += '<text x="' + (splitPadL - 8) + '" y="' + (y + 3.5) + '" fill="' + labelFill + '" font-size="10" font-family="monospace" text-anchor="end">' + val + '</text>';
+        }
+
+        // Curves & Bars
+        let pathDSessions = 'M ' + getSplitX(0) + ' ' + getYSessionSplit(points[0].rolling10mSessions || 0);
+        for (let i = 1; i < points.length; i++) {
+          pathDSessions += ' L ' + getSplitX(i) + ' ' + getYSessionSplit(points[i].rolling10mSessions || 0);
+        }
+        const areaDSessions = pathDSessions + ' L ' + getSplitX(points.length - 1) + ' ' + splitYZero + ' L ' + getSplitX(0) + ' ' + splitYZero + ' Z';
+        svgSessions += '<path d="' + areaDSessions + '" fill="url(#areaGradSessions)" />';
+
+        const barWSplit = Math.max(2.5, (splitPlotW / points.length) * 0.45);
+        for (let i = 0; i < points.length; i++) {
+          const sVal = points[i].rolling10mSessions || 0;
+          if (sVal > 0) {
+            const bx = getSplitX(i) - barWSplit / 2;
+            const by = getYSessionSplit(sVal);
+            const bh = splitYZero - by;
+            svgSessions += '<rect class="bar-session" data-idx="' + i + '" x="' + bx + '" y="' + by + '" width="' + barWSplit + '" height="' + bh + '" fill="var(--amber)" opacity="0.85" rx="1" />';
+          }
+        }
+        svgSessions += '<path d="' + pathDSessions + '" fill="none" stroke="var(--amber)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />';
+
+        // Throttle markers
+        for (let i = 0; i < points.length; i++) {
+          const p = points[i];
+          if (p.throttles > 0) {
+            const tx = getSplitX(i);
+            const ty = splitPadT + 2;
+            svgSessions += '<line x1="' + tx + '" y1="' + (splitPadT + 12) + '" x2="' + tx + '" y2="' + splitYZero + '" stroke="var(--purple)" stroke-dasharray="2,2" stroke-width="1" opacity="0.6" />';
+            svgSessions += '<g transform="translate(' + (tx - 6) + ',' + ty + ')" filter="url(#glowSplit)">' +
+              '<path d="M7 1L1 8h5l-1 7 7-8H7l1-6z" fill="var(--purple)" stroke="#ffffff" stroke-width="0.75" />' +
+            '</g>';
+          }
+        }
+
+        // Crosshair & Hover Dot
+        svgSessions += '<line id="crosshairSession" x1="0" y1="' + splitPadT + '" x2="0" y2="' + splitYZero + '" stroke="#cbd5e1" stroke-width="1.2" stroke-dasharray="3,3" opacity="0" pointer-events="none" />';
+        svgSessions += '<circle id="dotSession" cx="0" cy="0" r="4.5" fill="#ffffff" stroke="var(--amber)" stroke-width="2.5" opacity="0" pointer-events="none" />';
+        svgSessions += '<rect id="overlaySessions" x="' + splitPadL + '" y="' + splitPadT + '" width="' + splitPlotW + '" height="' + splitPlotH + '" fill="transparent" pointer-events="all" style="cursor:crosshair;" />';
+
+        if (chartSvgSessions) chartSvgSessions.innerHTML = svgSessions;
+
+        // --- Synchronized Pointer Handlers for Split View ---
+        function handleSplitPointer(evt, activeSvg) {
+          const rect = activeSvg.getBoundingClientRect();
+          const clientX = evt.clientX || (evt.touches && evt.touches[0] && evt.touches[0].clientX);
+          const clientY = evt.clientY || (evt.touches && evt.touches[0] && evt.touches[0].clientY);
+          if (!clientX) return;
+
+          const mouseSvgX = ((clientX - rect.left) / rect.width) * splitSvgW;
+          const clampedX = Math.max(splitPadL, Math.min(splitPadL + splitPlotW, mouseSvgX));
+          const ratio = (clampedX - splitPadL) / splitPlotW;
+          const index = Math.round(ratio * (points.length - 1));
+          const p = points[index];
+          if (!p) return;
+
+          const pointX = getSplitX(index);
+          const turnY = getYTurnSplit(p.rolling10mTurns || 0);
+          const sessionY = getYSessionSplit(p.rolling10mSessions || 0);
+
+          const crossTurn = document.getElementById("crosshairTurn");
+          const crossSess = document.getElementById("crosshairSession");
+          if (crossTurn) {
+            crossTurn.setAttribute("x1", pointX);
+            crossTurn.setAttribute("x2", pointX);
+            crossTurn.setAttribute("opacity", "0.85");
+          }
+          if (crossSess) {
+            crossSess.setAttribute("x1", pointX);
+            crossSess.setAttribute("x2", pointX);
+            crossSess.setAttribute("opacity", "0.85");
+          }
+
+          const dotT = document.getElementById("dotTurn");
+          const dotS = document.getElementById("dotSession");
+          if (dotT) {
+            dotT.setAttribute("cx", pointX);
+            dotT.setAttribute("cy", turnY);
+            dotT.setAttribute("opacity", "1");
+          }
+          if (dotS) {
+            dotS.setAttribute("cx", pointX);
+            dotS.setAttribute("cy", sessionY);
+            dotS.setAttribute("opacity", (p.rolling10mSessions || 0) > 0 ? "1" : "0.5");
+          }
+
+          chartTooltip.innerHTML = getTooltipHtml(p);
+          chartTooltip.style.opacity = "1";
+          positionTooltip(clientX, clientY);
+        }
+
+        function hideSplitPointer() {
+          const crossTurn = document.getElementById("crosshairTurn");
+          const crossSess = document.getElementById("crosshairSession");
+          if (crossTurn) crossTurn.setAttribute("opacity", "0");
+          if (crossSess) crossSess.setAttribute("opacity", "0");
+          const dotT = document.getElementById("dotTurn");
+          const dotS = document.getElementById("dotSession");
+          if (dotT) dotT.setAttribute("opacity", "0");
+          if (dotS) dotS.setAttribute("opacity", "0");
           chartTooltip.style.opacity = "0";
         }
 
-        overlay.addEventListener("mousemove", handlePointer);
-        overlay.addEventListener("touchmove", handlePointer, { passive: true });
-        overlay.addEventListener("mouseleave", hidePointer);
-        overlay.addEventListener("touchend", hidePointer);
+        const oTurns = document.getElementById("overlayTurns");
+        if (oTurns && chartSvgTurns) {
+          oTurns.addEventListener("mousemove", function (e) { handleSplitPointer(e, chartSvgTurns); });
+          oTurns.addEventListener("touchmove", function (e) { handleSplitPointer(e, chartSvgTurns); }, { passive: true });
+          oTurns.addEventListener("mouseleave", hideSplitPointer);
+          oTurns.addEventListener("touchend", hideSplitPointer);
+        }
+
+        const oSessions = document.getElementById("overlaySessions");
+        if (oSessions && chartSvgSessions) {
+          oSessions.addEventListener("mousemove", function (e) { handleSplitPointer(e, chartSvgSessions); });
+          oSessions.addEventListener("touchmove", function (e) { handleSplitPointer(e, chartSvgSessions); }, { passive: true });
+          oSessions.addEventListener("mouseleave", hideSplitPointer);
+          oSessions.addEventListener("touchend", hideSplitPointer);
+        }
+
+        /* -------------------------------------------------------------
+         * PART B: COMBINED VIEW (Single Composite Dual-Axis Chart)
+         * ----------------------------------------------------------- */
+        const combSvgW = 1000;
+        const combSvgH = 240;
+        const combPadL = 56;
+        const combPadR = 56;
+        const combPadT = 24;
+        const combPadB = 26;
+        const combPlotW = combSvgW - combPadL - combPadR;
+        const combPlotH = combSvgH - combPadT - combPadB;
+        const combYZero = combPadT + combPlotH;
+
+        function getCombX(index) {
+          if (points.length <= 1) return combPadL;
+          return combPadL + (index / (points.length - 1)) * combPlotW;
+        }
+
+        function getYTurnComb(val) {
+          const clamped = Math.min(val, maxTurnsY);
+          return combPadT + combPlotH - (clamped / maxTurnsY) * combPlotH;
+        }
+
+        function getYSessionComb(val) {
+          const clamped = Math.min(val, maxSessionsY);
+          return combPadT + combPlotH - (clamped / maxSessionsY) * combPlotH;
+        }
+
+        let svgComb = '<defs>' +
+          '<linearGradient id="areaGradComb" x1="0" y1="0" x2="0" y2="1">' +
+            '<stop offset="0%" stop-color="#06b6d4" stop-opacity="0.35"/>' +
+            '<stop offset="100%" stop-color="#06b6d4" stop-opacity="0.02"/>' +
+          '</linearGradient>' +
+          '<filter id="glowComb" x="-20%" y="-20%" width="140%" height="140%">' +
+            '<feDropShadow dx="0" dy="0" stdDeviation="3" flood-color="#a855f7" flood-opacity="0.8"/>' +
+          '</filter>' +
+        '</defs>';
+
+        const yBurstSoftComb = getYTurnComb(burstSoft);
+        const yBurstMaxComb = getYTurnComb(burstMax);
+
+        // Aligned Background Risk Bands
+        const safeHComb = Math.max(0, combYZero - yBurstSoftComb);
+        svgComb += '<rect x="' + combPadL + '" y="' + yBurstSoftComb + '" width="' + combPlotW + '" height="' + safeHComb + '" fill="rgba(16, 185, 129, 0.05)" />';
+        const guardedHComb = Math.max(0, yBurstSoftComb - yBurstMaxComb);
+        svgComb += '<rect x="' + combPadL + '" y="' + yBurstMaxComb + '" width="' + combPlotW + '" height="' + guardedHComb + '" fill="rgba(245, 158, 11, 0.07)" />';
+        const dangerHComb = Math.max(0, yBurstMaxComb - combPadT);
+        svgComb += '<rect x="' + combPadL + '" y="' + combPadT + '" width="' + combPlotW + '" height="' + dangerHComb + '" fill="rgba(244, 63, 94, 0.09)" />';
+
+        // Inside-plot Zone Badges (Right inside edge of plot area, zero bleed)
+        const badgeXComb = combPadL + combPlotW - 12;
+        svgComb += renderZoneBadge(badgeXComb, Math.max(combPadT + 12, combPadT + dangerHComb / 2 + 4), '🔴 DANGER (≥' + burstMax + ')', 'var(--rose)');
+        svgComb += renderZoneBadge(badgeXComb, yBurstMaxComb + guardedHComb / 2 + 4, '🟡 GUARDED (' + burstSoft + '-' + (burstMax - 1) + ')', 'var(--amber)');
+        svgComb += renderZoneBadge(badgeXComb, yBurstSoftComb + safeHComb / 2 + 4, '🟢 SAFE (0-' + (burstSoft - 1) + ')', 'var(--emerald)');
+
+        // Gridlines & Left Axis Ticks (Turns - Cyan, pure numbers)
+        for (let i = 0; i < uniqueLeftTicks.length; i++) {
+          const val = uniqueLeftTicks[i];
+          const y = getYTurnComb(val);
+          svgComb += '<line x1="' + combPadL + '" y1="' + y + '" x2="' + (combPadL + combPlotW) + '" y2="' + y + '" stroke="rgba(35, 47, 69, 0.45)" stroke-dasharray="3,3" />';
+          let labelFill = "var(--text-dim)";
+          if (val === burstMax) labelFill = "var(--rose)";
+          else if (val === burstSoft) labelFill = "var(--amber)";
+          else if (val === maxTurnsY) labelFill = "var(--cyan)";
+          svgComb += '<text x="' + (combPadL - 8) + '" y="' + (y + 3.5) + '" fill="' + labelFill + '" font-size="10" font-family="monospace" text-anchor="end">' + val + '</text>';
+        }
+
+        // Right Axis Ticks (Fresh Sessions - Amber, pure numbers)
+        for (let i = 0; i < uniqueRightTicks.length; i++) {
+          const val = uniqueRightTicks[i];
+          const y = getYSessionComb(val);
+          svgComb += '<line x1="' + (combPadL + combPlotW) + '" y1="' + y + '" x2="' + (combPadL + combPlotW + 4) + '" y2="' + y + '" stroke="rgba(245, 158, 11, 0.4)" stroke-width="1" />';
+          let labelFill = "var(--text-dim)";
+          if (val === dangerSessions) labelFill = "var(--rose)";
+          else if (val === warnSessions) labelFill = "var(--amber)";
+          else if (val === maxSessionsY) labelFill = "var(--amber)";
+          svgComb += '<text x="' + (combPadL + combPlotW + 8) + '" y="' + (y + 3.5) + '" fill="' + labelFill + '" font-size="10" font-family="monospace" text-anchor="start">' + val + '</text>';
+        }
+
+        // Axis Column Headers
+        svgComb += '<text x="' + combPadL + '" y="' + (combPadT - 8) + '" fill="var(--cyan)" font-size="9.5" font-family="monospace" font-weight="600" text-anchor="start">◀ TURNS (10m · max ' + maxTurnsY + ')</text>';
+        svgComb += '<text x="' + (combPadL + combPlotW) + '" y="' + (combPadT - 8) + '" fill="var(--amber)" font-size="9.5" font-family="monospace" font-weight="600" text-anchor="end">SESSIONS (10m · max ' + maxSessionsY + ') ▶</text>';
+
+        // Turns Filled Area & Stroke
+        let pathDComb = 'M ' + getCombX(0) + ' ' + getYTurnComb(points[0].rolling10mTurns || 0);
+        for (let i = 1; i < points.length; i++) {
+          pathDComb += ' L ' + getCombX(i) + ' ' + getYTurnComb(points[i].rolling10mTurns || 0);
+        }
+        const areaDComb = pathDComb + ' L ' + getCombX(points.length - 1) + ' ' + combYZero + ' L ' + getCombX(0) + ' ' + combYZero + ' Z';
+        svgComb += '<path d="' + areaDComb + '" fill="url(#areaGradComb)" />';
+
+        // Fresh Sessions Pillar Bars
+        const barWComb = Math.max(2.5, (combPlotW / points.length) * 0.45);
+        for (let i = 0; i < points.length; i++) {
+          const sVal = points[i].rolling10mSessions || 0;
+          if (sVal > 0) {
+            const bx = getCombX(i) - barWComb / 2;
+            const by = getYSessionComb(sVal);
+            const bh = combYZero - by;
+            svgComb += '<rect class="bar-session" data-idx="' + i + '" x="' + bx + '" y="' + by + '" width="' + barWComb + '" height="' + bh + '" fill="var(--amber)" opacity="0.85" rx="1" />';
+          }
+        }
+        svgComb += '<path d="' + pathDComb + '" fill="none" stroke="var(--cyan)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />';
+
+        // Throttle Markers
+        for (let i = 0; i < points.length; i++) {
+          const p = points[i];
+          if (p.throttles > 0) {
+            const tx = getCombX(i);
+            const ty = combPadT + 2;
+            svgComb += '<line x1="' + tx + '" y1="' + (combPadT + 12) + '" x2="' + tx + '" y2="' + combYZero + '" stroke="var(--purple)" stroke-dasharray="2,2" stroke-width="1" opacity="0.6" />';
+            svgComb += '<g transform="translate(' + (tx - 6) + ',' + ty + ')" filter="url(#glowComb)">' +
+              '<path d="M7 1L1 8h5l-1 7 7-8H7l1-6z" fill="var(--purple)" stroke="#ffffff" stroke-width="0.75" />' +
+            '</g>';
+          }
+        }
+
+        // Crosshair & Hover Dots
+        svgComb += '<line id="chartCrosshair" x1="0" y1="' + combPadT + '" x2="0" y2="' + combYZero + '" stroke="#cbd5e1" stroke-width="1.2" stroke-dasharray="3,3" opacity="0" pointer-events="none" />';
+        svgComb += '<circle id="chartHoverDotTurn" cx="0" cy="0" r="4.5" fill="#ffffff" stroke="var(--cyan)" stroke-width="2.5" opacity="0" pointer-events="none" />';
+        svgComb += '<circle id="chartHoverDotSession" cx="0" cy="0" r="4" fill="#ffffff" stroke="var(--amber)" stroke-width="2.5" opacity="0" pointer-events="none" />';
+        svgComb += '<rect id="chartEventOverlay" x="' + combPadL + '" y="' + combPadT + '" width="' + combPlotW + '" height="' + combPlotH + '" fill="transparent" pointer-events="all" style="cursor:crosshair;" />';
+
+        if (chartSvg) chartSvg.innerHTML = svgComb;
+
+        // Combined Pointer Handlers
+        const overlayComb = document.getElementById("chartEventOverlay");
+        const crossComb = document.getElementById("chartCrosshair");
+        const dotTurnComb = document.getElementById("chartHoverDotTurn");
+        const dotSessComb = document.getElementById("chartHoverDotSession");
+
+        function handleCombPointer(evt) {
+          const rect = chartSvg.getBoundingClientRect();
+          const clientX = evt.clientX || (evt.touches && evt.touches[0] && evt.touches[0].clientX);
+          const clientY = evt.clientY || (evt.touches && evt.touches[0] && evt.touches[0].clientY);
+          if (!clientX) return;
+
+          const mouseSvgX = ((clientX - rect.left) / rect.width) * combSvgW;
+          const clampedX = Math.max(combPadL, Math.min(combPadL + combPlotW, mouseSvgX));
+          const ratio = (clampedX - combPadL) / combPlotW;
+          const index = Math.round(ratio * (points.length - 1));
+          const p = points[index];
+          if (!p) return;
+
+          const pointX = getCombX(index);
+          const turnY = getYTurnComb(p.rolling10mTurns || 0);
+          const sessionY = getYSessionComb(p.rolling10mSessions || 0);
+
+          if (crossComb) {
+            crossComb.setAttribute("x1", pointX);
+            crossComb.setAttribute("x2", pointX);
+            crossComb.setAttribute("opacity", "0.85");
+          }
+          if (dotTurnComb) {
+            dotTurnComb.setAttribute("cx", pointX);
+            dotTurnComb.setAttribute("cy", turnY);
+            dotTurnComb.setAttribute("opacity", "1");
+          }
+          if (dotSessComb) {
+            dotSessComb.setAttribute("cx", pointX);
+            dotSessComb.setAttribute("cy", sessionY);
+            dotSessComb.setAttribute("opacity", (p.rolling10mSessions || 0) > 0 ? "1" : "0");
+          }
+
+          chartTooltip.innerHTML = getTooltipHtml(p);
+          chartTooltip.style.opacity = "1";
+          positionTooltip(clientX, clientY);
+        }
+
+        function hideCombPointer() {
+          if (crossComb) crossComb.setAttribute("opacity", "0");
+          if (dotTurnComb) dotTurnComb.setAttribute("opacity", "0");
+          if (dotSessComb) dotSessComb.setAttribute("opacity", "0");
+          chartTooltip.style.opacity = "0";
+        }
+
+        if (overlayComb && chartSvg) {
+          overlayComb.addEventListener("mousemove", handleCombPointer);
+          overlayComb.addEventListener("touchmove", handleCombPointer, { passive: true });
+          overlayComb.addEventListener("mouseleave", hideCombPointer);
+          overlayComb.addEventListener("touchend", hideCombPointer);
+        }
       }
 
       // Initial fetch immediately on DOM ready
