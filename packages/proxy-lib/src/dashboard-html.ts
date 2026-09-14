@@ -489,6 +489,7 @@ export function getDashboardHtml(): string {
       transition: opacity 0.15s ease;
       box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
       z-index: 100;
+      white-space: nowrap;
     }
 
     /* Active Sessions Table */
@@ -824,8 +825,13 @@ export function getDashboardHtml(): string {
     <!-- Historical Timeline & Risk Zones -->
     <div class="section-card">
       <div class="section-header">
-        <div class="section-title">
-          <span>Historical Timeline &amp; Risk Zones</span>
+        <div>
+          <div class="section-title">
+            <span>Historical Timeline &amp; Risk Zones · Cumulative Rolling 10-Minute Velocity (Upstream Sliding Window)</span>
+          </div>
+          <div style="font-size: 0.775rem; color: var(--text-dim); margin-top: 2px;">
+            Displays the rolling 10m load evaluated by Microsoft's leaky bucket limiters at each point in time.
+          </div>
         </div>
         <div class="range-selector">
           <button class="range-btn active" data-range="1h">1 Hour</button>
@@ -842,11 +848,11 @@ export function getDashboardHtml(): string {
       <div class="chart-legend">
         <div class="legend-item">
           <div class="legend-color" style="background: var(--cyan);"></div>
-          <span>Turns Filled Area</span>
+          <span id="legendTurnsLabel">Turns Filled Area (Left Axis: 0-40)</span>
         </div>
         <div class="legend-item">
           <div class="legend-color" style="background: var(--amber);"></div>
-          <span>New Sessions (Turn 0)</span>
+          <span id="legendSessionsLabel">New Sessions (Turn 0) · Right Axis: 0-20</span>
         </div>
         <div class="legend-item">
           <div class="legend-color" style="background: var(--purple);"></div>
@@ -1348,45 +1354,78 @@ export function getDashboardHtml(): string {
         const cfg = data.config;
         if (!points.length || !cfg) return;
 
+        // 1. Compute rolling 10m window metrics (sum of up to 10 previous 1-minute points)
+        for (let i = 0; i < points.length; i++) {
+          let rTurns = 0;
+          let rSessions = 0;
+          for (let j = Math.max(0, i - 9); j <= i; j++) {
+            rTurns += points[j].turns || 0;
+            rSessions += points[j].newSessions || 0;
+          }
+          points[i].rolling10mTurns = rTurns;
+          points[i].rolling10mSessions = rSessions;
+        }
+
         const svgW = 1000;
         const svgH = 240;
-        const padL = 48;
-        const padR = 24;
-        const padT = 20;
-        const padB = 30;
+        const padL = 54;
+        const padR = 52;
+        const padT = 24;
+        const padB = 26;
         const plotW = svgW - padL - padR;
         const plotH = svgH - padT - padB;
+        const yZero = padT + plotH;
 
-        // Dynamic Y scale maximum based on config thresholds and data points
-        const maxTurnsPoint = points.reduce(function (max, p) { return Math.max(max, p.turns || 0); }, 0);
-        const maxSessionsPoint = points.reduce(function (max, p) { return Math.max(max, p.newSessions || 0); }, 0);
-        const dangerSessions = cfg.sessionDangerThreshold10m || cfg.sessionDanger10m;
-        const warnSessions = cfg.sessionWarnThreshold10m || cfg.sessionWarn10m;
+        // 2. Dual Independent Pinned Scales
+        // Left Axis: Turns (Cyan)
+        const burstMax = cfg.burstMaxTurns || 35;
+        const burstSoft = cfg.burstSoftTurns || Math.max(1, burstMax - 5); // 30
+        const pinnedMaxTurns = Math.max(burstMax + 5, 40);
+        let maxObservedTurns = 0;
+        for (let i = 0; i < points.length; i++) {
+          if (points[i].rolling10mTurns > maxObservedTurns) maxObservedTurns = points[i].rolling10mTurns;
+          if ((points[i].turns || 0) > maxObservedTurns) maxObservedTurns = points[i].turns;
+        }
+        const maxTurnsY = Math.max(pinnedMaxTurns, Math.ceil(maxObservedTurns * 1.1));
 
-        let maxY = Math.max(cfg.burstMaxTurns, dangerSessions, maxTurnsPoint, maxSessionsPoint, 1);
-        maxY = Math.ceil(maxY * 1.15); // headroom
+        // Right Axis: Fresh Sessions (Amber)
+        const dangerSessions = cfg.sessionDangerThreshold10m || cfg.sessionDanger10m || 15;
+        const warnSessions = cfg.sessionWarnThreshold10m || cfg.sessionWarn10m || 10;
+        const pinnedMaxSessions = Math.max(dangerSessions + 5, 20);
+        let maxObservedSessions = 0;
+        for (let i = 0; i < points.length; i++) {
+          if (points[i].rolling10mSessions > maxObservedSessions) maxObservedSessions = points[i].rolling10mSessions;
+          if ((points[i].newSessions || 0) > maxObservedSessions) maxObservedSessions = points[i].newSessions;
+        }
+        const maxSessionsY = Math.max(pinnedMaxSessions, Math.ceil(maxObservedSessions * 1.1));
+
+        // Update dynamic legend labels
+        const legendTurns = document.getElementById("legendTurnsLabel");
+        if (legendTurns) legendTurns.textContent = "Turns Filled Area (Left Axis: 0-" + maxTurnsY + ")";
+        const legendSessions = document.getElementById("legendSessionsLabel");
+        if (legendSessions) legendSessions.textContent = "New Sessions (Turn 0) · Right Axis: 0-" + maxSessionsY + ")";
 
         function getX(index) {
           if (points.length <= 1) return padL;
           return padL + (index / (points.length - 1)) * plotW;
         }
 
-        function getY(val) {
-          const clamped = Math.min(val, maxY);
-          return padT + plotH - (clamped / maxY) * plotH;
+        function getYTurn(val) {
+          const clamped = Math.min(val, maxTurnsY);
+          return padT + plotH - (clamped / maxTurnsY) * plotH;
         }
 
-        // Risk bands positions
-        const yDanger = getY(dangerSessions);
-        const yWarn = getY(warnSessions);
-        const yZero = getY(0);
+        function getYSession(val) {
+          const clamped = Math.min(val, maxSessionsY);
+          return padT + plotH - (clamped / maxSessionsY) * plotH;
+        }
 
         let svgContent = '';
 
         // Definitions: Gradients and Markers
         svgContent += '<defs>' +
           '<linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">' +
-            '<stop offset="0%" stop-color="#06b6d4" stop-opacity="0.4"/>' +
+            '<stop offset="0%" stop-color="#06b6d4" stop-opacity="0.35"/>' +
             '<stop offset="100%" stop-color="#06b6d4" stop-opacity="0.02"/>' +
           '</linearGradient>' +
           '<filter id="glow" x="-20%" y="-20%" width="140%" height="140%">' +
@@ -1394,72 +1433,100 @@ export function getDashboardHtml(): string {
           '</filter>' +
         '</defs>';
 
-        // Background Risk Zones
-        // Safe Zone (< warnSessions)
-        const safeH = Math.max(0, yZero - yWarn);
-        svgContent += '<rect x="' + padL + '" y="' + yWarn + '" width="' + plotW + '" height="' + safeH + '" fill="rgba(16, 185, 129, 0.05)" />';
+        // 3. Aligned Background Risk Zones (Based on Left Turn Horizon)
+        const yBurstSoft = getYTurn(burstSoft);
+        const yBurstMax = getYTurn(burstMax);
 
-        // Guarded Zone (warnSessions to dangerSessions)
-        const guardedH = Math.max(0, yWarn - yDanger);
-        svgContent += '<rect x="' + padL + '" y="' + yDanger + '" width="' + plotW + '" height="' + guardedH + '" fill="rgba(245, 158, 11, 0.07)" />';
+        // Safe Zone (0 to burstSoft)
+        const safeH = Math.max(0, yZero - yBurstSoft);
+        svgContent += '<rect x="' + padL + '" y="' + yBurstSoft + '" width="' + plotW + '" height="' + safeH + '" fill="rgba(16, 185, 129, 0.05)" />';
 
-        // Danger Zone (>= dangerSessions)
-        const dangerH = Math.max(0, yDanger - padT);
+        // Guarded Zone (burstSoft to burstMax)
+        const guardedH = Math.max(0, yBurstSoft - yBurstMax);
+        svgContent += '<rect x="' + padL + '" y="' + yBurstMax + '" width="' + plotW + '" height="' + guardedH + '" fill="rgba(245, 158, 11, 0.07)" />';
+
+        // Danger Zone (burstMax to maxTurnsY)
+        const dangerH = Math.max(0, yBurstMax - padT);
         svgContent += '<rect x="' + padL + '" y="' + padT + '" width="' + plotW + '" height="' + dangerH + '" fill="rgba(244, 63, 94, 0.09)" />';
 
-        // Horizontal Gridlines & Y-Axis Labels
-        const gridSteps = [0, warnSessions, dangerSessions, maxY];
-        for (let i = 0; i < gridSteps.length; i++) {
-          const val = gridSteps[i];
-          const y = getY(val);
-          svgContent += '<line x1="' + padL + '" y1="' + y + '" x2="' + (padL + plotW) + '" y2="' + y + '" stroke="rgba(35, 47, 69, 0.5)" stroke-dasharray="3,3" />';
+        // 4. Horizontal Gridlines & Left Axis Ticks (Turns - Cyan)
+        const leftTicks = [0, 15, burstSoft, burstMax, maxTurnsY];
+        const uniqueLeftTicks = Array.from(new Set(leftTicks)).sort(function (a, b) { return a - b; });
+        for (let i = 0; i < uniqueLeftTicks.length; i++) {
+          const val = uniqueLeftTicks[i];
+          const y = getYTurn(val);
+          svgContent += '<line x1="' + padL + '" y1="' + y + '" x2="' + (padL + plotW) + '" y2="' + y + '" stroke="rgba(35, 47, 69, 0.45)" stroke-dasharray="3,3" />';
           let labelText = String(val);
           let labelFill = "var(--text-dim)";
-          if (val === dangerSessions) { labelText = val + " (Danger)"; labelFill = "var(--rose)"; }
-          else if (val === warnSessions) { labelText = val + " (Warn)"; labelFill = "var(--amber)"; }
+          if (val === burstMax) { labelText = val + " (Burst Max)"; labelFill = "var(--rose)"; }
+          else if (val === burstSoft) { labelText = val + " (Burst Warn)"; labelFill = "var(--amber)"; }
+          else if (val === 15) { labelText = "15"; labelFill = "var(--text-dim)"; }
+          else if (val === maxTurnsY) { labelText = maxTurnsY === pinnedMaxTurns ? val + " (Pinned Ceiling)" : val + " (Ceiling)"; labelFill = "var(--cyan)"; }
           svgContent += '<text x="' + (padL - 6) + '" y="' + (y + 3) + '" fill="' + labelFill + '" font-size="10" font-family="monospace" text-anchor="end">' + labelText + '</text>';
         }
 
-        // Vertical Bars for New Sessions
-        const barWidth = Math.max(2, (plotW / points.length) * 0.45);
+        // 5. Right Axis Ticks (Fresh Sessions - Amber)
+        const rightTicks = [0, 5, warnSessions, dangerSessions, maxSessionsY];
+        const uniqueRightTicks = Array.from(new Set(rightTicks)).sort(function (a, b) { return a - b; });
+        for (let i = 0; i < uniqueRightTicks.length; i++) {
+          const val = uniqueRightTicks[i];
+          const y = getYSession(val);
+          svgContent += '<line x1="' + (padL + plotW) + '" y1="' + y + '" x2="' + (padL + plotW + 4) + '" y2="' + y + '" stroke="rgba(245, 158, 11, 0.4)" stroke-width="1" />';
+          let labelText = String(val);
+          let labelFill = "var(--text-dim)";
+          if (val === dangerSessions) { labelText = val + " (Session Danger)"; labelFill = "var(--rose)"; }
+          else if (val === warnSessions) { labelText = val + " (Warn)"; labelFill = "var(--amber)"; }
+          else if (val === maxSessionsY) { labelText = maxSessionsY === pinnedMaxSessions ? val + " (Pinned)" : val + " (Ceiling)"; labelFill = "var(--amber)"; }
+          svgContent += '<text x="' + (padL + plotW + 6) + '" y="' + (y + 3) + '" fill="' + labelFill + '" font-size="10" font-family="monospace" text-anchor="start">' + labelText + '</text>';
+        }
+
+        // Axis Column Headers
+        svgContent += '<text x="' + padL + '" y="' + (padT - 8) + '" fill="var(--cyan)" font-size="9.5" font-family="monospace" font-weight="600" text-anchor="start">◀ TURNS (10m · max ' + maxTurnsY + ')</text>';
+        svgContent += '<text x="' + (padL + plotW) + '" y="' + (padT - 8) + '" fill="var(--amber)" font-size="9.5" font-family="monospace" font-weight="600" text-anchor="end">SESSIONS (10m · max ' + maxSessionsY + ') ▶</text>';
+
+        // 6. Turns Filled Area (Cyan, Left Axis)
+        let pathD = 'M ' + getX(0) + ' ' + getYTurn(points[0].rolling10mTurns || 0);
+        for (let i = 1; i < points.length; i++) {
+          pathD += ' L ' + getX(i) + ' ' + getYTurn(points[i].rolling10mTurns || 0);
+        }
+        const areaD = pathD + ' L ' + getX(points.length - 1) + ' ' + yZero + ' L ' + getX(0) + ' ' + yZero + ' Z';
+        svgContent += '<path d="' + areaD + '" fill="url(#areaGrad)" />';
+
+        // 7. Fresh Sessions Vertical Pillar Bars (Amber, Right Axis)
+        const barWidth = Math.max(2.5, (plotW / points.length) * 0.45);
         for (let i = 0; i < points.length; i++) {
           const p = points[i];
-          if (p.newSessions > 0) {
+          const sVal = p.rolling10mSessions || 0;
+          if (sVal > 0) {
             const x = getX(i) - barWidth / 2;
-            const y = getY(p.newSessions);
+            const y = getYSession(sVal);
             const h = yZero - y;
             svgContent += '<rect class="bar-session" data-idx="' + i + '" x="' + x + '" y="' + y + '" width="' + barWidth + '" height="' + h + '" fill="var(--amber)" opacity="0.85" rx="1" />';
           }
         }
 
-        // Turns Area Path and Stroke
-        let pathD = 'M ' + getX(0) + ' ' + getY(points[0].turns);
-        for (let i = 1; i < points.length; i++) {
-          pathD += ' L ' + getX(i) + ' ' + getY(points[i].turns);
-        }
-
-        const areaD = pathD + ' L ' + getX(points.length - 1) + ' ' + yZero + ' L ' + getX(0) + ' ' + yZero + ' Z';
-
-        svgContent += '<path d="' + areaD + '" fill="url(#areaGrad)" />';
+        // 8. Turns Smooth Area Stroke (Cyan)
         svgContent += '<path d="' + pathD + '" fill="none" stroke="var(--cyan)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />';
 
-        // Throttle Markers (Purple Lightning Bolt)
+        // 9. Throttle Markers (Purple Lightning Bolt pinned at top of column)
         for (let i = 0; i < points.length; i++) {
           const p = points[i];
           if (p.throttles > 0) {
             const tx = getX(i);
-            const ty = Math.max(padT + 12, getY(p.turns) - 10);
-            svgContent += '<g transform="translate(' + (tx - 6) + ',' + (ty - 8) + ')" filter="url(#glow)">' +
+            const ty = padT + 2;
+            svgContent += '<line x1="' + tx + '" y1="' + (padT + 12) + '" x2="' + tx + '" y2="' + yZero + '" stroke="var(--purple)" stroke-dasharray="2,2" stroke-width="1" opacity="0.6" />';
+            svgContent += '<g transform="translate(' + (tx - 6) + ',' + ty + ')" filter="url(#glow)">' +
               '<path d="M7 1L1 8h5l-1 7 7-8H7l1-6z" fill="var(--purple)" stroke="#ffffff" stroke-width="0.75" />' +
             '</g>';
           }
         }
 
-        // Interactive Hover Crosshair (hidden initially)
-        svgContent += '<line id="chartCrosshair" x1="0" y1="' + padT + '" x2="0" y2="' + (padT + plotH) + '" stroke="#cbd5e1" stroke-width="1.2" stroke-dasharray="3,3" opacity="0" pointer-events="none" />';
-        svgContent += '<circle id="chartHoverDot" cx="0" cy="0" r="4.5" fill="#ffffff" stroke="var(--cyan)" stroke-width="2.5" opacity="0" pointer-events="none" />';
+        // 10. Interactive Crosshair & Hover Dots
+        svgContent += '<line id="chartCrosshair" x1="0" y1="' + padT + '" x2="' + yZero + '" stroke="#cbd5e1" stroke-width="1.2" stroke-dasharray="3,3" opacity="0" pointer-events="none" />';
+        svgContent += '<circle id="chartHoverDotTurn" cx="0" cy="0" r="4.5" fill="#ffffff" stroke="var(--cyan)" stroke-width="2.5" opacity="0" pointer-events="none" />';
+        svgContent += '<circle id="chartHoverDotSession" cx="0" cy="0" r="4" fill="#ffffff" stroke="var(--amber)" stroke-width="2.5" opacity="0" pointer-events="none" />';
 
-        // Transparent Overlay to capture mouse events
+        // 11. Transparent Overlay for Pointer Events
         svgContent += '<rect id="chartEventOverlay" x="' + padL + '" y="' + padT + '" width="' + plotW + '" height="' + plotH + '" fill="transparent" pointer-events="all" style="cursor:crosshair;" />';
 
         chartSvg.innerHTML = svgContent;
@@ -1467,7 +1534,8 @@ export function getDashboardHtml(): string {
         // Attach Mouse Hover Events on Overlay
         const overlay = document.getElementById("chartEventOverlay");
         const crosshair = document.getElementById("chartCrosshair");
-        const hoverDot = document.getElementById("chartHoverDot");
+        const hoverDotTurn = document.getElementById("chartHoverDotTurn");
+        const hoverDotSession = document.getElementById("chartHoverDotSession");
 
         function handlePointer(evt) {
           const rect = chartSvg.getBoundingClientRect();
@@ -1482,36 +1550,63 @@ export function getDashboardHtml(): string {
           if (!p) return;
 
           const pointX = getX(index);
-          const pointY = getY(p.turns);
+          const turnY = getYTurn(p.rolling10mTurns || 0);
+          const sessionY = getYSession(p.rolling10mSessions || 0);
 
           crosshair.setAttribute("x1", pointX);
           crosshair.setAttribute("x2", pointX);
           crosshair.setAttribute("opacity", "0.85");
 
-          hoverDot.setAttribute("cx", pointX);
-          hoverDot.setAttribute("cy", pointY);
-          hoverDot.setAttribute("opacity", "1");
+          hoverDotTurn.setAttribute("cx", pointX);
+          hoverDotTurn.setAttribute("cy", turnY);
+          hoverDotTurn.setAttribute("opacity", "1");
+
+          if ((p.rolling10mSessions || 0) > 0) {
+            hoverDotSession.setAttribute("cx", pointX);
+            hoverDotSession.setAttribute("cy", sessionY);
+            hoverDotSession.setAttribute("opacity", "1");
+          } else {
+            hoverDotSession.setAttribute("opacity", "0");
+          }
 
           // Tooltip formatting
           const date = new Date(p.timestamp);
           const timeUtc = date.toISOString().substring(11, 16) + " UTC";
           const timeLocal = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-          const delaySec = ((p.maxPacingDelayMs || 0) / 1000).toFixed(1);
+          const delaySec = (p.maxPacingDelayMs > 0 ? (p.maxPacingDelayMs / 1000).toFixed(1) : "0.0") + "s";
 
-          chartTooltip.innerHTML = '<div style="font-weight:700; color:var(--text-main); margin-bottom:4px;">' + timeLocal + ' (' + timeUtc + ')</div>' +
-            '<div style="display:flex; justify-content:space-between; gap:12px;"><span style="color:var(--cyan);">Turns:</span><strong>' + p.turns + '</strong></div>' +
-            '<div style="display:flex; justify-content:space-between; gap:12px;"><span style="color:var(--amber);">New Sessions:</span><strong>' + p.newSessions + '</strong></div>' +
-            '<div style="display:flex; justify-content:space-between; gap:12px;"><span style="color:var(--text-dim);">Pacing Delay:</span><strong>' + delaySec + 's</strong></div>' +
-            (p.throttles > 0 ? '<div style="display:flex; justify-content:space-between; gap:12px; color:var(--purple);"><span>Throttles:</span><strong>' + p.throttles + ' ⚡</strong></div>' : '');
+          const rTurns = p.rolling10mTurns || 0;
+          const rSessions = p.rolling10mSessions || 0;
+          const iTurns = p.turns || 0;
+          const iSessions = p.newSessions || 0;
 
+          let statusText = "Safe";
+          let statusColor = "var(--emerald)";
+          if (rTurns >= burstMax || rSessions >= dangerSessions) {
+            statusText = "Danger";
+            statusColor = "var(--rose)";
+          } else if (rTurns >= burstSoft || rSessions >= warnSessions) {
+            statusText = "Guarded";
+            statusColor = "var(--amber)";
+          }
+
+          let tooltipHtml = '<div style="font-weight:700; color:var(--text-main); margin-bottom:6px; font-size:0.8rem;">' + timeLocal + ' (' + timeUtc + ')</div>' +
+            '<div style="display:flex; justify-content:space-between; gap:12px; margin-bottom:2px;"><span style="color:var(--cyan);">Rolling 10m Turns:</span><strong>' + rTurns + ' / ' + burstMax + ' max</strong></div>' +
+            '<div style="display:flex; justify-content:space-between; gap:12px; margin-bottom:2px;"><span style="color:var(--amber);">Rolling 10m Sessions:</span><strong>' + rSessions + ' / ' + dangerSessions + ' danger</strong></div>' +
+            '<div style="font-size:0.72rem; color:var(--text-dim); margin-bottom:4px; padding-left:2px;">(Discrete 1m Delta: +' + iTurns + ' turns, +' + iSessions + ' sessions)</div>' +
+            '<div style="display:flex; justify-content:space-between; gap:12px; margin-bottom:2px;"><span style="color:var(--text-dim);">Pacing Delay:</span><strong>' + delaySec + '</strong></div>' +
+            (p.throttles > 0 ? '<div style="display:flex; justify-content:space-between; gap:12px; color:var(--purple); margin-bottom:2px;"><span>Throttles:</span><strong>' + p.throttles + ' ⚡</strong></div>' : '') +
+            '<div style="display:flex; justify-content:space-between; gap:12px; margin-top:4px; padding-top:4px; border-top:1px solid rgba(255,255,255,0.1);"><span>Status:</span><strong style="color:' + statusColor + ';">' + statusText + '</strong></div>';
+
+          chartTooltip.innerHTML = tooltipHtml;
           chartTooltip.style.opacity = "1";
 
           // Position tooltip relative to container
           const wrapperRect = chartWrapper.getBoundingClientRect();
-          const tooltipW = chartTooltip.offsetWidth || 150;
-          let leftPx = (clientX - wrapperRect.left) + 12;
+          const tooltipW = chartTooltip.offsetWidth || 230;
+          let leftPx = (clientX - wrapperRect.left) + 14;
           if (leftPx + tooltipW > wrapperRect.width - 10) {
-            leftPx = (clientX - wrapperRect.left) - tooltipW - 12;
+            leftPx = (clientX - wrapperRect.left) - tooltipW - 14;
           }
           chartTooltip.style.left = Math.max(10, leftPx) + "px";
           chartTooltip.style.top = "15px";
@@ -1519,7 +1614,8 @@ export function getDashboardHtml(): string {
 
         function hidePointer() {
           crosshair.setAttribute("opacity", "0");
-          hoverDot.setAttribute("opacity", "0");
+          hoverDotTurn.setAttribute("opacity", "0");
+          hoverDotSession.setAttribute("opacity", "0");
           chartTooltip.style.opacity = "0";
         }
 

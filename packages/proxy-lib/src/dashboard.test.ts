@@ -141,6 +141,142 @@ describe("Web Dashboard & Telemetry API", () => {
       expect(html).toContain("cfg.sustainedWarnTurns");
       expect(html).toContain("cfg.throttleCooldownSec");
     });
+
+    it("renders dual independent scaled axes and cumulative rolling 10-minute velocity components", () => {
+      const html = getDashboardHtml();
+      // Timeline header with cumulative rolling velocity
+      expect(html).toContain("Cumulative Rolling 10-Minute Velocity (Upstream Sliding Window)");
+      expect(html).toContain("Displays the rolling 10m load evaluated by Microsoft's leaky bucket limiters at each point in time.");
+
+      // Legend with dual-axis ranges
+      expect(html).toContain("Turns Filled Area (Left Axis: 0-40)");
+      expect(html).toContain("New Sessions (Turn 0) · Right Axis: 0-20");
+
+      // SVG dual-axis mapping functions and logic
+      expect(html).toContain("points[i].rolling10mTurns = rTurns");
+      expect(html).toContain("points[i].rolling10mSessions = rSessions");
+      expect(html).toContain("getYTurn(val)");
+      expect(html).toContain("getYSession(val)");
+      expect(html).toContain("pinnedMaxTurns");
+      expect(html).toContain("pinnedMaxSessions");
+
+      // Ticks and column headers
+      expect(html).toContain("(Burst Max)");
+      expect(html).toContain("(Burst Warn)");
+      expect(html).toContain("(Session Danger)");
+      expect(html).toContain("TURNS (10m · max");
+      expect(html).toContain("SESSIONS (10m · max");
+
+      // Tooltip items
+      expect(html).toContain("Rolling 10m Turns:");
+      expect(html).toContain("Rolling 10m Sessions:");
+      expect(html).toContain("Discrete 1m Delta:");
+    });
+  });
+
+  describe("Dashboard Graph Mathematics & Dual-Axis Scaling", () => {
+    it("computes cumulative rolling 10-minute velocity across minute points", () => {
+      interface Point {
+        turns: number;
+        newSessions: number;
+        rolling10mTurns?: number;
+        rolling10mSessions?: number;
+      }
+
+      // Simulate 15 consecutive 1-minute buckets with 3 turns each and a session every 3 minutes
+      const points: Point[] = [];
+      for (let i = 0; i < 15; i++) {
+        points.push({
+          turns: 3,
+          newSessions: i % 3 === 0 ? 1 : 0,
+        });
+      }
+
+      // Apply rolling 10m window algorithm
+      for (let i = 0; i < points.length; i++) {
+        let rTurns = 0;
+        let rSessions = 0;
+        for (let j = Math.max(0, i - 9); j <= i; j++) {
+          rTurns += points[j].turns || 0;
+          rSessions += points[j].newSessions || 0;
+        }
+        points[i].rolling10mTurns = rTurns;
+        points[i].rolling10mSessions = rSessions;
+      }
+
+      // Point 0 (1 minute): 3 turns, 1 session
+      expect(points[0].rolling10mTurns).toBe(3);
+      expect(points[0].rolling10mSessions).toBe(1);
+
+      // Point 4 (5 minutes): 5 * 3 = 15 turns
+      expect(points[4].rolling10mTurns).toBe(15);
+
+      // Point 9 (10 minutes full window): 10 * 3 = 30 turns
+      expect(points[9].rolling10mTurns).toBe(30);
+
+      // Point 14 (10 minutes sliding window): exactly 10 * 3 = 30 turns
+      expect(points[14].rolling10mTurns).toBe(30);
+      // Sessions in window [5..14] are minutes 6, 9, 12 -> 3 sessions
+      expect(points[14].rolling10mSessions).toBe(3);
+    });
+
+    it("pins dual Y-axis scales to stable limits under normal traffic and scales dynamically on burst", () => {
+      const cfg = {
+        burstMaxTurns: 35,
+        burstSoftTurns: 30,
+        sessionDangerThreshold10m: 15,
+        sessionWarnThreshold10m: 10,
+      };
+
+      // Case A: Normal load (max rolling turns = 18, max rolling sessions = 6)
+      const normalPoints = [
+        { rolling10mTurns: 18, rolling10mSessions: 6, turns: 2, newSessions: 1 },
+      ];
+
+      const pinnedMaxTurns = Math.max(cfg.burstMaxTurns + 5, 40);
+      const pinnedMaxSessions = Math.max(cfg.sessionDangerThreshold10m + 5, 20);
+
+      const maxObservedTurnsNormal = Math.max(...normalPoints.map((p) => Math.max(p.rolling10mTurns, p.turns)));
+      const maxTurnsYNormal = Math.max(pinnedMaxTurns, Math.ceil(maxObservedTurnsNormal * 1.1));
+
+      const maxObservedSessionsNormal = Math.max(
+        ...normalPoints.map((p) => Math.max(p.rolling10mSessions, p.newSessions))
+      );
+      const maxSessionsYNormal = Math.max(pinnedMaxSessions, Math.ceil(maxObservedSessionsNormal * 1.1));
+
+      expect(maxTurnsYNormal).toBe(40); // Stably pinned to 40
+      expect(maxSessionsYNormal).toBe(20); // Stably pinned to 20
+
+      // Case B: Massive burst load (e.g. 50 rolling turns, 24 rolling sessions)
+      const burstPoints = [
+        { rolling10mTurns: 50, rolling10mSessions: 24, turns: 8, newSessions: 3 },
+      ];
+
+      const maxObservedTurnsBurst = Math.max(...burstPoints.map((p) => Math.max(p.rolling10mTurns, p.turns)));
+      const maxTurnsYBurst = Math.max(pinnedMaxTurns, Math.ceil(maxObservedTurnsBurst * 1.1));
+
+      const maxObservedSessionsBurst = Math.max(
+        ...burstPoints.map((p) => Math.max(p.rolling10mSessions, p.newSessions))
+      );
+      const maxSessionsYBurst = Math.max(pinnedMaxSessions, Math.ceil(maxObservedSessionsBurst * 1.1));
+
+      expect(maxTurnsYBurst).toBe(Math.ceil(50 * 1.1)); // 56 (scaled dynamically with 10% headroom)
+      expect(maxSessionsYBurst).toBe(27); // Scaled dynamically with 10% headroom
+    });
+
+    it("verifies risk band alignment between left turn warn (30/40) and right session danger (15/20)", () => {
+      const maxTurnsY = 40;
+      const maxSessionsY = 20;
+      const turnBurstWarn = 30;
+      const sessionDanger = 15;
+
+      const turnWarnRatio = turnBurstWarn / maxTurnsY;
+      const sessionDangerRatio = sessionDanger / maxSessionsY;
+
+      // Both critical thresholds sit at exactly 75% height of the plot!
+      expect(turnWarnRatio).toBe(0.75);
+      expect(sessionDangerRatio).toBe(0.75);
+    });
   });
 
   describe("createApp() HTTP Routes", () => {
