@@ -18,6 +18,8 @@ export {
   getGovernorState,
   getRecentTurnTimestamps,
   setRecentTurnTimestamps,
+  TRUNCATION_SURRENDER_FORCE_PROMPT,
+  ARTIFACT_FORCE_PROMPT,
 } from "./handler.js";
 export {
   getMetricsSnapshot,

@@ -7,6 +7,7 @@ import {
   formatToolDefinitions,
   looksLikeConfabulation,
   looksLikeSafetyRefusal,
+  looksLikeTruncationSurrender,
   looksLikeHallucinatedCompletion,
   looksLikeRemoteArtifactCompletion,
   isProseDocument,
@@ -402,6 +403,48 @@ describe("looksLikeConfabulation", () => {
     expect(looksLikeConfabulation("The tool returned a list of 5 files in the repository.")).toBe(false);
     expect(looksLikeConfabulation(null)).toBe(false);
     expect(looksLikeConfabulation("")).toBe(false);
+  });
+});
+
+describe("looksLikeTruncationSurrender", () => {
+  const incidentTexts = [
+    "I’m sorry, but the final coordination updates were not persisted before the execution session ended.",
+    "The final REQUEST_CHANGES deliverable could not be completed because the execution session ended before the required write and wc -l / head verification step.",
+    "STATUS: FAIL\nOUTPUT_FILE: /tmp/results/result-audit.md\nSIZE_BYTES: 0\nSPECIFICS: The required report was not written or verified because the execution environment did not permit a further bash tool call after the initial inspection output was truncated.",
+    "STATUS: FAIL\nOUTPUT_FILE: /tmp/out.txt\nCOMMAND: unavailable because the execution tool session ended after returning truncated inspection output\nERROR: no bash tool is available in the current turn to inspect the saved output and write or verify the required artifact",
+    "STATUS: FAIL\nOUTPUT: /tmp/results/result-impl.md\nSUMMARY: Required implementation and verification could not be completed because the execution session ended after the initial inspection output was truncated. No PASS is reported without confirmed template writes, test creation, and a passing Django test run.",
+  ];
+
+  it("flags all 5 production incident texts as truncation surrenders and confabulations", () => {
+    for (const incident of incidentTexts) {
+      expect(looksLikeTruncationSurrender(incident)).toBe(true);
+      expect(looksLikeConfabulation(incident)).toBe(true);
+    }
+  });
+
+  it("flags real-world interruption after initial inspection as truncation surrender and confabulation", () => {
+    const interruptionText =
+      "STATUS: FAIL\n" +
+      "OUTPUT: /home/lewis/Projects/gwdc/gwcloud_bilby/.agents/results/20260916-083942-55/result-task6-roundtrip-20260916-083942-55.md\n" +
+      "SUMMARY: Execution was interrupted after the initial repository inspection. The required test and result files were not written or verified, so PASS cannot be reported.";
+
+    expect(looksLikeTruncationSurrender(interruptionText)).toBe(true);
+    expect(looksLikeConfabulation(interruptionText)).toBe(true);
+  });
+
+  it("does NOT flag normal test failures, clean answers, or ordinary deliverables", () => {
+    expect(
+      looksLikeTruncationSurrender(
+        "STATUS: FAIL\nNOTES: Command exited with code 1 before successful on-disk verification."
+      )
+    ).toBe(false);
+    expect(looksLikeTruncationSurrender("Phase 1 complete. All gate exit conditions satisfied.")).toBe(false);
+    expect(looksLikeTruncationSurrender("The function was enabled and the test execution completed with 0 errors.")).toBe(false);
+    expect(looksLikeTruncationSurrender("The tool returned a list of 5 files in the repository.")).toBe(false);
+    expect(looksLikeTruncationSurrender("Security audit report: All endpoints enforce CSRF validation properly.")).toBe(false);
+    expect(looksLikeTruncationSurrender(null)).toBe(false);
+    expect(looksLikeTruncationSurrender("")).toBe(false);
+    expect(looksLikeTruncationSurrender("short")).toBe(false);
   });
 });
 

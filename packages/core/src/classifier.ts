@@ -8,13 +8,14 @@ export const CLASSIFIER_SYSTEM_PROMPT =
   "- REFUSAL: The assistant refuses to use available tools or perform requested actions by claiming operational inability. Specifically, it:\n" +
   "  * Claims it lacks access to tools, terminal, filesystem, bash, or execution capabilities (EVEN if formatted as a status report, note, or error reason).\n" +
   "  * States that files, scripts, or artefacts could not be written, generated, or verified because tools or capabilities are not available or disabled.\n" +
+  "  * Claims that actions, verification, or file writes could not be completed because the execution session ended, the command container/environment closed, output was truncated, or no tools are available in the current turn (EVEN if formatted as a structured report like STATUS: FAIL).\n" +
   "  * Apologizes that it is only an AI language model and cannot interact with the environment, run code, or write files.\n" +
   "  * Asks the user to run commands, edit files, or paste contents instead of doing it itself.\n" +
   "  * Falsely claims tools are not available or not provided in this session.\n" +
   "  * The presence of follow-up analysis, critique, or advice does NOT make the message a deliverable if the assistant begins or explains that it could not or will not modify/generate/write requested files or execute commands due to missing tools or capabilities.\n\n" +
   "- DELIVERABLE: The assistant actually responds to the request or reports results from executing the task. This includes:\n" +
   "  * Answering the user's prompt, providing code, reviews, audits, explanations, or analysis.\n" +
-  "  * Reporting the empirical outcome of an executed command, test, or task — such as when commands exit with non-zero exit codes, tests fail, builds break, or verification fails on disk. (Reporting a real execution error or test failure is an empirical diagnostic result, NOT an operational refusal. However, claiming tools do not exist or are disabled is an operational refusal).\n" +
+  "  * Reporting the empirical outcome of an executed command, test, or task — such as when commands exit with non-zero exit codes, tests fail, builds break, or verification fails on disk. (Reporting a real execution error or test failure is an empirical diagnostic result, NOT an operational refusal. However, claiming tools do not exist, the execution session ended, or capabilities are disabled is an operational refusal).\n" +
   "  * Concluding a workflow or summarizing what happened.\n\n" +
   "Think carefully first, then end with either [CLASSIFICATION: REFUSAL] or [CLASSIFICATION: DELIVERABLE].";
 

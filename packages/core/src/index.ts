@@ -75,6 +75,7 @@ export {
   parseToolCalls,
   looksLikeConfabulation,
   looksLikeSafetyRefusal,
+  looksLikeTruncationSurrender,
   looksLikeHallucinatedCompletion,
   looksLikeRemoteArtifactCompletion,
   isProseDocument,

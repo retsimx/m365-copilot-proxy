@@ -9,6 +9,7 @@ import {
   parseToolCalls,
   looksLikeConfabulation,
   looksLikeSafetyRefusal,
+  looksLikeTruncationSurrender,
   classifyTurnResponse,
   looksLikeHallucinatedCompletion,
   looksLikeRemoteArtifactCompletion,
@@ -76,6 +77,13 @@ const HALLUCINATION_FORCE_PROMPT =
 // harness tools instead of letting the remote patch leak into the conversation.
 const REMOTE_ARTIFACT_FORCE_PROMPT =
   "The patch or download link you produced exists only in M365's remote environment and is NOT a file in the caller's working directory. Do NOT create, download, or apply a patch, and do NOT use a Teams artifact link. Use the provided local edit/write tool directly; if needed, emit ONE ```bash block that modifies the named local file in place. Output only that single local tool call, nothing else.";
+export const ARTIFACT_FORCE_PROMPT = REMOTE_ARTIFACT_FORCE_PROMPT;
+
+export const TRUNCATION_SURRENDER_FORCE_PROMPT =
+  "CORRECTION: The execution session has NOT ended and bash/tools remain fully active and operational. " +
+  "The previous tool output was simply truncated for length. " +
+  "Do not surrender or assume execution has ended due to output truncation or interruptions. " +
+  "Continue your work now by issuing ONE ```bash block to inspect smaller chunks (e.g. grep, head, sed) or perform the required actions.";
 
 // M365 soft-caps output around ~3k tokens (~12k chars) and — critically —
 // CONCLUDES EARLY rather than truncating mid-stream, so a too-long answer comes
@@ -919,22 +927,32 @@ export async function handleChatCompletion(
       (m) => m.role === "assistant" && Array.isArray(m.tool_calls) && m.tool_calls.length > 0,
     );
     for (let attempt = 0; attempt < maxConfabRetries && !parsed.hasToolCalls; attempt++) {
+      const truncationSurrender = looksLikeTruncationSurrender(parsed.textContent);
       const isRefusal =
         hasTools &&
         !parsed.hasToolCalls &&
         Boolean(parsed.textContent) &&
-        (looksLikeConfabulation(parsed.textContent) || (await classifyTurnResponse(parsed.textContent)) === "REFUSAL");
+        (truncationSurrender || looksLikeConfabulation(parsed.textContent) || (await classifyTurnResponse(parsed.textContent)) === "REFUSAL");
       const confab = isRefusal;
       const remoteArtifact = looksLikeRemoteArtifactCompletion(parsed.textContent);
       const halluc = !everActed && looksLikeHallucinatedCompletion(parsed.textContent);
       if (!confab && !remoteArtifact && !halluc) break;
-      if (confab) {
+      if (truncationSurrender) {
+        log.info(`Truncation surrender detected (no tool call) — forcing retry ${attempt + 1}/${maxConfabRetries}`);
+      } else if (confab) {
         log.info(`SLM classified turn as REFUSAL (no tool call) — forcing retry ${attempt + 1}/${maxConfabRetries}`);
       } else {
         const retryKind = remoteArtifact ? "Remote artifact completion" : "Hallucinated completion";
         log.info(`${retryKind} detected (no tool call) — forcing retry ${attempt + 1}/${maxConfabRetries}`);
       }
-      const basePrompt = remoteArtifact ? REMOTE_ARTIFACT_FORCE_PROMPT : confab ? CONFAB_FORCE_PROMPT : HALLUCINATION_FORCE_PROMPT;
+      const forcePrompt = looksLikeTruncationSurrender(parsed.textContent)
+        ? TRUNCATION_SURRENDER_FORCE_PROMPT
+        : looksLikeRemoteArtifactCompletion(parsed.textContent)
+          ? ARTIFACT_FORCE_PROMPT
+          : confab
+            ? CONFAB_FORCE_PROMPT
+            : HALLUCINATION_FORCE_PROMPT;
+      const basePrompt = forcePrompt;
       const toolsBlock = hasTools ? `${formatToolDefinitions(body.tools)}\n\n` : "";
       text = `${toolsBlock}${basePrompt}`;
       const retry = await runBuffered();

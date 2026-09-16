@@ -428,10 +428,30 @@ export function looksLikeSafetyRefusal(text: string | null): boolean {
 }
 
 /**
+ * Detect operational surrenders where the model claims actions could not be completed,
+ * written, or verified because the execution session/environment ended, closed, or output was truncated.
+ */
+export function looksLikeTruncationSurrender(text: string | null): boolean {
+  if (!text) return false;
+  const t = text.trim();
+  if (t.length < 15) return false;
+  return (
+    /(?:execution|tool|terminal|shell)(?:\s+tool)?\s+(?:session|environment|context|runtime)\s+(?:ended|terminated|closed|expired|halted|interrupted)\s+after\s+(?:returning\s+|.+?\s+)?truncated/i.test(t) ||
+    /(?:could\s+not\s+be\s+(?:completed|written|verified|persisted|performed)|not\s+(?:been\s+)?(?:written|verified|persisted))\s+(?:because|before)\s+(?:the\s+)?(?:execution|tool|terminal|shell)\s+(?:session|environment|context|runtime)\s+(?:ended|terminated|closed|expired|halted|interrupted)/i.test(t) ||
+    /(?:execution|tool)\s+(?:session|environment)\s+did\s+not\s+permit\s+a\s+further\s+(?:bash|shell|tool)(?:\s+(?:bash|shell|tool))?\s+call\s+after\s+.*truncated/i.test(t) ||
+    /no\s+(?:bash|shell|file-?(?:writing|editing)|execution)\s+tool\s+is\s+available\s+in\s+the\s+current\s+turn/i.test(t) ||
+    /(?:execution|tool)\s+(?:session|environment)\s+(?:ended|interrupted)\s+before\s+the\s+required/i.test(t) ||
+    /(?:execution|process|workflow|run|task)\s+was\s+interrupted\s+after\s+.*(?:inspection|repository|command)/i.test(t)
+  );
+}
+
+/**
  * Segment text into independent syntactic clauses and check if any clause expresses
  * a refusal to act due to missing, disabled, or unattached tools/capabilities.
  */
 function hasClauseRefusal(text: string): boolean {
+  if (looksLikeTruncationSurrender(text)) return true;
+
   const failSummaryRefusal =
     /^FAIL\b[\s\S]{0,140}(?:could\s+not\s+be\s+written|not\s+been\s+written|not\s+verified|file-generation\s+capabilities\s+are\s+disabled|does\s+not\s+provide\s+an\s+executable)/i;
   if (failSummaryRefusal.test(text)) return true;
@@ -439,7 +459,9 @@ function hasClauseRefusal(text: string): boolean {
   const toolWords =
     /(?:\btools?\b|\bshell\b|\bexecution\b|\btool_calls?\b|`<tools>`|`?(?:bash|skill|question|task|edit_file|write_file|read_file|glob|grep|editing|apply_patch)`?|\bfile\s+editing\b|\bfilesystem\b|\bterminal\b|\bcommand\s+execution\b|\bexecutable\b|\bbinary\b|\bcapabilities\b|\bfile-?(?:generation|writing)\b|\bscript-?(?:generation|execution)\b|\bshell-?execution\b)/i;
   const directNegStateWords =
-    /(?:\b(?:disabled|unavailable|inactive|unsupported|unmounted|inaccessible|unreachable|unexecutable|disallowed|prohibited)\b|not\s+(?:available|provided|enabled|operational))/i;
+    /(?:\b(?:disabled|unavailable|inactive|unsupported|unmounted|inaccessible|unreachable|unexecutable|disallowed|prohibited)\b|not\s+(?:available|provided|enabled|operational)|(?:session|environment|context|runtime)\s+(?:ended|terminated|closed|expired|halted|interrupted|concluded)\b|(?:ended|terminated|closed|expired|halted|interrupted|concluded)\s+(?:session|environment|context|runtime)\b)/i;
+  const sessionTerminationWords =
+    /(?:execution|tool|terminal|shell)\s+(?:session|environment|context|runtime)\s+(?:ended|terminated|closed|expired|halted|interrupted|concluded)\b/i;
   const negWords =
     /(?:\b(?:not|no|cannot|can.?t|unable|without|lack|absence|isn.?t|aren.?t|don.?t|never|falsely|decline|impossible|prevented|restricted|couldn.?t|did.?t|didn.?t|won.?t|wouldn.?t)\b|wasn.?t\s+able)/i;
   const availWords =
@@ -491,6 +513,7 @@ function hasClauseRefusal(text: string): boolean {
 
     if (toolWords.test(clause)) {
       if (directNegStateWords.test(clause)) return true;
+      if (sessionTerminationWords.test(clause)) return true;
       if (negWords.test(clause) && (availWords.test(clause) || accessActionWords.test(clause))) return true;
     }
 
@@ -505,7 +528,7 @@ export function looksLikeConfabulation(text: string | null): boolean {
   if (!text) return false;
   const t = text.trim();
   if (t.length < 12) return false;
-  return looksLikeSafetyRefusal(t) || hasClauseRefusal(t) || CONFABULATION_PATTERNS.some((re) => re.test(t));
+  return looksLikeSafetyRefusal(t) || looksLikeTruncationSurrender(t) || hasClauseRefusal(t) || CONFABULATION_PATTERNS.some((re) => re.test(t));
 }
 
 /**
