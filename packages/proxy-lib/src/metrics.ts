@@ -85,7 +85,7 @@ export function getSystemMetricsConfig(): SystemMetricsConfig {
     minSpacingMs,
     newSessionSpacingMs: minSpacingMs,
     throttleCooldownSec: Number(process.env.M365_THROTTLE_COOLDOWN_SEC ?? 1800),
-    userThrottleCooldownSec: Number(process.env.M365_USER_THROTTLE_COOLDOWN_SEC ?? 3900),
+    userThrottleCooldownSec: Number(process.env.M365_USER_THROTTLE_COOLDOWN_SEC ?? 1200),
     maxRetryAfterSec: Number(process.env.M365_MAX_RETRY_AFTER_SEC ?? 60),
   };
 }
