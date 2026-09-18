@@ -178,4 +178,35 @@ describe("createBackoffController", () => {
     controller.arm(15_000); // 3000 + 15000 = 18000 > 10000
     expect(controller.getRemainingCooldownMs()).toBe(15_000);
   });
+
+  it("passes reason to onTrigger when armed, and undefined when triggered via note", () => {
+    const triggers: Array<{ distinctConversations: number; cooldownMs: number; level: number; reason?: string }> = [];
+    const { controller } = setup({
+      onTrigger: (info) => { triggers.push(info); },
+    });
+
+    controller.arm(12_000, "PerUserThrottled");
+    expect(triggers).toHaveLength(1);
+    expect(triggers[0]).toEqual({
+      distinctConversations: 3,
+      cooldownMs: 12_000,
+      level: 1,
+      reason: "PerUserThrottled",
+    });
+
+    controller.note(false, "c1"); // resets backoff
+    expect(controller.isBackingOff()).toBe(false);
+
+    controller.note(true, "c1");
+    controller.note(true, "c2");
+    controller.note(true, "c3");
+    expect(triggers).toHaveLength(2);
+    expect(triggers[1]).toEqual({
+      distinctConversations: 3,
+      cooldownMs: 5000,
+      level: 1,
+      reason: undefined,
+    });
+  });
 });
+

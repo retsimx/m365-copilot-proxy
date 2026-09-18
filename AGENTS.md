@@ -35,16 +35,21 @@ Leave a one-line pointer + evidence reference behind in the notebook.
 
 Hard-won defaults for working on this proxy. Internalize these before touching anything.
 
-1. **Always run sequentially — one thread at a time.** The rate limit is real but
-   weird: it tracks *conversations/threads started per unit time*, not messages (F13).
-   Upstream throttling returns explicit `PerScenarioThrottled` completion frames (which
-   previously manifested as empty `answer length: 0` / 502s when unparsed). The proxy
-   enforces a 15-second new session stagger queue for fresh conversations (`turn === 0`)
-   to cap thread creation at 4/min, and arms a 30-minute circuit breaker when tripped.
-   Never fire concurrent requests, and never loop fresh conversations back-to-back.
-   Space experiment runs out (generous cooldowns between threads). A real pi/openclaw
-   session — one long thread, many messages — is cheap; it's our *experiments* (a new
-   thread per task) that burn the thread budget and trigger the throttle.
+1. **Always run sequentially — one thread at a time.** Rate limiting operates across two horizons:
+   - **Thread spawn rate (`PerScenarioThrottled`):** Tracks *conversations/threads started per unit time*,
+     not messages (F13). Tripping it returns explicit `PerScenarioThrottled` completion frames and arms
+     a 30-minute (1800s) cooldown. The proxy enforces a continuous token bucket + 15s stagger queue for
+     fresh conversations (`turn === 0`) to cap thread creation at 4/min.
+   - **Hourly turn volume (`PerUserThrottled`):** Tracks total turns dispatched across the account,
+     enforcing a hard ceiling of ~120 turns in a 60-minute rolling window. Tripping it arms a 20-minute
+     (1200s) cooldown (`M365_USER_THROTTLE_COOLDOWN_SEC`). The proxy protects this with a Dual-Horizon
+     Progressive Leaky Bucket and a serialized Priority FIFO Turn Gatekeeper (`paceTurnVelocity`) with
+     1500ms minimum turn spacing (`M365_MIN_TURN_SPACING_MS = 1500`), where forcing retries jump to the
+     head of the queue.
+   Never fire concurrent requests, and never loop fresh conversations back-to-back. Space experiment
+   runs out (generous cooldowns between threads). A real pi/openclaw session — one long thread, many
+   messages — is cheap; it's our *experiments* (a new thread per task) or unthrottled subagents that
+   burn the thread budget and trigger the throttle.
 
 2. **Chase all hunches — tangents are encouraged.** This is an undocumented API we're
    reverse-engineering. The moment you think *"oh, maybe X works like this"* — stop and
@@ -179,19 +184,25 @@ pnpm test:live      # M365_LIVE=1; live tests that hit real M365 (uses quota)
 - **M365 disengages on large tool payloads.** Keep injected toolsets lean. This is why
   pi works and heavy harnesses (opencode) don't. The proxy also enforces one tool call per
   turn and strips M365's invented `{confidence}`/`{final}` JSON (`M365_ALLOW_MULTI_TOOL` to opt out).
-- **Account degradation is THREAD-rate, not message-count** (docs/hypotheses.md §9 F13).
-  Microsoft throttles *conversations started*, not messages sent — the per-conversation
-  counter resets each thread. Upstream throttling returns explicit `PerScenarioThrottled`
-  completion frames (which previously caused `answer length: 0` / silent failures when unparsed).
-  A bench or harness that opens fresh conversations/subagents in rapid succession burns the
-  thread budget fast (~15–20 threads / 10 min); a single long thread (hundreds of messages) is fine.
-- **The proxy features a Local Circuit Breaker Shield.** When upstream throttling (`PerScenarioThrottled`)
-  or repeated empty responses across conversations are detected, the proxy arms a 30-minute (1800s)
-  default cooldown (`M365_THROTTLE_COOLDOWN_SEC`). The proxy intercepts subsequent requests locally
-  and returns **`HTTP 429 Too Many Requests`** with a client header capped at **`Retry-After: 60`**
-  (`M365_MAX_RETRY_AFTER_SEC`). This sends **zero traffic to Microsoft** during the cooldown window,
-  allowing Microsoft's token bucket to recharge while standard OpenAI clients (OpenCode, Pi)
-  automatically pause and retry without aborting the turn.
+- **Account degradation has two distinct horizons:**
+  - **Thread-rate (`PerScenarioThrottled`, docs/hypotheses.md §9 F13):** Microsoft throttles
+    *conversations started*, not messages sent — the per-conversation counter resets each thread.
+    Upstream throttling returns explicit `PerScenarioThrottled` completion frames. A bench or harness
+    that opens fresh conversations/subagents in rapid succession burns the thread budget fast (~15–20
+    threads / 10 min); a single long thread (hundreds of messages) is fine.
+  - **Hourly turn volume (`PerUserThrottled`, docs/hypotheses.md §17 F31/F34):** Microsoft caps total
+    account turns at ~120 turns per 60-minute rolling window.
+- **The proxy features a Local Circuit Breaker Shield.** When upstream throttling (`PerScenarioThrottled`
+  or `PerUserThrottled`) or repeated empty responses across conversations are detected, the proxy arms
+  a cooldown (1800s for `PerScenarioThrottled`, 1200s for `PerUserThrottled`). The proxy intercepts
+  subsequent requests locally and returns **`HTTP 429 Too Many Requests`** with a client header capped at
+  **`Retry-After: 60`** (`M365_MAX_RETRY_AFTER_SEC`). This sends **zero traffic to Microsoft** during
+  the cooldown window, allowing Microsoft's token bucket to recharge while standard OpenAI clients
+  (OpenCode, Pi) automatically pause and retry without aborting the turn.
+- **Priority FIFO Turn Gatekeeper & Wire Pacing (`paceTurnVelocity`):** Serializes all backend turns
+  through a live-recalculating FIFO queue. Turns enforce a minimum 1500ms wire spacing
+  (`M365_MIN_TURN_SPACING_MS = 1500`) to prevent thundering herd bursts. Forcing retries (`attempt > 0`)
+  queue with `{ priority: true }`, jumping ahead of normal turns while preserving FIFO among retries.
 - **New Session Stagger Queue:** The proxy enforces a 15-second spacing queue for initial turns
   (`turn === 0`, `M365_NEW_SESSION_SPACING_MS = 15000`), capping fresh session creation to 4/min to
   prevent parallel dispatch drops while follow-up turns (`turn > 0`) run unthrottled.

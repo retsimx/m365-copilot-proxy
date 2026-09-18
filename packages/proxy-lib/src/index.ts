@@ -15,6 +15,7 @@ export {
   setStaggerQueueInternalState,
   paceTurnVelocity,
   resetTurnVelocityPacing,
+  resetTurnQueue,
   getGovernorState,
   getRecentTurnTimestamps,
   setRecentTurnTimestamps,

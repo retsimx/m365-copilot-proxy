@@ -303,46 +303,33 @@ The final `type:2` frame carries the canonical state of the whole conversation i
 - This is why we **reuse one conversation** across an agent session and send **only new messages** on follow-up turns (delta mode) — every `Please continue.` retry also counts against the 600.
 - There is also opaque **account-level throttling** (rapid-fire requests can start returning empties). It recovers on its own.
 
-### Account degradation & Thread-Rate Throttling (quantified & mitigated)
+### Account degradation: Thread-Rate (`PerScenarioThrottled`) vs Hourly Turn Volume (`PerUserThrottled`)
 
-A sustained burst of new conversations/subagents drives the account into a **degraded state**
-that is distinct from the per-conversation 600 cap (which resets per conversation).
+Microsoft enforces two distinct account-level rate limiting regimes, both keyed to the user's Microsoft Entra Object ID (`oid`):
 
-- **The Limit:** Microsoft throttles **threads / conversations started per unit time** (~15–20 new
-  threads / 10 min, or bursts of >5 threads in <2 min). In-thread message volume is unmetered.
-- **The Signature (`PerScenarioThrottled`):** Upstream throttling returns explicit completion
-  frames: SignalR `type: 2` stream items containing `item.result` with `errorCode: "PerScenarioThrottled"`
-  (or `value: "Throttled"`) and `item.turnState: "Failed"`. Historically, when unparsed, these
-  completion frames appeared as empty replies (`answer length: 0`, `type: 7`, `offense: "None"`),
-  leading to bogus rate-limit or safety misdiagnoses. The proxy now mines `item.result` on every
-  `type: 2` frame and detects throttling directly.
-- **Identity-Keyed (`oid`):** The governor keys on the Microsoft Entra User Object ID. Token
-  regeneration does not bypass it.
-- **Recovery Dynamics (30-minute baseline):** Upstream thread-bucket replenishment is non-linear.
-  Empirical probing shows that waiting 10 minutes recovers only ~1 thread token; attempting a fresh
-  request then immediately re-exhausts the bucket. Achieving a full bucket recovery requires
-  **30–35 minutes of absolute quiet**.
-- **Mitigation & Circuit Breaker (Shipped):**
-  - **Local Circuit Breaker Shielding (`packages/core/src/auth-recovery.ts`):** Upon detecting
-    upstream `PerScenarioThrottled` or repeated empty responses across distinct conversations, the
-    proxy arms a 30-minute (1800s) default cooldown (`M365_THROTTLE_COOLDOWN_SEC = 1800`).
-  - **Zero Upstream Waste:** While the circuit breaker is open, incoming requests are intercepted
-    locally and return **`HTTP 429 Too Many Requests`**. **Zero requests are sent to Microsoft**
-    during this window, protecting the upstream token bucket so it can recharge undisturbed.
-  - **Client-Capped `Retry-After: 60`:** Although the circuit breaker holds a 30-minute shield,
-    the response header `Retry-After` is capped at 60 seconds (`M365_MAX_RETRY_AFTER_SEC = 60`).
-    This prevents standard OpenAI clients (OpenCode, Pi, OpenAI SDK) from timing out or aborting,
-    enabling them to loop their normal backoff/retry cycles smoothly until the shield clears.
-  - **New Session Stagger Queue (`paceNewSessionStart`):** To prevent burst thread exhaustion when
-    multiple agents or background workers launch in parallel, the proxy gates initial turns
-    (`turn === 0`) through a 15-second pacing queue (`M365_NEW_SESSION_SPACING_MS = 15000`). This
-    caps fresh thread creation at 4 per minute, while follow-up turns (`turn > 0`) within existing
-    conversations run unthrottled with zero added delay.
+1. **Thread-Rate Throttling (`PerScenarioThrottled`):**
+   - **The Limit:** Tracks **threads / conversations started per unit time** (~15–20 new threads / 10 min, or bursts of >5 threads in <2 min).
+   - **The Signature:** SignalR `type: 2` completion frames with `errorCode: "PerScenarioThrottled"` (or `value: "Throttled"`) and `item.turnState: "Failed"`.
+   - **Recovery & Cooldown:** Full bucket recovery requires **30–35 minutes of absolute quiet**. The proxy arms a 30-minute (1800s) default cooldown (`M365_THROTTLE_COOLDOWN_SEC = 1800`).
+   - **Mitigation:** The **New Session Stagger Queue** (`paceNewSessionStart`) gates fresh conversations (`turn === 0`) through a 15-second pacing queue (`M365_NEW_SESSION_SPACING_MS = 15000`), backed by a continuous token bucket (capacity 10, refill 1 token / 150s).
+
+2. **Hourly Turn Volume Throttling (`PerUserThrottled`):**
+   - **The Limit:** Tracks **total turns dispatched across the account** across all threads. Empirical testing establishes a hard ceiling of **120 turns per rolling 60-minute window**.
+   - **The Signature:** SignalR `type: 2` completion frames with `errorCode: "PerUserThrottled"`.
+   - **Recovery & Cooldown:** Cooldown resets in **20 minutes (1200s)** (`M365_USER_THROTTLE_COOLDOWN_SEC = 1200`), allowing the rolling bucket to drain.
+   - **Contingency Note:** If the 120 turns/60m ceiling ever trips again under strict serialization, upstream reasoning/thinking tokens (e.g. DeepLeo CoT generation) may factor into Microsoft's hidden account quota, which would require dropping the sustained threshold from 120 down to 110–115 turns/hr.
+   - **Mitigation:** The **Dual-Horizon Progressive Leaky Bucket & Priority FIFO Gatekeeper** (`paceTurnVelocity`):
+     - **Burst Horizon (10 Minutes):** Soft elastic spacing (3s..15s) for turns 30–34, with hard drain protection engaging only if bursts reach 35 turns (`M365_BURST_MAX_TURNS = 35`).
+     - **Sustained Macro Horizon (60 Minutes):** Graduated resistance (5s..25s) begins when the rolling 60m count reaches 90 turns (`M365_SUSTAINED_WARN_TURNS = 90`), capping strictly at 120 turns (`M365_SUSTAINED_MAX_TURNS = 120`).
+     - **Priority FIFO Serialization:** Replaces old barrier-based pacing with a serialized FIFO queue. When forcing retries occur (`attempt > 0`), turns are enqueued with `{ priority: true }`, jumping ahead of un-dispatched normal turns while preserving FIFO among retries.
+     - **Live Recalculation:** Every turn re-checks window timestamps live before release, eliminating thundering herd stampedes.
+     - **Wire-Level Turn Spacing:** Enforces a minimum spacing of 1500ms between consecutive turn dispatches (`M365_MIN_TURN_SPACING_MS = 1500`) to prevent parallel packet bursts.
+
+- **Local Circuit Breaker Shielding (`packages/core/src/auth-recovery.ts`):** Upon detecting either `PerScenarioThrottled` or `PerUserThrottled`, the proxy arms its circuit breaker. Subsequent requests are intercepted locally and return **`HTTP 429 Too Many Requests`** with a client-capped **`Retry-After: 60`** header (`M365_MAX_RETRY_AFTER_SEC = 60`). **Zero traffic is sent to Microsoft** during the cooldown, allowing the account to self-heal while standard OpenAI clients (OpenCode, Pi) loop cleanly.
 
 **Operational implications.**
-- Keep tasks inside persistent long threads wherever possible. Spawning 10 subagents consumes 10×
-  more thread budget than sending 100 messages in a single continuous thread.
-- If `HTTP 429` is returned with `Retry-After`, let the client sleep and auto-retry.
+- Keep tasks inside persistent long threads wherever possible. Spawning 10 subagents consumes 10× more thread budget than sending 100 messages in a single continuous thread.
+- If `HTTP 429` is returned with `Retry-After`, let the client sleep and auto-retry without killing the session.
 
 ---
 

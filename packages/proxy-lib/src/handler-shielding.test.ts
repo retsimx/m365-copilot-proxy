@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   handleChatCompletion,
   SessionPool,
@@ -6,6 +6,7 @@ import {
   resetNewSessionPacing,
   paceTurnVelocity,
   resetTurnVelocityPacing,
+  resetTurnQueue,
   TRUNCATION_SURRENDER_FORCE_PROMPT,
 } from "./handler.js";
 import * as core from "@m365-copilot/core";
@@ -247,7 +248,7 @@ describe("Handler Degradation Circuit Breaker & 429 Retry-After Shielding", () =
     expect(triggerSpy).toHaveBeenCalledWith(1_800_000, "PerScenarioThrottled");
   });
 
-  it("fails fast with HTTP 429 when copilotStream errorCode is PerUserThrottled, arming 3900s cooldown by default", async () => {
+  it("fails fast with HTTP 429 when copilotStream errorCode is PerUserThrottled, arming 1200s cooldown by default", async () => {
     vi.spyOn(core, "isDegradationBackoff").mockReturnValue(false);
     const triggerSpy = vi.spyOn(core, "triggerDegradationBackoff").mockImplementation(() => {});
 
@@ -285,12 +286,57 @@ describe("Handler Degradation Circuit Breaker & 429 Retry-After Shielding", () =
     expect(json.error).toBeDefined();
     expect(json.error.type).toBe("rate_limit_error");
     expect(json.error.code).toBe("rate_limit_exceeded");
-    expect(json.error.message).toContain("3900s remaining");
+    expect(json.error.message).toContain("1200s remaining");
 
     // Fast-fail: exactly 1 attempt (no "Please continue." retries)
     expect(runSpy).toHaveBeenCalledTimes(1);
     expect(resetSpy).toHaveBeenCalled();
-    expect(triggerSpy).toHaveBeenCalledWith(3_900_000, "PerUserThrottled");
+    expect(triggerSpy).toHaveBeenCalledWith(1_200_000, "PerUserThrottled");
+  });
+
+  it("respects custom M365_USER_THROTTLE_COOLDOWN_SEC environment variable when PerUserThrottled", async () => {
+    const origUserCooldown = process.env.M365_USER_THROTTLE_COOLDOWN_SEC;
+    try {
+      process.env.M365_USER_THROTTLE_COOLDOWN_SEC = "2400";
+      vi.spyOn(core, "isDegradationBackoff").mockReturnValue(false);
+      const triggerSpy = vi.spyOn(core, "triggerDegradationBackoff").mockImplementation(() => {});
+
+      const mockStream: any = {
+        [Symbol.asyncIterator]: async function* () {},
+        fullText: "",
+        hasContent: false,
+        throttle: null,
+        scores: null,
+        turnCount: 0,
+        turnState: "Failed",
+        result: {
+          value: "Throttled",
+          errorCode: "PerUserThrottled",
+          message: "Rate limit exceeded for user",
+        },
+        isThrottled: true,
+      };
+
+      vi.spyOn(core.ModelSession.prototype, "run").mockResolvedValue(mockStream);
+      vi.spyOn(core.ModelSession.prototype, "reset");
+
+      const pool = new SessionPool();
+      const body = {
+        model: "gpt-5.5-quick",
+        messages: [{ role: "user" as const, content: "Test prompt" }],
+        stream: false,
+      };
+
+      const response = await handleChatCompletion(body, pool);
+      expect(response.status).toBe(429);
+      expect(triggerSpy).toHaveBeenCalledWith(2_400_000, "PerUserThrottled");
+    } finally {
+      if (origUserCooldown !== undefined) {
+        process.env.M365_USER_THROTTLE_COOLDOWN_SEC = origUserCooldown;
+      } else {
+        delete process.env.M365_USER_THROTTLE_COOLDOWN_SEC;
+      }
+    }
   });
 });
 
@@ -548,9 +594,20 @@ describe("New Session Pacing Queue", () => {
 
 
 describe("Sliding-Window Velocity Governor (paceTurnVelocity)", () => {
+  let origSpacing: string | undefined;
   beforeEach(() => {
+    origSpacing = process.env.M365_MIN_TURN_SPACING_MS;
+    process.env.M365_MIN_TURN_SPACING_MS = "0";
     resetTurnVelocityPacing();
     vi.restoreAllMocks();
+  });
+
+  afterEach(() => {
+    if (origSpacing !== undefined) {
+      process.env.M365_MIN_TURN_SPACING_MS = origSpacing;
+    } else {
+      delete process.env.M365_MIN_TURN_SPACING_MS;
+    }
   });
 
   it("resolves immediately with 0ms delay for turns 1 to 29", async () => {
@@ -711,7 +768,7 @@ describe("Sliding-Window Velocity Governor (paceTurnVelocity)", () => {
       const p = paceTurnVelocity(ac.signal);
 
       ac.abort();
-      await expect(p).rejects.toThrow("Aborted while waiting in velocity pacing queue");
+      await expect(p).rejects.toThrow("Aborted while waiting in turn velocity queue");
     } finally {
       vi.useRealTimers();
     }
@@ -735,10 +792,21 @@ describe("Sliding-Window Velocity Governor (paceTurnVelocity)", () => {
 });
 
 describe("Dual-Engine Classifier Integration in Handler", () => {
+  let origSpacing: string | undefined;
   beforeEach(() => {
+    origSpacing = process.env.M365_MIN_TURN_SPACING_MS;
+    process.env.M365_MIN_TURN_SPACING_MS = "0";
     resetNewSessionPacing();
     resetTurnVelocityPacing();
     vi.restoreAllMocks();
+  });
+
+  afterEach(() => {
+    if (origSpacing !== undefined) {
+      process.env.M365_MIN_TURN_SPACING_MS = origSpacing;
+    } else {
+      delete process.env.M365_MIN_TURN_SPACING_MS;
+    }
   });
 
   it("immediately returns HTTP 200 with deliverable text and zero retries when classified as DELIVERABLE (Deliverable Bypass)", async () => {
@@ -968,3 +1036,182 @@ describe("Dual-Engine Classifier Integration in Handler", () => {
     expect(retryCallArg).toContain(TRUNCATION_SURRENDER_FORCE_PROMPT);
   });
 });
+
+describe("Priority FIFO Turn Gatekeeper", () => {
+  let origSpacing: string | undefined;
+
+  beforeEach(() => {
+    origSpacing = process.env.M365_MIN_TURN_SPACING_MS;
+    delete process.env.M365_MIN_TURN_SPACING_MS; // default to 1500ms
+    resetTurnVelocityPacing();
+    resetTurnQueue();
+    vi.restoreAllMocks();
+  });
+
+  afterEach(() => {
+    if (origSpacing !== undefined) {
+      process.env.M365_MIN_TURN_SPACING_MS = origSpacing;
+    } else {
+      delete process.env.M365_MIN_TURN_SPACING_MS;
+    }
+  });
+
+  it("enforces Priority FIFO ordering: priority retry jumps ahead of un-dispatched normal turns", async () => {
+    vi.useFakeTimers();
+    try {
+      let now = 10_000;
+      vi.spyOn(Date, "now").mockImplementation(() => now);
+
+      const order: string[] = [];
+
+      // Turn 1: initial turn, dispatches immediately
+      const p1 = paceTurnVelocity().then(() => order.push("turn1_normal"));
+      await p1;
+      expect(order).toEqual(["turn1_normal"]);
+
+      // Turn 2: queued normal turn (needs 1500ms spacing)
+      const p2 = paceTurnVelocity(undefined, { priority: false }).then(() => order.push("turn2_normal"));
+      // Turn 3: another queued normal turn
+      const p3 = paceTurnVelocity(undefined, { priority: false }).then(() => order.push("turn3_normal"));
+
+      // Turn 4: priority retry (forcing retry) -> jumps ahead of turn 3 (and behind in-flight turn 2)
+      const p4 = paceTurnVelocity(undefined, { priority: true }).then(() => order.push("turn4_priority"));
+
+      // Advance 1500ms: turn 2 (in-flight at head) finishes
+      now += 1500;
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(order).toEqual(["turn1_normal", "turn2_normal"]);
+
+      // Advance 1500ms: turn 4 (priority) must resolve BEFORE turn 3!
+      now += 1500;
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(order).toEqual(["turn1_normal", "turn2_normal", "turn4_priority"]);
+
+      // Advance 1500ms: turn 3 resolves last
+      now += 1500;
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(order).toEqual(["turn1_normal", "turn2_normal", "turn4_priority", "turn3_normal"]);
+
+      await Promise.all([p1, p2, p3, p4]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("maintains FIFO ordering among multiple priority retries ahead of normal turns", async () => {
+    vi.useFakeTimers();
+    try {
+      let now = 10_000;
+      vi.spyOn(Date, "now").mockImplementation(() => now);
+
+      const order: string[] = [];
+
+      // Turn 1: active at head
+      const p1 = paceTurnVelocity().then(() => order.push("t1"));
+      await p1;
+
+      // Normal turns queued
+      const pNorm1 = paceTurnVelocity(undefined, { priority: false }).then(() => order.push("normal1"));
+      const pNorm2 = paceTurnVelocity(undefined, { priority: false }).then(() => order.push("normal2"));
+
+      // Two priority turns queued: prio1 then prio2
+      const pPrio1 = paceTurnVelocity(undefined, { priority: true }).then(() => order.push("prio1"));
+      const pPrio2 = paceTurnVelocity(undefined, { priority: true }).then(() => order.push("prio2"));
+
+      // Advance t1 spacing: normal1 finishes (was active)
+      now += 1500;
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(order).toEqual(["t1", "normal1"]);
+
+      // Next must be prio1
+      now += 1500;
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(order).toEqual(["t1", "normal1", "prio1"]);
+
+      // Next must be prio2
+      now += 1500;
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(order).toEqual(["t1", "normal1", "prio1", "prio2"]);
+
+      // Finally normal2
+      now += 1500;
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(order).toEqual(["t1", "normal1", "prio1", "prio2", "normal2"]);
+
+      await Promise.all([p1, pNorm1, pNorm2, pPrio1, pPrio2]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("enforces live recalculation: concurrent turns serialize and respect minimum turn spacing", async () => {
+    vi.useFakeTimers();
+    try {
+      let now = 10_000;
+      vi.spyOn(Date, "now").mockImplementation(() => now);
+
+      const timestamps: number[] = [];
+      const p1 = paceTurnVelocity().then(() => timestamps.push(now));
+      const p2 = paceTurnVelocity().then(() => timestamps.push(now));
+      const p3 = paceTurnVelocity().then(() => timestamps.push(now));
+
+      await p1;
+      expect(timestamps).toEqual([10_000]);
+
+      now += 1500;
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(timestamps).toEqual([10_000, 11_500]);
+
+      now += 1500;
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(timestamps).toEqual([10_000, 11_500, 13_000]);
+
+      await Promise.all([p1, p2, p3]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("handles abort signal in queue cleanly without deadlocking subsequent turns", async () => {
+    vi.useFakeTimers();
+    try {
+      let now = 10_000;
+      vi.spyOn(Date, "now").mockImplementation(() => now);
+
+      const events: string[] = [];
+
+      const p1 = paceTurnVelocity().then(() => events.push("p1_done"));
+      await p1;
+      expect(events).toEqual(["p1_done"]);
+
+      const ac2 = new AbortController();
+      const p2 = paceTurnVelocity(ac2.signal).then(
+        () => events.push("p2_done"),
+        (err) => events.push(`p2_aborted:${err.message}`),
+      );
+
+      const p3 = paceTurnVelocity().then(() => events.push("p3_done"));
+
+      // Abort p2 while it is waiting in queue
+      ac2.abort();
+      await p2;
+      expect(events).toContain("p2_aborted:Aborted while waiting in turn velocity queue");
+
+      // Advance timer for p3 to dispatch
+      now += 1500;
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(events).toContain("p3_done");
+
+      await Promise.all([p1, p2, p3]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects immediately if signal is already aborted when calling paceTurnVelocity", async () => {
+    const ac = new AbortController();
+    ac.abort();
+    await expect(paceTurnVelocity(ac.signal)).rejects.toThrow("Aborted while waiting in turn velocity queue");
+  });
+});
+

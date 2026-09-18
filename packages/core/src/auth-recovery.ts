@@ -24,6 +24,13 @@ const log = createLogger("backoff");
 // stale empties expire, escalation so repeated triggers back off harder, and a clean
 // response that lifts the backoff immediately.
 
+export interface BackoffTriggerDetails {
+  distinctConversations: number;
+  cooldownMs: number;
+  level: number;
+  reason?: string;
+}
+
 export interface BackoffOptions {
   /** Clock injection for tests. Defaults to Date.now. */
   now?: () => number;
@@ -43,7 +50,7 @@ export interface BackoffOptions {
   jitterMinMs?: number;
   jitterMaxMs?: number;
   /** Called when backoff opens/escalates (for logging/telemetry). */
-  onTrigger?: (info: { distinctConversations: number; cooldownMs: number; level: number }) => void;
+  onTrigger?: (info: BackoffTriggerDetails) => void;
 }
 
 export interface BackoffController {
@@ -101,7 +108,7 @@ export function createBackoffController(opts: BackoffOptions): BackoffController
       const cooldownMs = Math.min(baseCooldownMs * 2 ** (level - 1), maxCooldownMs);
       backoffUntil = t + cooldownMs;
       empties = [];
-      opts.onTrigger?.({ distinctConversations: distinct, cooldownMs, level });
+      opts.onTrigger?.({ distinctConversations: distinct, cooldownMs, level, reason: undefined });
     },
 
     arm(cooldownMs, reason) {
@@ -109,7 +116,7 @@ export function createBackoffController(opts: BackoffOptions): BackoffController
       level = Math.max(level, 1);
       backoffUntil = Math.max(backoffUntil, t + cooldownMs);
       empties = [];
-      opts.onTrigger?.({ distinctConversations: threshold, cooldownMs, level });
+      opts.onTrigger?.({ distinctConversations: threshold, cooldownMs, level, reason });
     },
 
     async waitForSlot() {
@@ -143,12 +150,19 @@ const defaultController = createBackoffController({
   threshold: Number(process.env.M365_BACKOFF_THRESHOLD ?? process.env.M365_REAUTH_EMPTY_THRESHOLD ?? 3),
   baseCooldownMs: Number(process.env.M365_BACKOFF_BASE_MS ?? 90_000),
   maxCooldownMs: Number(process.env.M365_BACKOFF_MAX_MS ?? 600_000),
-  onTrigger: ({ distinctConversations, cooldownMs, level }) =>
-    log.info(
-      `Degradation backoff (level ${level}): ${distinctConversations} empty responses across distinct ` +
-      `conversations — pacing new turns for ~${Math.round(cooldownMs / 1000)}s to let the account self-heal ` +
-      `(H-R1: a re-login would NOT clear this and would raise our detection profile). Disable with M365_NO_BACKOFF=1.`,
-    ),
+  onTrigger: (details) => {
+    if (details.reason) {
+      log.info(
+        `Degradation backoff (level ${details.level}): ${details.reason} — pacing new turns for ~${Math.round(details.cooldownMs / 1000)}s to let the account self-heal`,
+      );
+    } else {
+      log.info(
+        `Degradation backoff (level ${details.level}): ${details.distinctConversations} empty responses across distinct ` +
+        `conversations — pacing new turns for ~${Math.round(details.cooldownMs / 1000)}s to let the account self-heal ` +
+        `(H-R1: a re-login would NOT clear this and would raise our detection profile). Disable with M365_NO_BACKOFF=1.`,
+      );
+    }
+  },
 });
 
 /** Record a request outcome for the global degradation-backoff policy. No-op if disabled. */

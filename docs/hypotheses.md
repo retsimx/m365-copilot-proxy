@@ -2683,3 +2683,20 @@ surfacing as empty handshakes (`answer length: 0`) rather than `Disengaged`.
 - **Shipped (`packages/proxy-lib/src/handler.ts`):** Upgraded `paceTurnVelocity` to a Dual-Horizon Progressive Leaky Bucket:
   - **Horizon 1 (10-Minute Burst):** Up to 29 turns execute with 0.0ms delay. Turns 30–34 experience soft elastic spacing (3s..15s), preventing cliff freezes. Hard drain delay only engages if sustained bursts exceed 35 turns.
   - **Horizon 2 (60-Minute Sustained Macro Ceiling):** Enforces a safe 120-turn/hour ceiling (well below the 164-turn cliff). When rolling hourly count reaches 90 turns, graduated resistance gently scales turn spacing from 5s to 25s, keeping multi-agent workloads smooth and 100% resilient.
+
+### F34 — Empirical Confirmation of 120 Turns/60m Account Ceiling, Thundering Herd Race & Priority FIFO Gatekeeper 🟢
+
+- **Empirical Confirmation of the 120 Turns / 60m Account Ceiling:**
+  - Sustained load testing across parallel subagents confirmed the hard volume limit: Microsoft throttles user accounts with `PerUserThrottled` when turn velocity exceeds 120 turns in a rolling 60-minute window.
+  - Cooldown probing demonstrates that a 20-minute (1200s) quiet window allows the leaky bucket to drain sufficiently for safe resumption. Consequently, the default `M365_USER_THROTTLE_COOLDOWN_SEC` has been calibrated down from 3900s (65m) to **1200s (20m)**.
+  - **Contingency Note:** If the 120 turns/60m ceiling ever trips again under strict serialization, upstream reasoning/thinking tokens (DeepLeo CoT generation) may factor into Microsoft's internal token budget, requiring a reduction of the sustained threshold to 110–115 turns/hr.
+- **Root Cause Analysis — Thundering Herd Race Condition:**
+  - Under the previous barrier-based `paceTurnVelocity` implementation, multiple concurrent turns evaluated sliding window timestamps at entry nearly simultaneously.
+  - Because timestamps were only appended *after* a delay or upon completion, multiple concurrent turns saw identical, unupdated window metrics and all resolved at once. This produced a packet burst to Microsoft's edge, tripping both thread and turn rate limits.
+  - Furthermore, during confabulation or truncation surrender forcing retries, retry attempts were not prioritized over freshly queued turns, causing retries to stall behind new work and compounding queue latency.
+- **Shipped Resolution (`packages/proxy-lib/src/handler.ts`):**
+  - **Priority FIFO Turn Gatekeeper:** Replaced the barrier implementation with a serialized FIFO queue (`QueuedTurn[]`).
+  - **Forcing Retry Priority:** Turn retries (`attempt > 0`) pass `{ priority: true }` to `paceTurnVelocity`. They jump ahead of all un-dispatched normal turns while maintaining FIFO ordering among other retries.
+  - **Live Window Recalculation:** Each turn at the head of the queue recalculates sliding window limits (`10m` burst and `60m` sustained) against live timestamps at dispatch time rather than insertion time.
+  - **Wire-Level Turn Spacing:** Enforces a mandatory minimum spacing of 1500ms (`M365_MIN_TURN_SPACING_MS = 1500`) between consecutive turns, eliminating simultaneous dispatch stampedes across concurrent subagents.
+
