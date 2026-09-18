@@ -533,6 +533,21 @@ export function getGovernorState(): {
   };
 }
 
+export function getTurnQueueState(): {
+  depth: number;
+  priorityCount: number;
+  minSpacingMs: number;
+  isProcessing: boolean;
+} {
+  const minSpacingMs = Number(process.env.M365_MIN_TURN_SPACING_MS ?? 1500);
+  return {
+    depth: turnQueue.length,
+    priorityCount: turnQueue.filter((q) => q.priority).length,
+    minSpacingMs,
+    isProcessing: isProcessingTurnQueue,
+  };
+}
+
 async function processTurnQueue(): Promise<void> {
   if (isProcessingTurnQueue) return;
   isProcessingTurnQueue = true;

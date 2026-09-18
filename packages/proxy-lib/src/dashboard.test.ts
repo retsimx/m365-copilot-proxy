@@ -74,10 +74,11 @@ describe("Web Dashboard & Telemetry API", () => {
       expect(html).toContain('id="sustainedBar"');
       expect(html).toContain('id="sustainedWarnMarker"');
 
-      // Card 4: Circuit Shield & Queue
-      expect(html).toContain("Circuit Shield &amp; Queue");
+      // Card 4: Circuit Shield & Gatekeeper
+      expect(html).toContain("Circuit Shield &amp; Gatekeeper");
       expect(html).toContain('id="circuitBadge"');
       expect(html).toContain('id="queueDelayPrimary"');
+      expect(html).toContain('id="queueDelaySecondary"');
       expect(html).toContain('id="queueBar"');
     });
 
@@ -107,7 +108,7 @@ describe("Web Dashboard & Telemetry API", () => {
       // Legend items
       expect(html).toContain("Turns Filled Area");
       expect(html).toContain("New Sessions (Turn 0)");
-      expect(html).toContain("Throttle Event (PerScenarioThrottled)");
+      expect(html).toContain("Upstream Throttle (PerScenario / PerUser)");
       expect(html).toContain("Safe Zone");
       expect(html).toContain("Guarded Zone");
       expect(html).toContain("Danger Zone");
@@ -128,7 +129,7 @@ describe("Web Dashboard & Telemetry API", () => {
       const html = getDashboardHtml();
       expect(html).toContain("System Primer &amp; Architectural Knowledge Base");
       expect(html).toContain('What is the difference between a "Session" and a "Turn"?');
-      expect(html).toContain("Why does Microsoft throttle Thread Creation rather than Token Count?");
+      expect(html).toContain("What are Microsoft's two distinct throttling horizons (Thread Creation vs Turn Volume)?");
       expect(html).toContain("How does the Dual-Horizon Governor calculate elastic braking?");
       expect(html).toContain("What does the Session Stagger Queue do?");
       expect(html).toContain("How does the Local Circuit Breaker protect the account?");

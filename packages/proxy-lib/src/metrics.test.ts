@@ -188,8 +188,27 @@ describe("Telemetry Metrics Engine (proxy-lib)", () => {
     expect(body.history.points).toHaveLength(360);
     expect(body.health).toBe("healthy");
     expect(body.circuitBreaker).toBeDefined();
+    expect(body.circuitBreaker.reason).toBeUndefined();
+    expect(body.turnQueue).toBeDefined();
+    expect(body.turnQueue).toEqual({
+      depth: 0,
+      priorityCount: 0,
+      minSpacingMs: 1500,
+      isProcessing: false,
+    });
     expect(body.governor).toBeDefined();
     expect(body.staggerQueue).toBeDefined();
     expect(body.config).toBeDefined();
+  });
+
+  it("7. snapshot reports turnQueue state and circuitBreaker reason", () => {
+    const snapshot = getMetricsSnapshot(undefined, "1h");
+    expect(snapshot.turnQueue).toEqual({
+      depth: 0,
+      priorityCount: 0,
+      minSpacingMs: 1500,
+      isProcessing: false,
+    });
+    expect(snapshot.circuitBreaker.reason).toBeUndefined();
   });
 });

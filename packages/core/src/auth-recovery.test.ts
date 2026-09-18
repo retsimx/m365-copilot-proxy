@@ -208,5 +208,36 @@ describe("createBackoffController", () => {
       reason: undefined,
     });
   });
+
+  it("controller.getReason() tracks arm reason and ConsecutiveEmptyResponses, clearing when healthy", () => {
+    const { controller, advance } = setup();
+
+    // Initially undefined
+    expect(controller.getReason()).toBeUndefined();
+
+    // Arm with reason
+    controller.arm(10_000, "PerScenarioThrottled");
+    expect(controller.getReason()).toBe("PerScenarioThrottled");
+
+    // Advance beyond window -> undefined
+    advance(10_001);
+    expect(controller.getReason()).toBeUndefined();
+
+    // Note consecutive empties -> ConsecutiveEmptyResponses
+    controller.note(true, "c1");
+    controller.note(true, "c2");
+    controller.note(true, "c3");
+    expect(controller.isBackingOff()).toBe(true);
+    expect(controller.getReason()).toBe("ConsecutiveEmptyResponses");
+
+    // Clean response -> resets to undefined
+    controller.note(false, "c3");
+    expect(controller.isBackingOff()).toBe(false);
+    expect(controller.getReason()).toBeUndefined();
+
+    // Arm with PerUserThrottled
+    controller.arm(8000, "PerUserThrottled");
+    expect(controller.getReason()).toBe("PerUserThrottled");
+  });
 });
 

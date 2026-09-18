@@ -17,6 +17,7 @@ export {
   resetTurnVelocityPacing,
   resetTurnQueue,
   getGovernorState,
+  getTurnQueueState,
   getRecentTurnTimestamps,
   setRecentTurnTimestamps,
   TRUNCATION_SURRENDER_FORCE_PROMPT,

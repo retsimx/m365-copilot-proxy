@@ -66,6 +66,7 @@ export interface BackoffController {
   getRemainingCooldownMs: () => number;
   /** Current backoff escalation level (0 if healthy). */
   getLevel: () => number;
+  getReason: () => string | undefined;
 }
 
 export function createBackoffController(opts: BackoffOptions): BackoffController {
@@ -82,6 +83,7 @@ export function createBackoffController(opts: BackoffOptions): BackoffController
   let empties: Array<{ t: number; conv: string }> = [];
   let backoffUntil = -Infinity;
   let level = 0; // escalation level; resets on a clean response
+  let lastReason: string | undefined = undefined;
 
   return {
     note(empty, conversationId) {
@@ -92,6 +94,7 @@ export function createBackoffController(opts: BackoffOptions): BackoffController
         empties = [];
         backoffUntil = -Infinity;
         level = 0;
+        lastReason = undefined;
         return;
       }
 
@@ -107,6 +110,7 @@ export function createBackoffController(opts: BackoffOptions): BackoffController
       level += 1;
       const cooldownMs = Math.min(baseCooldownMs * 2 ** (level - 1), maxCooldownMs);
       backoffUntil = t + cooldownMs;
+      lastReason = "ConsecutiveEmptyResponses";
       empties = [];
       opts.onTrigger?.({ distinctConversations: distinct, cooldownMs, level, reason: undefined });
     },
@@ -115,6 +119,7 @@ export function createBackoffController(opts: BackoffOptions): BackoffController
       const t = now();
       level = Math.max(level, 1);
       backoffUntil = Math.max(backoffUntil, t + cooldownMs);
+      lastReason = reason;
       empties = [];
       opts.onTrigger?.({ distinctConversations: threshold, cooldownMs, level, reason });
     },
@@ -138,6 +143,10 @@ export function createBackoffController(opts: BackoffOptions): BackoffController
 
     getLevel() {
       return now() < backoffUntil ? level : 0;
+    },
+
+    getReason() {
+      return now() < backoffUntil ? lastReason : undefined;
     },
   };
 }
@@ -194,6 +203,11 @@ export function getRemainingDegradationCooldownMs(): number {
 export function getDegradationLevel(): number {
   if (disabled()) return 0;
   return defaultController.getLevel();
+}
+
+export function getDegradationBackoffReason(): string | undefined {
+  if (disabled()) return undefined;
+  return defaultController.getReason();
 }
 
 export function triggerDegradationBackoff(

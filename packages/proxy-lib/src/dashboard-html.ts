@@ -906,21 +906,21 @@ export function getDashboardHtml(): string {
         </div>
       </div>
 
-      <!-- Card 4: Circuit Shield & Queue -->
+      <!-- Card 4: Circuit Shield & Gatekeeper -->
       <div class="card">
         <div class="card-header">
           <span class="card-title">
-            Circuit Shield &amp; Queue
+            Circuit Shield &amp; Gatekeeper
             <span class="tooltip-container">
               <button class="tooltip-btn" aria-label="Info">ⓘ</button>
-              <span class="tooltip-text">Monitors local circuit breaker state and the initial session stagger queue. Intercepts traffic locally during cooldown to protect Microsoft account quota.</span>
+              <span class="tooltip-text">Monitors local circuit breaker state, the Priority FIFO Turn Gatekeeper (1.5s wire pacing), and the initial session stagger queue. Intercepts traffic locally during cooldown to protect Microsoft account quota.</span>
             </span>
           </span>
           <span id="circuitBadge" class="badge badge-emerald">DISARMED</span>
         </div>
         <div class="metric-value-row">
-          <span id="queueDelayPrimary" class="metric-primary">0.0s</span>
-          <span class="metric-secondary">queue delay</span>
+          <span id="queueDelayPrimary" class="metric-primary">0</span>
+          <span id="queueDelaySecondary" class="metric-secondary">queued turns</span>
         </div>
         <div class="progress-container">
           <div id="queueBar" class="progress-bar" style="background: var(--purple);"></div>
@@ -1002,7 +1002,7 @@ export function getDashboardHtml(): string {
         </div>
         <div class="legend-item">
           <div class="legend-color" style="background: var(--purple);"></div>
-          <span>⚡ Throttle Event (PerScenarioThrottled)</span>
+          <span>⚡ Upstream Throttle (PerScenario / PerUser)</span>
         </div>
         <div class="legend-item">
           <div class="legend-color" style="background: rgba(16, 185, 129, 0.25);"></div>
@@ -1088,14 +1088,15 @@ export function getDashboardHtml(): string {
         <!-- Section 2 -->
         <div class="accordion-item">
           <button class="accordion-toggle" type="button">
-            <span>Why does Microsoft throttle Thread Creation rather than Token Count?</span>
+            <span>What are Microsoft's two distinct throttling horizons (Thread Creation vs Turn Volume)?</span>
             <svg class="accordion-chevron" viewBox="0 0 24 24" fill="none" stroke-width="2">
               <polyline points="6 9 12 15 18 9"></polyline>
             </svg>
           </button>
           <div class="accordion-content">
-            <p>Empirical reverse engineering of M365 Copilot protocol frames reveals that rate limits track <em>conversations started per unit of time</em> rather than cumulative prompt tokens. Upstream throttling signals explicit <span class="highlight-param">PerScenarioThrottled</span> completion frames when thread creation exceeds roughly 15–20 conversations per 10 minutes.</p>
-            <p>An autonomous agent running one persistent thread across dozens of tool calls rarely triggers throttling; however, multi-agent frameworks that spin up fresh conversation threads for every subtask rapidly trip this thread-velocity limit.</p>
+            <p>Empirical reverse engineering reveals that Microsoft enforces rate limits across two distinct operational horizons rather than raw prompt tokens:</p>
+            <p>1. <strong>Thread Creation Rate Limit (<span class="highlight-param">PerScenarioThrottled</span>):</strong> Tracks <em>conversations started per unit time</em>. Tripping it signals explicit <span class="highlight-param">PerScenarioThrottled</span> completion frames when fresh thread creation exceeds roughly 15–20 conversations per 10 minutes. A single persistent session running dozens of tool turns rarely trips this limit, but rapid subagent spawning burns it immediately.</p>
+            <p>2. <strong>Hourly Turn Volume Ceiling (<span class="highlight-param">PerUserThrottled</span>):</strong> Enforces a hard account ceiling of ~120 turns in a 60-minute rolling window across all active threads. Exceeding this ceiling arms account-wide throttling (<span class="highlight-param">PerUserThrottled</span>) regardless of how many distinct sessions are open.</p>
           </div>
         </div>
 
@@ -1109,6 +1110,7 @@ export function getDashboardHtml(): string {
           </button>
           <div class="accordion-content">
             <p>The Dual-Horizon Velocity Governor evaluates telemetry across two rolling horizons simultaneously: a 10-minute burst window (capped at <span class="highlight-param cfg-burst-max">—</span> turns with elastic braking starting at <span class="highlight-param cfg-burst-soft">—</span> turns) and a 60-minute sustained window (capped at <span class="highlight-param cfg-sustained-max">—</span> turns with warning at <span class="highlight-param cfg-sustained-warn">—</span> turns).</p>
+            <p>Requests pass through the <strong>Priority FIFO Turn Gatekeeper</strong>, which enforces strict single-file serialization with a minimum 1500ms wire pacing (<span class="highlight-param">M365_MIN_TURN_SPACING_MS = 1500</span>) to eliminate thundering-herd bursts. The gatekeeper re-evaluates live dual-horizon sliding window limits before dispatching each turn. Forcing retries (<span class="highlight-param">attempt &gt; 0</span>) receive head-of-queue priority so recovering turns execute without waiting behind newer requests.</p>
             <p>When turn velocity enters the guarded zone, the proxy injects progressive micro-delays (elastic braking) into completion requests. This smoothly paces client agents, keeping request rates just below Microsoft's threshold without failing the task.</p>
           </div>
         </div>
@@ -1136,8 +1138,10 @@ export function getDashboardHtml(): string {
             </svg>
           </button>
           <div class="accordion-content">
-            <p>When upstream rate limiting (<span class="highlight-param">PerScenarioThrottled</span>) or consecutive empty responses are detected, the proxy arms a local circuit breaker with a cooldown of <span class="highlight-param cfg-throttle-cooldown-sec">—</span>s (<span class="highlight-param cfg-throttle-cooldown-min">—</span> minutes).</p>
-            <p>During cooldown, the proxy locally intercepts requests and returns <span class="highlight-param">HTTP 429 Too Many Requests</span> with a client <span class="highlight-param">Retry-After: <span class="cfg-max-retry">—</span></span> header. <strong>Zero requests reach Microsoft during this window</strong>, allowing the upstream token bucket to recharge while client agents automatically pause and resume without crashing.</p>
+            <p>When upstream rate limiting or consecutive empty responses are detected, the proxy arms a local circuit breaker shield with tailored cooldown periods:</p>
+            <p>• <strong>Thread Creation Throttle (<span class="highlight-param">PerScenarioThrottled</span>):</strong> Arms an 1800s (30-minute) cooldown by default (<span class="highlight-param">M365_THROTTLE_COOLDOWN_SEC</span>) to allow upstream scenario buckets to recharge.</p>
+            <p>• <strong>Account Turn Throttle (<span class="highlight-param">PerUserThrottled</span>):</strong> Arms a 1200s (20-minute) cooldown by default (<span class="highlight-param">M365_USER_THROTTLE_COOLDOWN_SEC</span>) to clear the rolling hourly turn quota.</p>
+            <p>During cooldown, the proxy locally intercepts requests and returns <span class="highlight-param">HTTP 429 Too Many Requests</span> with a client <span class="highlight-param">Retry-After: <span class="cfg-max-retry">—</span></span> header. <strong>Zero requests reach Microsoft during this window</strong>, allowing upstream limiters to recharge while client agents automatically pause and resume without crashing.</p>
           </div>
         </div>
       </div>
@@ -1178,6 +1182,7 @@ export function getDashboardHtml(): string {
 
       const circuitBadge = document.getElementById("circuitBadge");
       const queueDelayPrimary = document.getElementById("queueDelayPrimary");
+      const queueDelaySecondary = document.getElementById("queueDelaySecondary");
       const queueBar = document.getElementById("queueBar");
       const queueTokensFooter = document.getElementById("queueTokensFooter");
       const cooldownFooter = document.getElementById("cooldownFooter");
@@ -1430,31 +1435,43 @@ export function getDashboardHtml(): string {
           sustainedStatusBadge.textContent = "Safe";
         }
 
-        // 5. Circuit Shield & Stagger Queue
+        // 5. Circuit Shield & Gatekeeper
         const isArmed = data.circuitBreaker && data.circuitBreaker.isArmed;
         const remainingCooldown = (data.circuitBreaker && data.circuitBreaker.remainingCooldownSec) || 0;
+        const throttleReason = (data.circuitBreaker && data.circuitBreaker.reason) || "";
+        const tQueue = data.turnQueue || { depth: 0, priorityCount: 0, minSpacingMs: 1500, isProcessing: false };
         const queueDelaySec = ((data.staggerQueue && data.staggerQueue.delayMs) || 0) / 1000;
         const sessionTokens = (data.staggerQueue && data.staggerQueue.sessionTokens) != null ? data.staggerQueue.sessionTokens : 0;
         const tokenCapacity = (data.staggerQueue && data.staggerQueue.tokenCapacity) != null ? data.staggerQueue.tokenCapacity : cfg.sessionBucketCapacity;
 
         if (isArmed) {
           circuitBadge.className = "badge badge-rose";
-          circuitBadge.textContent = "ARMED";
-          cooldownFooter.textContent = "Remaining: " + remainingCooldown + "s";
+          circuitBadge.textContent = throttleReason ? "ARMED (" + throttleReason + ")" : "ARMED";
+          queueDelayPrimary.textContent = remainingCooldown + "s";
+          if (queueDelaySecondary) queueDelaySecondary.textContent = "cooldown remaining";
+          queueBar.style.background = "var(--rose)";
+          const activeCooldownSec = throttleReason === "PerUserThrottled" ? (cfg.userThrottleCooldownSec || 1200) : (cfg.throttleCooldownSec || 1800);
+          const cooldownRatio = Math.min(1, activeCooldownSec > 0 ? remainingCooldown / activeCooldownSec : 1);
+          queueBar.style.width = (cooldownRatio * 100) + "%";
+          queueTokensFooter.textContent = "Shield: Active (" + (throttleReason || "Throttled") + ")";
+          cooldownFooter.textContent = "Queued: " + tQueue.depth + " turns";
           cooldownFooter.style.color = "var(--rose)";
         } else {
           circuitBadge.className = "badge badge-emerald";
           circuitBadge.textContent = "DISARMED";
-          cooldownFooter.textContent = "Cooldown: " + cfg.throttleCooldownSec + "s";
+          queueDelayPrimary.textContent = String(tQueue.depth);
+          if (queueDelaySecondary) {
+            queueDelaySecondary.textContent = tQueue.priorityCount > 0
+              ? "queued (" + tQueue.priorityCount + " retries)"
+              : "queued turns (" + (tQueue.minSpacingMs / 1000).toFixed(1) + "s pacing)";
+          }
+          queueBar.style.background = "var(--purple)";
+          const queueFillRatio = Math.min(1, tQueue.depth > 0 ? tQueue.depth / 5 : (data.staggerQueue.delayMs || 0) / 15000);
+          queueBar.style.width = (queueFillRatio * 100) + "%";
+          queueTokensFooter.textContent = "Tokens: " + sessionTokens + " / " + tokenCapacity;
+          cooldownFooter.textContent = "Cooldowns: 30m / 20m";
           cooldownFooter.style.color = "var(--text-dim)";
         }
-
-        queueDelayPrimary.textContent = queueDelaySec.toFixed(1) + "s";
-        queueTokensFooter.textContent = "Tokens: " + sessionTokens + " / " + tokenCapacity;
-
-        const queueCapacity = cfg.newSessionSpacingMs || cfg.minSpacingMs || 15000;
-        const queueFillRatio = Math.min(1, queueCapacity > 0 ? (data.staggerQueue.delayMs || 0) / queueCapacity : 0);
-        queueBar.style.width = (queueFillRatio * 100) + "%";
 
         // 6. Active Sessions Table
         const sessions = data.activeSessions || [];

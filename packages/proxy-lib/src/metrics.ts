@@ -1,10 +1,12 @@
 import {
   isDegradationBackoff,
   getRemainingDegradationCooldownMs,
+  getDegradationBackoffReason,
 } from "@m365-copilot/core";
 import {
   getStaggerQueueState,
   getGovernorState,
+  getTurnQueueState,
   type SessionPool,
 } from "./handler.js";
 import { scheduleStateSave } from "./persistence.js";
@@ -97,6 +99,13 @@ export interface MetricsSnapshot {
     isArmed: boolean;
     remainingCooldownSec: number;
     throttleCount: number;
+    reason?: string;
+  };
+  turnQueue: {
+    depth: number;
+    priorityCount: number;
+    minSpacingMs: number;
+    isProcessing: boolean;
   };
   staggerQueue: {
     delayMs: number;
@@ -415,7 +424,9 @@ export function getMetricsSnapshot(
       isArmed,
       remainingCooldownSec,
       throttleCount,
+      reason: getDegradationBackoffReason(),
     },
+    turnQueue: getTurnQueueState(),
     staggerQueue,
     governor,
     activeSessions,
