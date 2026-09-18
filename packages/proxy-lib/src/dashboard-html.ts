@@ -930,6 +930,31 @@ export function getDashboardHtml(): string {
           <span id="cooldownFooter" class="mono">Cooldown: 0s</span>
         </div>
       </div>
+
+      <!-- Card 5: Turn Quality & Yield (60m) -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">
+            Turn Quality &amp; Yield (60m)
+            <span class="tooltip-container">
+              <button class="tooltip-btn" aria-label="Info">ⓘ</button>
+              <span class="tooltip-text">Tracks model turn compliance and quota efficiency over a rolling 60-minute window. First-Pass Yield (FPY) is the % of turns solved on Attempt 0 with zero retries. Wire Multiplier shows upstream turns burned per client request.</span>
+            </span>
+          </span>
+          <span id="qualityStatusBadge" class="badge badge-emerald">Optimal</span>
+        </div>
+        <div class="metric-value-row">
+          <span id="fpyPrimary" class="metric-primary">100%</span>
+          <span id="wireMultiplierSecondary" class="metric-secondary">· 1.00x wire</span>
+        </div>
+        <div class="progress-container">
+          <div id="qualityBar" class="progress-bar" style="background: var(--emerald);"></div>
+        </div>
+        <div class="card-footer-info">
+          <span id="qualityBreakdownFooter">Clean: 0 · Salvaged: 0 · Refused: 0</span>
+          <span id="qualityReqsFooter" class="mono">0 reqs</span>
+        </div>
+      </div>
     </div>
 
     <!-- Historical Timeline & Risk Zones -->
@@ -1144,6 +1169,20 @@ export function getDashboardHtml(): string {
             <p>During cooldown, the proxy locally intercepts requests and returns <span class="highlight-param">HTTP 429 Too Many Requests</span> with a client <span class="highlight-param">Retry-After: <span class="cfg-max-retry">—</span></span> header. <strong>Zero requests reach Microsoft during this window</strong>, allowing upstream limiters to recharge while client agents automatically pause and resume without crashing.</p>
           </div>
         </div>
+
+        <!-- Section 6 -->
+        <div class="accordion-item">
+          <button class="accordion-toggle" type="button">
+            <span>What is First-Pass Yield and why does the Wire Multiplier matter?</span>
+            <svg class="accordion-chevron" viewBox="0 0 24 24" fill="none" stroke-width="2">
+              <polyline points="6 9 12 15 18 9"></polyline>
+            </svg>
+          </button>
+          <div class="accordion-content">
+            <p>When an agent sends a request, the proxy attempts to execute it in 1 turn. However, if the upstream model confabulates that tools are unavailable or produces an empty response, the proxy transparently salvages the turn using forced continuation prompts.</p>
+            <p><strong>First-Pass Yield (FPY)</strong> measures the percentage of client requests that succeed on Attempt 0 without any retries. <strong>Salvaged turns</strong> succeed from the client's perspective but burn 2 or 3 upstream wire turns. The <strong>Wire Multiplier</strong> ($\frac{\text{wire turns}}{\text{client requests}}$) reveals this hidden multiplier, explaining why account turn quota may deplete faster than the number of user prompts sent.</p>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -1186,6 +1225,13 @@ export function getDashboardHtml(): string {
       const queueBar = document.getElementById("queueBar");
       const queueTokensFooter = document.getElementById("queueTokensFooter");
       const cooldownFooter = document.getElementById("cooldownFooter");
+
+      const fpyPrimary = document.getElementById("fpyPrimary");
+      const wireMultiplierSecondary = document.getElementById("wireMultiplierSecondary");
+      const qualityStatusBadge = document.getElementById("qualityStatusBadge");
+      const qualityBar = document.getElementById("qualityBar");
+      const qualityBreakdownFooter = document.getElementById("qualityBreakdownFooter");
+      const qualityReqsFooter = document.getElementById("qualityReqsFooter");
 
       const activeSessionsCount = document.getElementById("activeSessionsCount");
       const sessionsTableBody = document.getElementById("sessionsTableBody");
@@ -1473,7 +1519,54 @@ export function getDashboardHtml(): string {
           cooldownFooter.style.color = "var(--text-dim)";
         }
 
-        // 6. Active Sessions Table
+        // 6. Turn Quality & Yield (60m)
+        const quality = data.quality || {
+          clientRequests: 0,
+          wireTurns: 0,
+          cleanTurns: 0,
+          salvagedTurns: 0,
+          refusedTurns: 0,
+          firstPassYieldPercent: 100,
+          salvageRatePercent: 0,
+          refusalRatePercent: 0,
+          wireMultiplier: 1.0,
+        };
+
+        if (fpyPrimary) fpyPrimary.textContent = quality.firstPassYieldPercent.toFixed(0) + "%";
+        if (wireMultiplierSecondary) wireMultiplierSecondary.textContent = "· " + quality.wireMultiplier.toFixed(2) + "x wire";
+
+        if (qualityBar) {
+          qualityBar.style.width = Math.max(5, quality.firstPassYieldPercent) + "%";
+          if (quality.firstPassYieldPercent >= 85) {
+            qualityBar.style.background = "var(--emerald)";
+            if (qualityStatusBadge) {
+              qualityStatusBadge.className = "badge badge-emerald";
+              qualityStatusBadge.textContent = "Optimal";
+            }
+          } else if (quality.firstPassYieldPercent >= 70) {
+            qualityBar.style.background = "var(--amber)";
+            if (qualityStatusBadge) {
+              qualityStatusBadge.className = "badge badge-amber";
+              qualityStatusBadge.textContent = "Guarded";
+            }
+          } else {
+            qualityBar.style.background = "var(--rose)";
+            if (qualityStatusBadge) {
+              qualityStatusBadge.className = "badge badge-rose";
+              qualityStatusBadge.textContent = "Degraded";
+            }
+          }
+        }
+
+        if (qualityBreakdownFooter) {
+          qualityBreakdownFooter.textContent =
+            "Clean: " + quality.cleanTurns + " · Salvaged: " + quality.salvagedTurns + " · Refused: " + quality.refusedTurns;
+        }
+        if (qualityReqsFooter) {
+          qualityReqsFooter.textContent = quality.clientRequests + " reqs (" + quality.wireTurns + " wire)";
+        }
+
+        // 7. Active Sessions Table
         const sessions = data.activeSessions || [];
         activeSessionsCount.textContent = sessions.length + " Active";
 

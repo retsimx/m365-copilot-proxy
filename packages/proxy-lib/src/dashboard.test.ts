@@ -53,7 +53,7 @@ describe("Web Dashboard & Telemetry API", () => {
       expect(html).toContain("Live Polling (2s)");
     });
 
-    it("contains all 4 top metric cards with tooltips and progress bars", () => {
+    it("contains all 5 top metric cards with tooltips and progress bars", () => {
       const html = getDashboardHtml();
 
       // Card 1: Thread Creation (10m)
@@ -80,6 +80,15 @@ describe("Web Dashboard & Telemetry API", () => {
       expect(html).toContain('id="queueDelayPrimary"');
       expect(html).toContain('id="queueDelaySecondary"');
       expect(html).toContain('id="queueBar"');
+
+      // Card 5: Turn Quality & Yield (60m)
+      expect(html).toContain("Turn Quality &amp; Yield (60m)");
+      expect(html).toContain('id="qualityStatusBadge"');
+      expect(html).toContain('id="fpyPrimary"');
+      expect(html).toContain('id="wireMultiplierSecondary"');
+      expect(html).toContain('id="qualityBar"');
+      expect(html).toContain('id="qualityBreakdownFooter"');
+      expect(html).toContain('id="qualityReqsFooter"');
     });
 
     it("contains historical timeline with pure SVG chart and view/range toggles", () => {
@@ -133,6 +142,9 @@ describe("Web Dashboard & Telemetry API", () => {
       expect(html).toContain("How does the Dual-Horizon Governor calculate elastic braking?");
       expect(html).toContain("What does the Session Stagger Queue do?");
       expect(html).toContain("How does the Local Circuit Breaker protect the account?");
+      expect(html).toContain("What is First-Pass Yield and why does the Wire Multiplier matter?");
+      expect(html).toContain("First-Pass Yield (FPY)");
+      expect(html).toContain("Wire Multiplier");
 
       // Dynamic config placeholder classes in primer text
       expect(html).toContain("cfg-max-turns");
@@ -157,6 +169,11 @@ describe("Web Dashboard & Telemetry API", () => {
       expect(html).toContain("cfg.sustainedMaxTurns");
       expect(html).toContain("cfg.sustainedWarnTurns");
       expect(html).toContain("cfg.throttleCooldownSec");
+      expect(html).toContain("data.quality");
+      expect(html).toContain("fpyPrimary");
+      expect(html).toContain("wireMultiplierSecondary");
+      expect(html).toContain("qualityStatusBadge");
+      expect(html).toContain("qualityBar");
     });
 
     it("renders zero-bleed inside-plot zone badges, clean numeric ticks, and synchronized split crosshairs", () => {

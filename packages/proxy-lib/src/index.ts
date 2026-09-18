@@ -28,6 +28,8 @@ export {
   recordTurn,
   recordNewSession,
   recordThrottle,
+  recordRequestQuality,
+  getQualityMetrics,
   resetMetrics,
   getMetricsBuckets,
   setMetricsBuckets,
@@ -42,6 +44,7 @@ export {
   type TimeBucketPoint,
   type SessionItemSnapshot,
   type SystemMetricsConfig,
+  type TurnQualityMetrics,
 } from "./metrics.js";
 export {
   loadProxyState,

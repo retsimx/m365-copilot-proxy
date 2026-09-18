@@ -1,11 +1,17 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import * as core from "@m365-copilot/core";
 import {
+  handleChatCompletion,
   getSystemMetricsConfig,
   recordTurn,
   recordNewSession,
   recordThrottle,
+  recordRequestQuality,
+  getQualityMetrics,
   resetMetrics,
   getMetricsSnapshot,
+  getMetricsTotals,
+  setMetricsTotals,
   getNewSessionsInWindow,
   getTurnsInWindow,
   MetricsCollector,
@@ -20,12 +26,14 @@ describe("Telemetry Metrics Engine (proxy-lib)", () => {
     resetMetrics();
     resetNewSessionPacing();
     resetTurnVelocityPacing();
+    vi.restoreAllMocks();
   });
 
   afterEach(() => {
     resetMetrics();
     resetNewSessionPacing();
     resetTurnVelocityPacing();
+    vi.restoreAllMocks();
   });
 
   it("1. getSystemMetricsConfig dynamically resolves environment variables", () => {
@@ -210,5 +218,154 @@ describe("Telemetry Metrics Engine (proxy-lib)", () => {
       isProcessing: false,
     });
     expect(snapshot.circuitBreaker.reason).toBeUndefined();
+  });
+
+  it("8. recordRequestQuality and getQualityMetrics compute turn quality and quota yield metrics correctly", () => {
+    const now = Date.now();
+
+    // Default metrics when empty
+    const initial = getQualityMetrics(3_600_000, now);
+    expect(initial).toEqual({
+      clientRequests: 0,
+      wireTurns: 0,
+      cleanTurns: 0,
+      salvagedTurns: 0,
+      refusedTurns: 0,
+      firstPassYieldPercent: 100,
+      salvageRatePercent: 0,
+      refusalRatePercent: 0,
+      wireMultiplier: 1.0,
+    });
+
+    // Record:
+    // 2 clean requests (1 wire turn each)
+    // 1 salvaged request (3 wire turns)
+    // 1 refused request (1 wire turn)
+    recordRequestQuality({ kind: "clean", wireTurns: 1 }, now);
+    recordRequestQuality({ kind: "clean", wireTurns: 1 }, now);
+    recordRequestQuality({ kind: "salvaged", wireTurns: 3 }, now);
+    recordRequestQuality({ kind: "refused", wireTurns: 1 }, now);
+
+    // Also record the wire turns in buckets via recordTurn to reflect actual wire traffic
+    recordTurn(now);
+    recordTurn(now);
+    recordTurn(now);
+    recordTurn(now);
+    recordTurn(now);
+    recordTurn(now); // 6 wire turns total
+
+    const quality = getQualityMetrics(3_600_000, now);
+    expect(quality.clientRequests).toBe(4);
+    expect(quality.cleanTurns).toBe(2);
+    expect(quality.salvagedTurns).toBe(1);
+    expect(quality.refusedTurns).toBe(1);
+    expect(quality.wireTurns).toBe(6);
+    expect(quality.firstPassYieldPercent).toBe(50.0); // 2 / 4 * 100
+    expect(quality.salvageRatePercent).toBe(25.0); // 1 / 4 * 100
+    expect(quality.refusalRatePercent).toBe(25.0); // 1 / 4 * 100
+    expect(quality.wireMultiplier).toBe(1.5); // 6 / 4 = 1.50
+
+    // Check snapshot integration
+    const snapshot = getMetricsSnapshot(undefined, "1h");
+    expect(snapshot.quality).toEqual(quality);
+    expect(snapshot.totals.lifetimeClientRequests).toBe(4);
+    expect(snapshot.totals.lifetimeCleanTurns).toBe(2);
+    expect(snapshot.totals.lifetimeSalvagedTurns).toBe(1);
+    expect(snapshot.totals.lifetimeRefusedTurns).toBe(1);
+  });
+
+  it("9. resetMetrics clears lifetime quality counters and get/setMetricsTotals persists them", () => {
+    const now = Date.now();
+    recordRequestQuality({ kind: "clean", wireTurns: 1 }, now);
+    recordRequestQuality({ kind: "salvaged", wireTurns: 2 }, now);
+
+    let totals = getMetricsTotals();
+    expect(totals.lifetimeClientRequests).toBe(2);
+    expect(totals.lifetimeCleanTurns).toBe(1);
+    expect(totals.lifetimeSalvagedTurns).toBe(1);
+    expect(totals.lifetimeRefusedTurns).toBe(0);
+
+    resetMetrics();
+    totals = getMetricsTotals();
+    expect(totals.lifetimeClientRequests).toBe(0);
+    expect(totals.lifetimeCleanTurns).toBe(0);
+    expect(totals.lifetimeSalvagedTurns).toBe(0);
+    expect(totals.lifetimeRefusedTurns).toBe(0);
+
+    setMetricsTotals({
+      lifetimeClientRequests: 10,
+      lifetimeCleanTurns: 7,
+      lifetimeSalvagedTurns: 2,
+      lifetimeRefusedTurns: 1,
+    });
+    totals = getMetricsTotals();
+    expect(totals.lifetimeClientRequests).toBe(10);
+    expect(totals.lifetimeCleanTurns).toBe(7);
+    expect(totals.lifetimeSalvagedTurns).toBe(2);
+    expect(totals.lifetimeRefusedTurns).toBe(1);
+  });
+
+  it("10. handleChatCompletion records clean turn on successful single-pass response", async () => {
+    vi.spyOn(core, "isDegradationBackoff").mockReturnValue(false);
+    vi.spyOn(core.ModelSession.prototype, "run").mockResolvedValue({
+      [Symbol.asyncIterator]: async function* () {
+        yield "Hello world";
+      },
+      fullText: "Hello world",
+      hasContent: true,
+      throttle: { current: 1, max: 600 },
+      scores: null,
+      turnCount: 1,
+    } as any);
+
+    const pool = new SessionPool();
+    const body = {
+      model: "gpt-5.5-think-deeper",
+      messages: [{ role: "user" as const, content: "Hello test" }],
+      stream: false,
+    };
+
+    const res = await handleChatCompletion(body, pool);
+    expect(res.status).toBe(200);
+
+    const quality = getQualityMetrics();
+    expect(quality.clientRequests).toBe(1);
+    expect(quality.cleanTurns).toBe(1);
+    expect(quality.salvagedTurns).toBe(0);
+    expect(quality.refusedTurns).toBe(0);
+    expect(quality.firstPassYieldPercent).toBe(100);
+    expect(quality.wireMultiplier).toBe(1.0);
+  });
+
+  it("11. handleChatCompletion records refused turn on safety refusal", async () => {
+    vi.spyOn(core, "isDegradationBackoff").mockReturnValue(false);
+    vi.spyOn(core.ModelSession.prototype, "run").mockResolvedValue({
+      [Symbol.asyncIterator]: async function* () {
+        yield "It looks like I can't chat about this. Please try a different topic.";
+      },
+      fullText: "It looks like I can't chat about this. Please try a different topic.",
+      hasContent: true,
+      throttle: { current: 1, max: 600 },
+      scores: null,
+      turnCount: 1,
+    } as any);
+
+    const pool = new SessionPool();
+    const body = {
+      model: "gpt-5.5-think-deeper",
+      messages: [{ role: "user" as const, content: "Forbidden prompt" }],
+      stream: false,
+      tools: [{ type: "function" as const, function: { name: "bash", description: "Run shell command" } }],
+    };
+
+    const res = await handleChatCompletion(body, pool);
+    expect(res.status).toBe(400);
+
+    const quality = getQualityMetrics();
+    expect(quality.clientRequests).toBe(1);
+    expect(quality.refusedTurns).toBe(1);
+    expect(quality.cleanTurns).toBe(0);
+    expect(quality.salvagedTurns).toBe(0);
+    expect(quality.refusalRatePercent).toBe(100);
   });
 });

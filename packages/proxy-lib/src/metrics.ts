@@ -17,6 +17,21 @@ export interface TimeBucketPoint {
   newSessions: number;
   throttles: number;
   maxPacingDelayMs: number;
+  cleanTurns?: number;
+  salvagedTurns?: number;
+  refusedTurns?: number;
+}
+
+export interface TurnQualityMetrics {
+  clientRequests: number;
+  wireTurns: number;
+  cleanTurns: number;
+  salvagedTurns: number;
+  refusedTurns: number;
+  firstPassYieldPercent: number;
+  salvageRatePercent: number;
+  refusalRatePercent: number;
+  wireMultiplier: number;
 }
 
 export interface SessionItemSnapshot {
@@ -142,7 +157,12 @@ export interface MetricsSnapshot {
     lifetimeTurns: number;
     lifetimeSessions: number;
     lifetimeThrottles: number;
+    lifetimeClientRequests: number;
+    lifetimeCleanTurns: number;
+    lifetimeSalvagedTurns: number;
+    lifetimeRefusedTurns: number;
   };
+  quality: TurnQualityMetrics;
   config: SystemMetricsConfig;
 }
 
@@ -153,6 +173,10 @@ export class MetricsCollector {
   private lifetimeTurns = 0;
   private lifetimeSessions = 0;
   private lifetimeThrottles = 0;
+  private lifetimeClientRequests = 0;
+  private lifetimeCleanTurns = 0;
+  private lifetimeSalvagedTurns = 0;
+  private lifetimeRefusedTurns = 0;
 
   private alignToMinute(ts: number): number {
     return Math.floor(ts / 60_000) * 60_000;
@@ -176,6 +200,9 @@ export class MetricsCollector {
         newSessions: 0,
         throttles: 0,
         maxPacingDelayMs: 0,
+        cleanTurns: 0,
+        salvagedTurns: 0,
+        refusedTurns: 0,
       };
       this.buckets.set(minuteKey, bucket);
     }
@@ -210,6 +237,55 @@ export class MetricsCollector {
     const bucket = this.getOrCreateBucket(key);
     bucket.throttles += 1;
     this.prune(timestamp);
+  }
+
+  recordRequestQuality(outcome: { kind: "clean" | "salvaged" | "refused"; wireTurns: number }, timestamp = Date.now()): void {
+    const bucket = this.getOrCreateBucket(this.alignToMinute(timestamp));
+    this.lifetimeClientRequests++;
+    if (outcome.kind === "clean") {
+      bucket.cleanTurns = (bucket.cleanTurns ?? 0) + 1;
+      this.lifetimeCleanTurns++;
+    } else if (outcome.kind === "salvaged") {
+      bucket.salvagedTurns = (bucket.salvagedTurns ?? 0) + 1;
+      this.lifetimeSalvagedTurns++;
+    } else if (outcome.kind === "refused") {
+      bucket.refusedTurns = (bucket.refusedTurns ?? 0) + 1;
+      this.lifetimeRefusedTurns++;
+    }
+  }
+
+  getQualityMetrics(windowMs = 3_600_000, now = Date.now()): TurnQualityMetrics {
+    this.prune(now);
+    const cutoff = now - windowMs;
+    let cleanTurns = 0;
+    let salvagedTurns = 0;
+    let refusedTurns = 0;
+    let wireTurns = 0;
+    for (const bucket of this.buckets.values()) {
+      if (bucket.timestamp >= cutoff) {
+        cleanTurns += bucket.cleanTurns ?? 0;
+        salvagedTurns += bucket.salvagedTurns ?? 0;
+        refusedTurns += bucket.refusedTurns ?? 0;
+        wireTurns += bucket.turns ?? 0;
+      }
+    }
+    const clientRequests = cleanTurns + salvagedTurns + refusedTurns;
+    const firstPassYieldPercent = clientRequests > 0 ? Number(((cleanTurns / clientRequests) * 100).toFixed(1)) : 100;
+    const salvageRatePercent = clientRequests > 0 ? Number(((salvagedTurns / clientRequests) * 100).toFixed(1)) : 0;
+    const refusalRatePercent = clientRequests > 0 ? Number(((refusedTurns / clientRequests) * 100).toFixed(1)) : 0;
+    const wireMultiplier = clientRequests > 0 ? Number((Math.max(clientRequests, wireTurns) / clientRequests).toFixed(2)) : 1.0;
+
+    return {
+      clientRequests,
+      wireTurns,
+      cleanTurns,
+      salvagedTurns,
+      refusedTurns,
+      firstPassYieldPercent,
+      salvageRatePercent,
+      refusalRatePercent,
+      wireMultiplier,
+    };
   }
 
   getNewSessionsInWindow(windowMs: number, now = Date.now()): number {
@@ -269,6 +345,9 @@ export class MetricsCollector {
         newSessions: b?.newSessions ?? 0,
         throttles: b?.throttles ?? 0,
         maxPacingDelayMs: b?.maxPacingDelayMs ?? 0,
+        cleanTurns: b?.cleanTurns ?? 0,
+        salvagedTurns: b?.salvagedTurns ?? 0,
+        refusedTurns: b?.refusedTurns ?? 0,
       });
     }
     return points;
@@ -286,6 +365,22 @@ export class MetricsCollector {
     return this.lifetimeThrottles;
   }
 
+  getLifetimeClientRequests(): number {
+    return this.lifetimeClientRequests;
+  }
+
+  getLifetimeCleanTurns(): number {
+    return this.lifetimeCleanTurns;
+  }
+
+  getLifetimeSalvagedTurns(): number {
+    return this.lifetimeSalvagedTurns;
+  }
+
+  getLifetimeRefusedTurns(): number {
+    return this.lifetimeRefusedTurns;
+  }
+
   getBuckets(): TimeBucketPoint[] {
     return Array.from(this.buckets.values());
   }
@@ -300,18 +395,42 @@ export class MetricsCollector {
     }
   }
 
-  getTotals(): { lifetimeTurns: number; lifetimeSessions: number; lifetimeThrottles: number } {
+  getTotals(): {
+    lifetimeTurns: number;
+    lifetimeSessions: number;
+    lifetimeThrottles: number;
+    lifetimeClientRequests: number;
+    lifetimeCleanTurns: number;
+    lifetimeSalvagedTurns: number;
+    lifetimeRefusedTurns: number;
+  } {
     return {
       lifetimeTurns: this.lifetimeTurns,
       lifetimeSessions: this.lifetimeSessions,
       lifetimeThrottles: this.lifetimeThrottles,
+      lifetimeClientRequests: this.lifetimeClientRequests,
+      lifetimeCleanTurns: this.lifetimeCleanTurns,
+      lifetimeSalvagedTurns: this.lifetimeSalvagedTurns,
+      lifetimeRefusedTurns: this.lifetimeRefusedTurns,
     };
   }
 
-  setTotals(totals: { lifetimeTurns?: number; lifetimeSessions?: number; lifetimeThrottles?: number }): void {
+  setTotals(totals: {
+    lifetimeTurns?: number;
+    lifetimeSessions?: number;
+    lifetimeThrottles?: number;
+    lifetimeClientRequests?: number;
+    lifetimeCleanTurns?: number;
+    lifetimeSalvagedTurns?: number;
+    lifetimeRefusedTurns?: number;
+  }): void {
     if (typeof totals.lifetimeTurns === "number") this.lifetimeTurns = totals.lifetimeTurns;
     if (typeof totals.lifetimeSessions === "number") this.lifetimeSessions = totals.lifetimeSessions;
     if (typeof totals.lifetimeThrottles === "number") this.lifetimeThrottles = totals.lifetimeThrottles;
+    if (typeof totals.lifetimeClientRequests === "number") this.lifetimeClientRequests = totals.lifetimeClientRequests;
+    if (typeof totals.lifetimeCleanTurns === "number") this.lifetimeCleanTurns = totals.lifetimeCleanTurns;
+    if (typeof totals.lifetimeSalvagedTurns === "number") this.lifetimeSalvagedTurns = totals.lifetimeSalvagedTurns;
+    if (typeof totals.lifetimeRefusedTurns === "number") this.lifetimeRefusedTurns = totals.lifetimeRefusedTurns;
   }
 
   reset(): void {
@@ -319,6 +438,10 @@ export class MetricsCollector {
     this.lifetimeTurns = 0;
     this.lifetimeSessions = 0;
     this.lifetimeThrottles = 0;
+    this.lifetimeClientRequests = 0;
+    this.lifetimeCleanTurns = 0;
+    this.lifetimeSalvagedTurns = 0;
+    this.lifetimeRefusedTurns = 0;
   }
 }
 
@@ -339,6 +462,18 @@ export function recordThrottle(timestamp?: number): void {
   scheduleStateSave();
 }
 
+export function recordRequestQuality(
+  outcome: { kind: "clean" | "salvaged" | "refused"; wireTurns: number },
+  timestamp = Date.now(),
+): void {
+  defaultMetricsCollector.recordRequestQuality(outcome, timestamp);
+  scheduleStateSave();
+}
+
+export function getQualityMetrics(windowMs = 3_600_000, now = Date.now()): TurnQualityMetrics {
+  return defaultMetricsCollector.getQualityMetrics(windowMs, now);
+}
+
 export function resetMetrics(): void {
   defaultMetricsCollector.reset();
 }
@@ -355,6 +490,10 @@ export function getMetricsTotals(): {
   lifetimeTurns: number;
   lifetimeSessions: number;
   lifetimeThrottles: number;
+  lifetimeClientRequests: number;
+  lifetimeCleanTurns: number;
+  lifetimeSalvagedTurns: number;
+  lifetimeRefusedTurns: number;
 } {
   return defaultMetricsCollector.getTotals();
 }
@@ -363,6 +502,10 @@ export function setMetricsTotals(totals: {
   lifetimeTurns?: number;
   lifetimeSessions?: number;
   lifetimeThrottles?: number;
+  lifetimeClientRequests?: number;
+  lifetimeCleanTurns?: number;
+  lifetimeSalvagedTurns?: number;
+  lifetimeRefusedTurns?: number;
 }): void {
   defaultMetricsCollector.setTotals(totals);
 }
@@ -415,6 +558,10 @@ export function getMetricsSnapshot(
     lifetimeTurns: defaultMetricsCollector.getLifetimeTurns(),
     lifetimeSessions: defaultMetricsCollector.getLifetimeSessions(),
     lifetimeThrottles: defaultMetricsCollector.getLifetimeThrottles(),
+    lifetimeClientRequests: defaultMetricsCollector.getLifetimeClientRequests(),
+    lifetimeCleanTurns: defaultMetricsCollector.getLifetimeCleanTurns(),
+    lifetimeSalvagedTurns: defaultMetricsCollector.getLifetimeSalvagedTurns(),
+    lifetimeRefusedTurns: defaultMetricsCollector.getLifetimeRefusedTurns(),
   };
 
   return {
@@ -432,6 +579,7 @@ export function getMetricsSnapshot(
     activeSessions,
     history,
     totals,
+    quality: defaultMetricsCollector.getQualityMetrics(3_600_000, serverTime),
     config,
   };
 }

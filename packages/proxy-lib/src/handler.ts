@@ -29,6 +29,7 @@ import {
   recordTurn,
   recordNewSession,
   recordThrottle,
+  recordRequestQuality,
   getNewSessionsInWindow,
   getTurnsInWindow,
   type SessionItemSnapshot,
@@ -819,6 +820,7 @@ export async function handleChatCompletion(
   // Buffer the full response, with a couple of quick retries on an empty reply.
   const MAX_RETRIES = 2;
   const SHORT_RETRY_DELAY_MS = 2_000;
+  let requestWireTurns = 0;
 
   // Captured from the final attempt — surfaced through the OpenAI `usage` block
   // so clients can see M365's conversation-quota % (the closest proxy we have
@@ -892,6 +894,7 @@ export async function handleChatCompletion(
         // skip it to reach the model the tone selects (e.g. Claude). See
         // ModelSession.run / docs H8.6.
         copilotStream = await session.run(text, model, opts.signal, useToolAgent);
+        requestWireTurns++;
       } catch (err: any) {
         return { error: jsonResponse(502, { error: { message: err.message, type: "upstream_error" } }) };
       }
@@ -1038,7 +1041,7 @@ export async function handleChatCompletion(
   // `onDelta` streams text to the client live (non-tool path only — see produce's
   // caller). Tool mode ignores it: the raw text is parsed for tool-call fences and
   // can't be shown verbatim, so it stays fully buffered.
-  async function produce(onDelta?: (delta: string) => void): Promise<Produced> {
+  async function produceInternal(onDelta?: (delta: string) => void): Promise<Produced> {
     try {
       // When tools are present, buffer full response to detect tool calls
       if (hasTools) {
@@ -1241,7 +1244,42 @@ export async function handleChatCompletion(
   } finally {
     conv.status = "idle";
   }
-  } // end produce()
+  } // end produceInternal()
+
+  async function recordOutcome(p: Produced): Promise<void> {
+    if (p.kind === "error") {
+      let isRefusal = p.resp.status === 400;
+      if (!isRefusal && p.resp.status === 502) {
+        try {
+          const body = await p.resp.clone().json();
+          const t = body?.error?.type;
+          if (
+            t === "unresolved_tool_refusal" ||
+            t === "file_mutation_without_local_tool" ||
+            t === "disengaged" ||
+            t === "content_policy_refusal"
+          ) {
+            isRefusal = true;
+          }
+        } catch {}
+      }
+      if (isRefusal) {
+        recordRequestQuality({ kind: "refused", wireTurns: Math.max(1, requestWireTurns) });
+      }
+    } else if (p.kind === "tools" || p.kind === "text") {
+      if (requestWireTurns > 1) {
+        recordRequestQuality({ kind: "salvaged", wireTurns: requestWireTurns });
+      } else {
+        recordRequestQuality({ kind: "clean", wireTurns: Math.max(1, requestWireTurns) });
+      }
+    }
+  }
+
+  async function produce(onDelta?: (delta: string) => void): Promise<Produced> {
+    const p = await produceInternal(onDelta);
+    await recordOutcome(p);
+    return p;
+  }
 
   // --- Render: JSON (non-stream) or an early-flushed SSE stream (stream) ---
   const promptChars = body.messages.reduce(
