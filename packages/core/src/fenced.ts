@@ -293,21 +293,32 @@ export function currentFramingVariant(): string {
   return process.env.M365_FRAMING_VARIANT || "baseline";
 }
 
+/** Tones that get the `advisor` framing by default. These are GPT reasoning tones
+ *  that refuse the agentic `baseline` framing ("you have a real shell", "TOOL USE IS
+ *  REQUIRED") and fail closed with `unresolved_tool_refusal`. GPT-6 Astra refuses
+ *  3/3 (harness calibration 2026-09-30); GPT-5.6 also refuses frequently in the
+ *  field. Override with `M365_ADVISOR_TONES` (comma-separated tone names; empty
+ *  string disables the set entirely). */
+const DEFAULT_ADVISOR_TONES = ["Gpt_6_Astra", "Gpt_5_6_Reasoning"];
+
 /** Pick the framing variant for a resolved model tone.
  *
- *  GPT-6 Astra (tone `Gpt_6_Astra`) refuses the agentic `baseline` framing — it
- *  answers "I have no bash tool" and the request fails closed with
- *  `unresolved_tool_refusal` (harness calibration 2026-09-30, 3/3). The `advisor`
- *  variant recasts the model as a chat assistant that WRITES commands a runtime
- *  RUNS; astra accepts it, and the proxy still routes the ```bash fence to the
- *  shell. Every other tone keeps the configured default (baseline).
+ *  Tones in the advisor set get the `advisor` variant (a chat-assistant framing that
+ *  WRITES commands a runtime RUNS, and is told to make no tool calls); every other
+ *  tone keeps the configured default (`baseline`). The proxy routes the ```bash fence
+ *  to the shell either way, so execution is unaffected.
  *
- *  An explicit `M365_FRAMING_VARIANT` / `M365_FRAMING_FILE` wins globally (A/B
- *  sweeps). Otherwise the Astra choice is overridable with `M365_ASTRA_FRAMING`. */
+ *  Precedence: an explicit `M365_FRAMING_VARIANT` / `M365_FRAMING_FILE` wins globally
+ *  (A/B sweeps); otherwise the set is `M365_ADVISOR_TONES` (default above) and the
+ *  variant it selects is `M365_ADVISOR_FRAMING` (default `advisor`). */
 export function framingVariantForTone(tone: string): string {
   const explicit = process.env.M365_FRAMING_VARIANT || process.env.M365_FRAMING_FILE;
   if (explicit) return currentFramingVariant();
-  if (tone === "Gpt_6_Astra") return process.env.M365_ASTRA_FRAMING || "advisor";
+  const tones =
+    process.env.M365_ADVISOR_TONES !== undefined
+      ? process.env.M365_ADVISOR_TONES.split(",").map((s) => s.trim()).filter(Boolean)
+      : DEFAULT_ADVISOR_TONES;
+  if (tones.includes(tone)) return process.env.M365_ADVISOR_FRAMING || "advisor";
   return currentFramingVariant();
 }
 

@@ -44,7 +44,7 @@ function bodyFor(model: string) {
   };
 }
 
-describe("per-model framing selection (GPT-6 Astra)", () => {
+describe("per-model framing selection (GPT refusal-prone tones)", () => {
   let captured: string[] = [];
 
   beforeEach(() => {
@@ -57,7 +57,8 @@ describe("per-model framing selection (GPT-6 Astra)", () => {
     vi.restoreAllMocks();
     delete process.env.M365_FRAMING_VARIANT;
     delete process.env.M365_FRAMING_FILE;
-    delete process.env.M365_ASTRA_FRAMING;
+    delete process.env.M365_ADVISOR_TONES;
+    delete process.env.M365_ADVISOR_FRAMING;
     vi.spyOn(core.ModelSession.prototype, "run").mockImplementation(async (text: string) => {
       captured.push(text);
       return fakeStream();
@@ -70,41 +71,39 @@ describe("per-model framing selection (GPT-6 Astra)", () => {
     vi.restoreAllMocks();
   });
 
-  it(
-    "sends the advisor framing (not the agentic baseline) for gpt-6-astra",
-    async () => {
-      const pool = new SessionPool();
-      const started = Date.now();
-      const res = await handleChatCompletion(bodyFor("gpt-6-astra") as any, pool);
-      const elapsed = Date.now() - started;
-      expect(res.status, `status ${res.status} after ${elapsed}ms`).toBeLessThan(400);
-      expect(captured.length).toBeGreaterThan(0);
+  async function promptFor(model: string): Promise<string> {
+    const pool = new SessionPool();
+    const res = await handleChatCompletion(bodyFor(model) as any, pool);
+    expect(res.status).toBeLessThan(400);
+    expect(captured.length).toBeGreaterThan(0);
+    return captured[0];
+  }
 
-      const prompt = captured[0];
-      expect(prompt).toContain("chat assistant");
-      expect(prompt).toContain("make no tool calls");
-      expect(prompt).not.toContain("execution core");
-      expect(prompt).not.toContain("TOOL USE IS REQUIRED");
-      // the tools still reach the model so the fence routes to the shell
-      expect(prompt).toContain("<tools>");
-      expect(prompt).toContain("```bash");
-    },
-    30000,
-  );
+  function expectAdvisor(prompt: string) {
+    expect(prompt).toContain("chat assistant");
+    expect(prompt).toContain("make no tool calls");
+    expect(prompt).not.toContain("execution core");
+    expect(prompt).not.toContain("TOOL USE IS REQUIRED");
+    // the tools still reach the model so the fence routes to the shell
+    expect(prompt).toContain("<tools>");
+    expect(prompt).toContain("```bash");
+  }
 
-  it(
-    "sends the baseline framing for gpt-5.6-think-deeper (control)",
-    async () => {
-      const pool = new SessionPool();
-      const res = await handleChatCompletion(bodyFor("gpt-5.6-think-deeper") as any, pool);
-      expect(res.status).toBeLessThan(400);
-      expect(captured.length).toBeGreaterThan(0);
+  function expectBaseline(prompt: string) {
+    expect(prompt).toContain("execution core");
+    expect(prompt).toContain("TOOL USE IS REQUIRED");
+    expect(prompt).not.toContain("make no tool calls");
+  }
 
-      const prompt = captured[0];
-      expect(prompt).toContain("execution core");
-      expect(prompt).toContain("TOOL USE IS REQUIRED");
-      expect(prompt).not.toContain("make no tool calls");
-    },
-    30000,
-  );
+  it("gpt-6-astra → advisor framing", async () => {
+    expectAdvisor(await promptFor("gpt-6-astra"));
+  }, 30000);
+
+  it("gpt-5.6-think-deeper → advisor framing", async () => {
+    expectAdvisor(await promptFor("gpt-5.6-think-deeper"));
+  }, 30000);
+
+  it("gpt-5.5-think-deeper → baseline framing (deliberately unchanged)", async () => {
+    expectBaseline(await promptFor("gpt-5.5-think-deeper"));
+  }, 30000);
 });

@@ -641,18 +641,21 @@ describe("framingVariantForTone", () => {
   const saved = {
     variant: process.env.M365_FRAMING_VARIANT,
     file: process.env.M365_FRAMING_FILE,
-    astra: process.env.M365_ASTRA_FRAMING,
+    tones: process.env.M365_ADVISOR_TONES,
+    framing: process.env.M365_ADVISOR_FRAMING,
   };
   beforeEach(() => {
     delete process.env.M365_FRAMING_VARIANT;
     delete process.env.M365_FRAMING_FILE;
-    delete process.env.M365_ASTRA_FRAMING;
+    delete process.env.M365_ADVISOR_TONES;
+    delete process.env.M365_ADVISOR_FRAMING;
   });
   afterEach(() => {
     const restore: Array<[string, string | undefined]> = [
       ["M365_FRAMING_VARIANT", saved.variant],
       ["M365_FRAMING_FILE", saved.file],
-      ["M365_ASTRA_FRAMING", saved.astra],
+      ["M365_ADVISOR_TONES", saved.tones],
+      ["M365_ADVISOR_FRAMING", saved.framing],
     ];
     for (const [k, v] of restore) {
       if (v === undefined) delete process.env[k];
@@ -660,17 +663,27 @@ describe("framingVariantForTone", () => {
     }
   });
 
-  it("routes Gpt_6_Astra to the advisor variant", () => {
+  it("routes the refusal-prone GPT tones to advisor (Astra + 5.6)", () => {
     expect(framingVariantForTone("Gpt_6_Astra")).toBe("advisor");
+    expect(framingVariantForTone("Gpt_5_6_Reasoning")).toBe("advisor");
   });
 
   it("leaves other tones on the configured default", () => {
-    expect(framingVariantForTone("Gpt_5_6_Reasoning")).toBe("baseline");
+    expect(framingVariantForTone("Gpt_5_5_Reasoning")).toBe("baseline");
     expect(framingVariantForTone("magic")).toBe("baseline");
   });
 
-  it("lets M365_ASTRA_FRAMING override the Astra choice", () => {
-    process.env.M365_ASTRA_FRAMING = "baseline";
+  it("lets M365_ADVISOR_FRAMING change the variant for the advisor set", () => {
+    process.env.M365_ADVISOR_FRAMING = "baseline";
+    expect(framingVariantForTone("Gpt_6_Astra")).toBe("baseline");
+    expect(framingVariantForTone("Gpt_5_6_Reasoning")).toBe("baseline");
+  });
+
+  it("lets M365_ADVISOR_TONES redefine the set", () => {
+    process.env.M365_ADVISOR_TONES = "Gpt_6_Astra";
+    expect(framingVariantForTone("Gpt_6_Astra")).toBe("advisor");
+    expect(framingVariantForTone("Gpt_5_6_Reasoning")).toBe("baseline");
+    process.env.M365_ADVISOR_TONES = "";
     expect(framingVariantForTone("Gpt_6_Astra")).toBe("baseline");
   });
 
