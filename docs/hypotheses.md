@@ -2296,6 +2296,17 @@ as `Gpt_5_6_Chat` — it deflects via `BotConnection` regardless of prompt, so i
 Copilot" for both `Gpt_6_Astra` and `magic`), but the accepted-tone + `DeepLeo`
 signature is conclusive. Mapped as `gpt-6-astra` → `Gpt_6_Astra` in `MODEL_TONES`.
 
+**Update — 2026-09-30 (see §18).** A broader tone sweep (agent-less, invalid-tone control) found
+`Gpt_6_Astra` is still the **only** live `Gpt_6_*` tone — `Gpt_6_Reasoning` dead, and
+`Gpt_6_Chat/Quick`, `Gpt_6_Astra_{Reasoning,Chat,ThinkDeeper}`, `Gpt_6_Think(Deeper/Deep_Think)`,
+`Gpt_6_Thinking`, `Gpt_6_Pro/Ultra/Orion/1` all rejected. But `Gpt_6_Astra` now **self-IDs as
+"based on the GPT-5 chat model"**, emits **no deep-thinking trace** in the M365 UI, answers 2026
+events "from my current knowledge" as unknown, and shares `contentOrigin: DeepLeo` with `magic`.
+GPT-6 is **not exposed in the M365 web UI at all**. So `Gpt_6_Astra` is a *live* tone, but there is
+**no evidence it is a distinct GPT-6 reasoning model** — it behaves like a GPT-5-class **chat**
+model (possibly an alias to the default GPT-5 routing). Do **not** treat `gpt-6-astra` as a GPT-6
+reasoning upgrade over `gpt-5.6-think-deeper`.
+
 ---
 
 ## 13. July 29 2026 — user-driven SSO for tenants that can't do TOTP (third-party)
@@ -2700,3 +2711,53 @@ surfacing as empty handshakes (`answer length: 0`) rather than `Disengaged`.
   - **Live Window Recalculation:** Each turn at the head of the queue recalculates sliding window limits (`10m` burst and `60m` sustained) against live timestamps at dispatch time rather than insertion time.
   - **Wire-Level Turn Spacing:** Enforces a mandatory minimum spacing of 1500ms (`M365_MIN_TURN_SPACING_MS = 1500`) between consecutive turns, eliminating simultaneous dispatch stampedes across concurrent subagents.
 
+
+---
+
+## 18. September 30 2026 — Enforcing tool-calling is the wrong lever; adopt the assistant tone (advisor framing) 🟢
+
+**Headline (the durable lesson).** Prompting a model to *be* an agent that has a shell and
+**must** call tools ("You are the execution core of an automated agent", "You have a real shell
+(the `bash` tool)", "TOOL USE IS REQUIRED") is **fragile and frequently backfires**. Models with
+a strong chat/assistant prior answer *"I have no `bash` tool"* and the turn fails closed with
+`unresolved_tool_refusal`. The reliable framing is the **opposite**: address the model as a
+**chat assistant that writes the shell commands for the user to run** (*"You write the shell
+commands; I run them and paste the real output back. Do not make any tool calls."*). The proxy
+routes the ```bash fence to the harness shell **mechanically**, so execution happens regardless
+of the persona — only *elicitation* depends on the tone. **Enforcing tool calling rather than
+assistant tone is extremely unlikely to work well.**
+
+**Where this came from.** Migrating the opencode `m365gpt` subagent from
+`gpt-5.6-think-deeper` to `gpt-6-astra`. Dispatch-prompt A/B (same task, agent attached):
+
+| Dispatch framing | Outcome (gpt-6-astra) |
+|---|---|
+| baseline agentic ("your only tool is bash", "write with bash (heredoc)") | ❌ refusal 3/3 (`unresolved_tool_refusal`) |
+| "emit a shell script that provides the expected functionality" | ✅ fence emitted + executed (but loops without terminal prose) |
+| interactive ("I will run it and paste the output back") | ❌ refusal ("no executable `bash` tool … not available to me here") |
+| **advisor ("you write the commands; I run them; make no tool calls")** | ✅ **3/3**, full multi-step tasks |
+
+**Mechanism.** (a) The refusal is triggered by the **agentic framing the proxy itself injects** on
+the tool path (`baseline`: "execution core", "you have a real shell", "TOOL USE IS REQUIRED").
+(b) A *system*-position "you don't run commands" instruction does **not** override that
+(system-vs-system contradiction → refusal); only a **user-turn** instruction wins. (c) Wording is
+load-bearing: refused turns quote back *"the runtime described in your prompt"* — the word
+**"runtime"** (an external-executor cue) is itself a trigger. Dropping it (*"I run them and paste
+the output back"*) eliminated refusals: **49/49 clean turns** in the post-deploy window (vs.
+refusals + salvage retries before).
+
+**Failure mechanics.** `unresolved_tool_refusal` fires on turn 0; the proxy's **in-session**
+forced retries *repeat* the refusal (a refused conversation stays refused), then fail closed.
+Behaviour is **stochastic** — the same task may pass or refuse across runs — so a single failed
+run is not diagnostic.
+
+**Shipped.** New `advisor` framing variant (`packages/core/src/fenced.ts`); `framingVariantForTone()`
+selects it per resolved tone: `M365_ADVISOR_TONES` (default `Gpt_6_Astra,Gpt_5_6_Reasoning`),
+`M365_ADVISOR_FRAMING` (default `advisor`); an explicit `M365_FRAMING_VARIANT`/`M365_FRAMING_FILE`
+still wins globally. Threaded through the full/delta/nudge turns and the Disengage retry.
+Commits `e4f6c3b`, `acf0607`, `5c00c69`.
+
+**Bonus — measuring latency under throttling.** Client latency is dominated by the session
+stagger/pacing; the *wire* latency is recoverable from the debug log by pairing
+`WS send.clientCorrelationId` == response recv `requestId` (`wire = recv − send`). Example:
+astra ≈2–5 s wire vs 5.6-think-deeper ≈6 s for the same prompts, while both showed 22–28 s client.

@@ -178,7 +178,7 @@ There is no `model` parameter. The `tone` string on the chat message picks the m
 | `gpt-5.5` / `gpt-5.5-quick` | `Gpt_5_5_Chat` | current GPT generation |
 | `gpt-5.5-think-deeper` | `Gpt_5_5_Reasoning` | **recommended for tool calling** (paired with fenced/shell routing) |
 | `gpt-5.6-think-deeper` | `Gpt_5_6_Reasoning` | confirmed live 2026-08-06; GPT-5.6 Think deeper, robust tool caller |
-| `gpt-6-astra` | `Gpt_6_Astra` | confirmed live 2026-09-08; GPT-6 Astra, routes `DeepLeo` reasoning pipeline |
+| `gpt-6-astra` | `Gpt_6_Astra` | live 2026-09-08; **2026-09-30:** self-IDs as GPT-5 chat, no reasoning trace, no GPT-6 tone exposed in the M365 UI — likely a GPT-5-class **chat** alias; **not** a reasoning upgrade (hypotheses §18) |
 | `gpt-5.4` / `gpt-5.4-think-deeper` | `Gpt_5_4_Reasoning` | |
 | `gpt-5.4-quick` | `Gpt_5_4_Quick` | |
 | `gpt-5.3` / `gpt-5.3-quick` | `Gpt_5_3_Quick` | |
@@ -207,6 +207,8 @@ Rejected on test: `Anthropic_Claude`, `Claude_Haiku`, `Claude_3_7_Sonnet`. Accep
 > 1. **Claude tones route to GPT-5 when an agent is attached:** With **no agent**, `Claude_Sonnet` reaches real Anthropic Claude. However, attaching the declarative agent (`threadLevelGptId`, §10) silently routes the turn to **GPT-5**. Thus, Claude tones are effective for plain chat, but requests with tools fall back to GPT. The proxy attaches the agent **only when the request carries tools** (`ModelSession.run(..., useAgent=hasTools)`), ensuring plain chat reaches Claude.
 >
 > 2. **Reasoning tones (`gpt-5.5-think-deeper`, `gpt-5.6-think-deeper`) are robust tool-callers:** When paired with fenced/shell-routing and delta turn `<tools>` re-injection, reasoning models excel at tool calling and driving multi-turn agent loops. The earlier June 2026 notes suggesting `DeepLeo` meta-analyzed prompts and refused tools applied only to the obsolete bare-JSON `{"tool":...}` format and few-shot wrappers. Under the current fenced/shell routing architecture, reasoning models consistently emit valid tool fences. In contrast, the default `m365-copilot` (magic) tone frequently confabulates and fails to call tools (~0% solve).
+>
+> 3. **Framing: enforce the assistant tone, not tool-calling.** Demanding the model *be* an agent that "has a shell and must call tools" is refusal-prone (`unresolved_tool_refusal` — the proxy's own agentic `baseline` framing is the trigger). The reliable framing addresses it as a **chat assistant that writes commands the user runs** ("You write the shell commands; I run them. Do not make any tool calls."). The ```bash fence is routed to the shell **mechanically** either way. Prefer `M365_ADVISOR_TONES`/`advisor` framing for refusal-prone tones. See hypotheses §18.
 
 
 ### Code interpreter — a real server-side Python sandbox

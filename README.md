@@ -28,6 +28,13 @@ it scored 0/5 on real agentic tasks; see [hypotheses §9](docs/hypotheses.md)):
   whole step by writing one ```` ```bash ```` block" framing and routes that block to the
   shell tool. This exploits the one agentic behavior Microsoft's system prompt permits, and
   is what turns 0/5 into real multi-turn loops (verified 9-tool-call bug fix).
+- **Framing — assistant tone, *not* tool-call enforcement:** prompting the model to *be* an agent
+  that "has a shell and must call tools" is refusal-prone (`unresolved_tool_refusal`; the proxy's
+  own agentic `baseline` framing is the trigger). The reliable framing addresses it as a **chat
+  assistant that writes commands the user runs** ("You write the shell commands; I run them. Do not
+  make any tool calls."). The ```` ```bash ```` fence is routed to the shell **mechanically** either
+  way, so only *elicitation* depends on the tone. `M365_ADVISOR_TONES` / the `advisor` framing
+  select this for refusal-prone tones — see [hypotheses §18](docs/hypotheses.md).
 - **Reliability comes from the Copilot Studio agent (below) + the fenced/shell framing** —
   without the agent, M365 ignores tool instructions and answers in prose
 - **Structural Clause NLP:** Replaces brittle regexes with clause-boundary segmentation (`[Tool Anchor] + [Negation] + [Availability State]`) to intercept subtle refusals, existence claims, truncation surrenders, and shell failure deferrals.
@@ -274,6 +281,7 @@ without NixOS: `nix run github:cramt/m365-copilot-proxy -- 4141`.
 | Model ID | M365 Tone | Description |
 |---|---|---|
 | `gpt-5.6-think-deeper` | Gpt_5_6_Reasoning | GPT-5.6 reasoning — live-validated and capable of robust tool execution and reasoning |
+| `gpt-6-astra` | Gpt_6_Astra | Live GPT-6-named tone, but self-IDs as GPT-5 chat, shows no reasoning trace, and GPT-6 isn't exposed in the M365 UI — treat as a GPT-5-class **chat** tone, **not** a reasoning upgrade ([hypotheses §18](docs/hypotheses.md)) |
 | `gpt-5.5-think-deeper` | Gpt_5_5_Reasoning | **Recommended default for agents/tool-calling** — robust tool compliance |
 | `gpt-5.5` / `gpt-5.5-quick` | Gpt_5_5_Chat | GPT-5.5 fast |
 | `m365-copilot` / `auto` | magic | Auto-routing — high-variance at tool-calling (confabulates; see below) |
@@ -292,6 +300,10 @@ without NixOS: `nix run github:cramt/m365-copilot-proxy -- 4141`.
 > tools — it confabulates ("I no longer have access to the filesystem tools") and solves
 > ~0% of real tasks (§12.11); a proxy request with no `model` field already defaults to
 > `gpt-5.5-think-deeper` for this reason.
+>
+> **Framing (2026-09-30):** the proxy now prefers an **assistant-tone ("advisor") framing** for
+> refusal-prone tones (`M365_ADVISOR_TONES`, default `Gpt_6_Astra,Gpt_5_6_Reasoning`). Do **not**
+> try to force tool-calling by asserting agent identity — it backfires. See [hypotheses §18](docs/hypotheses.md).
 >
 > ⚠️ The **older** reasoning tones (`gpt-5.2`/`gpt-5.3`/`gpt-5.4` `*-think-deeper`, bare
 > `think-deeper`) route through M365's `DeepLeo` pipeline, which meta-analyzes the
