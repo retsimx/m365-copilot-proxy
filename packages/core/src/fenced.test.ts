@@ -604,9 +604,9 @@ describe("advisor framing (GPT-6 Astra)", () => {
 
   it("frames the model as a chat assistant that writes commands, not an executor", () => {
     const out = formatFencedToolDefinitions(TOOLS, "advisor");
-    expect(out).toContain("chat assistant");
-    expect(out).toContain("make no tool calls");
-    expect(out).toContain("a runtime executes them");
+    expect(out).toContain("You write the shell commands; I run them");
+    expect(out).toContain("Do not make any tool calls");
+    expect(out).toContain("I run them and paste the real output back");
     // still presents the tools + shell idiom so the fence routes to the shell
     expect(out).toContain("<tools>");
     expect(out).toContain("```bash");
@@ -620,6 +620,7 @@ describe("advisor framing (GPT-6 Astra)", () => {
       "TOOL USE IS REQUIRED",
       "PRIMARY JOB",
       "automated agent",
+      "runtime",
     ]) {
       expect(out, `advisor must not contain "${banned}"`).not.toContain(banned);
     }
@@ -629,7 +630,7 @@ describe("advisor framing (GPT-6 Astra)", () => {
     const out = formatFencedToolDefinitions(TOOLS, "baseline");
     expect(out).toContain("execution core");
     expect(out).toContain("TOOL USE IS REQUIRED");
-    expect(out).not.toContain("make no tool calls");
+    expect(out).not.toContain("Do not make any tool calls");
   });
 
   it("is registered as a discoverable variant", () => {

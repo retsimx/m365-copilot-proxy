@@ -80,8 +80,8 @@ describe("per-model framing selection (GPT refusal-prone tones)", () => {
   }
 
   function expectAdvisor(prompt: string) {
-    expect(prompt).toContain("chat assistant");
-    expect(prompt).toContain("make no tool calls");
+    expect(prompt).toContain("You write the shell commands; I run them");
+    expect(prompt).toContain("Do not make any tool calls");
     expect(prompt).not.toContain("execution core");
     expect(prompt).not.toContain("TOOL USE IS REQUIRED");
     // the tools still reach the model so the fence routes to the shell
@@ -92,7 +92,7 @@ describe("per-model framing selection (GPT refusal-prone tones)", () => {
   function expectBaseline(prompt: string) {
     expect(prompt).toContain("execution core");
     expect(prompt).toContain("TOOL USE IS REQUIRED");
-    expect(prompt).not.toContain("make no tool calls");
+    expect(prompt).not.toContain("Do not make any tool calls");
   }
 
   it("gpt-6-astra → advisor framing", async () => {
