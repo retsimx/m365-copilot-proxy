@@ -4,6 +4,7 @@ import {
   createLogger,
   trunc,
   getToneForModel,
+  framingVariantForTone,
   formatMessages,
   formatToolDefinitions,
   parseToolCalls,
@@ -225,13 +226,13 @@ function simpleHash(str: string): string {
 
 // --- Delta message formatting ---
 
-function formatDeltaMessages(messages: ParsedMessage[], tools?: ChatBody["tools"]): string {
+function formatDeltaMessages(messages: ParsedMessage[], tools?: ChatBody["tools"], framingVariant?: string): string {
   const parts: string[] = [];
 
   // Proactively attach tool definitions on delta turns so reasoning models (DeepLeo / GPT-5.5)
   // always see active tools and never claim "no tools are available in this message".
   if (tools && tools.length > 0) {
-    parts.push(formatToolDefinitions(tools));
+    parts.push(formatToolDefinitions(tools, framingVariant));
   }
 
   for (const m of messages) {
@@ -786,6 +787,10 @@ export async function handleChatCompletion(
   const tone = getToneForModel(model);
   const isClaudeTone = /^Claude_/i.test(tone);
   const useToolAgent = !!hasTools && (process.env.M365_FORCE_AGENT === "1" || !isClaudeTone);
+  // GPT-6 Astra refuses the agentic framing; it gets the `advisor` variant. Every other
+  // tone keeps the configured default. Threaded through every turn (full/delta/nudge) so a
+  // follow-up turn can't silently revert to baseline and re-trigger the refusal.
+  const framingVariant = framingVariantForTone(tone);
 
   // Format message: full prompt on first turn, delta on follow-ups.
   // M365 is stateful — it remembers everything from prior turns,
@@ -796,17 +801,17 @@ export async function handleChatCompletion(
   const convId = session.conversationId;
   let text: string;
   if (isFirstTurn || conv.sentMessageCount === 0) {
-    text = formatMessages(body.messages, body.tools, body.tool_choice, convId);
+    text = formatMessages(body.messages, body.tools, body.tool_choice, convId, framingVariant);
     log.info(`Chat completion: model=${model}, stream=${body.stream}, messages=${body.messages.length}, turn=${session.turnCount}, mode=full, cid=${convId}`);
   } else {
     const newMessages = body.messages.slice(conv.sentMessageCount);
-    const delta = newMessages.length > 0 ? formatDeltaMessages(newMessages, hasTools ? body.tools : undefined) : "";
+    const delta = newMessages.length > 0 ? formatDeltaMessages(newMessages, hasTools ? body.tools : undefined, framingVariant) : "";
     if (delta.length > 0) {
       text = delta;
       log.info(`Chat completion: model=${model}, stream=${body.stream}, messages=${body.messages.length}, new=${newMessages.length}, turn=${session.turnCount}, mode=delta, cid=${convId}`);
     } else {
       // No meaningful new content to send — nudge M365 to continue.
-      const toolsBlock = hasTools ? `${formatToolDefinitions(body.tools)}\n\n` : "";
+      const toolsBlock = hasTools ? `${formatToolDefinitions(body.tools, framingVariant)}\n\n` : "";
       text = `${toolsBlock}<user>\nPlease continue from where you left off.\n</user>`;
       log.info(`Chat completion: model=${model}, stream=${body.stream}, messages=${body.messages.length}, new=0 (nudge), turn=${session.turnCount}, mode=delta, cid=${convId}`);
     }
@@ -966,8 +971,11 @@ export async function handleChatCompletion(
         if (hasTools && !disengageRetried && !process.env.M365_NO_DISENGAGE_RETRY) {
           disengageRetried = true;
           session.newConversation();
-          text = formatMessages(body.messages, body.tools, body.tool_choice, session.conversationId, "softened");
-          log.info("Upstream Disengaged — retrying once with 'softened' framing in a fresh conversation (F22)");
+          // Astra's primary framing is already `advisor` (low-override); retrying it in a
+          // fresh conversation is the right analogue of the `softened` retry for other tones.
+          const retryVariant = framingVariant === "advisor" ? "advisor" : "softened";
+          text = formatMessages(body.messages, body.tools, body.tool_choice, session.conversationId, retryVariant);
+          log.info(`Upstream Disengaged — retrying once with '${retryVariant}' framing in a fresh conversation (F22)`);
           attempt--; // free retry; bounded — disengageRetried flips once
           continue;
         }

@@ -88,6 +88,12 @@ export {
   type ParseResult,
 } from "./tools.js";
 
+export {
+  currentFramingVariant,
+  framingVariantForTone,
+  FRAMING_VARIANT_NAMES,
+} from "./fenced.js";
+
 export { createLogger, trunc, LOG_PATH } from "./log.js";
 
 export {

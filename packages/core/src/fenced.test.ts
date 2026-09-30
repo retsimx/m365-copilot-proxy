@@ -1,10 +1,12 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
   deriveFencedSpec,
   renderFencedCall,
   parseFencedToolCalls,
   buildSpecMap,
   formatFencedToolDefinitions,
+  framingVariantForTone,
+  FRAMING_VARIANT_NAMES,
   findShellTool,
   hostPlatformNote,
 } from "./fenced.js";
@@ -596,3 +598,85 @@ EOF
 
 
 
+
+describe("advisor framing (GPT-6 Astra)", () => {
+  const TOOLS = [bash, readFile];
+
+  it("frames the model as a chat assistant that writes commands, not an executor", () => {
+    const out = formatFencedToolDefinitions(TOOLS, "advisor");
+    expect(out).toContain("chat assistant");
+    expect(out).toContain("make no tool calls");
+    expect(out).toContain("a runtime executes them");
+    // still presents the tools + shell idiom so the fence routes to the shell
+    expect(out).toContain("<tools>");
+    expect(out).toContain("```bash");
+  });
+
+  it("omits every agentic pressure that makes Astra refuse", () => {
+    const out = formatFencedToolDefinitions(TOOLS, "advisor");
+    for (const banned of [
+      "execution core",
+      "real shell",
+      "TOOL USE IS REQUIRED",
+      "PRIMARY JOB",
+      "automated agent",
+    ]) {
+      expect(out, `advisor must not contain "${banned}"`).not.toContain(banned);
+    }
+  });
+
+  it("leaves the baseline agentic framing intact for other models (control)", () => {
+    const out = formatFencedToolDefinitions(TOOLS, "baseline");
+    expect(out).toContain("execution core");
+    expect(out).toContain("TOOL USE IS REQUIRED");
+    expect(out).not.toContain("make no tool calls");
+  });
+
+  it("is registered as a discoverable variant", () => {
+    expect(FRAMING_VARIANT_NAMES).toContain("advisor");
+  });
+});
+
+describe("framingVariantForTone", () => {
+  const saved = {
+    variant: process.env.M365_FRAMING_VARIANT,
+    file: process.env.M365_FRAMING_FILE,
+    astra: process.env.M365_ASTRA_FRAMING,
+  };
+  beforeEach(() => {
+    delete process.env.M365_FRAMING_VARIANT;
+    delete process.env.M365_FRAMING_FILE;
+    delete process.env.M365_ASTRA_FRAMING;
+  });
+  afterEach(() => {
+    const restore: Array<[string, string | undefined]> = [
+      ["M365_FRAMING_VARIANT", saved.variant],
+      ["M365_FRAMING_FILE", saved.file],
+      ["M365_ASTRA_FRAMING", saved.astra],
+    ];
+    for (const [k, v] of restore) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  });
+
+  it("routes Gpt_6_Astra to the advisor variant", () => {
+    expect(framingVariantForTone("Gpt_6_Astra")).toBe("advisor");
+  });
+
+  it("leaves other tones on the configured default", () => {
+    expect(framingVariantForTone("Gpt_5_6_Reasoning")).toBe("baseline");
+    expect(framingVariantForTone("magic")).toBe("baseline");
+  });
+
+  it("lets M365_ASTRA_FRAMING override the Astra choice", () => {
+    process.env.M365_ASTRA_FRAMING = "baseline";
+    expect(framingVariantForTone("Gpt_6_Astra")).toBe("baseline");
+  });
+
+  it("lets an explicit global framing override win (A/B sweeps)", () => {
+    process.env.M365_FRAMING_VARIANT = "softened";
+    expect(framingVariantForTone("Gpt_6_Astra")).toBe("softened");
+    expect(framingVariantForTone("Gpt_5_6_Reasoning")).toBe("softened");
+  });
+});

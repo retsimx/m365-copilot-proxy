@@ -293,6 +293,24 @@ export function currentFramingVariant(): string {
   return process.env.M365_FRAMING_VARIANT || "baseline";
 }
 
+/** Pick the framing variant for a resolved model tone.
+ *
+ *  GPT-6 Astra (tone `Gpt_6_Astra`) refuses the agentic `baseline` framing — it
+ *  answers "I have no bash tool" and the request fails closed with
+ *  `unresolved_tool_refusal` (harness calibration 2026-09-30, 3/3). The `advisor`
+ *  variant recasts the model as a chat assistant that WRITES commands a runtime
+ *  RUNS; astra accepts it, and the proxy still routes the ```bash fence to the
+ *  shell. Every other tone keeps the configured default (baseline).
+ *
+ *  An explicit `M365_FRAMING_VARIANT` / `M365_FRAMING_FILE` wins globally (A/B
+ *  sweeps). Otherwise the Astra choice is overridable with `M365_ASTRA_FRAMING`. */
+export function framingVariantForTone(tone: string): string {
+  const explicit = process.env.M365_FRAMING_VARIANT || process.env.M365_FRAMING_FILE;
+  if (explicit) return currentFramingVariant();
+  if (tone === "Gpt_6_Astra") return process.env.M365_ASTRA_FRAMING || "advisor";
+  return currentFramingVariant();
+}
+
 type FramingBuilder = (tools: ToolDef[]) => string;
 
 /** Shared `<tools>` definition block — identical across every framing variant so
@@ -577,6 +595,26 @@ ${toolsBlock(tools)}`;
 - A <tool_response> is the real result of a command — the ground truth for what it printed.
 
 A session usually opens by looking at the files (\`ls -la\`, then \`cat\` the relevant ones), then makes the change, then re-runs to confirm it. One \`\`\`bash block per reply; the next reply follows its <tool_response>. Once a <tool_response> shows the task is complete, the final reply is a one-line summary.
+
+${toolsBlock(tools)}`;
+  },
+
+  // V-advisor — chat-advisor framing for GPT-6 Astra (tone `Gpt_6_Astra`). Astra's
+  // RLHF refuses the agentic baseline ("execution core", "you have a real shell",
+  // "TOOL USE IS REQUIRED"): it replies "I have no bash tool" and the request fails
+  // closed with `unresolved_tool_refusal` (harness calibration 2026-09-30, 3/3).
+  // Recasting the model as a chat assistant that WRITES commands for a runtime that
+  // RUNS them — and explicitly telling it to make no tool calls — flips it into
+  // emitting fences, which the proxy still routes to the shell mechanically. Selected
+  // only for `Gpt_6_Astra` by `framingVariantForTone`.
+  advisor(tools) {
+    return `You are a chat assistant helping the user complete a task on their machine. You do not run anything yourself and you make no tool calls: you write the shell commands, and a runtime executes them and returns the real output to you.
+
+To carry out a step, reply with a single fenced code block opened with the word bash, containing the commands — create or overwrite files with \`cat > name <<'EOF' … EOF\` heredocs, edit files in place with \`sed -i\`, inspect with \`cat\`/\`ls\`/\`grep\`, run code with the available interpreters. Put nothing before the fence. The block runs for real and its output comes back to you as a <tool_response>; read it, think, then write the next script. Work one block at a time until the task is complete.
+
+You have not run anything yet and have no results. Never invent or assume a command's output, never say the files are missing or that you cannot access them, and never ask the user to paste them — the files are present on a real filesystem and the runtime shows you the output. Emit exactly one fenced block per reply, then stop and wait for the <tool_response>.
+
+When the task is complete and no further command is needed, reply in plain language with the final answer only — no code fence, no preamble.
 
 ${toolsBlock(tools)}`;
   },
