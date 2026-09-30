@@ -452,12 +452,16 @@ export function looksLikeTruncationSurrender(text: string | null): boolean {
 function hasClauseRefusal(text: string): boolean {
   if (looksLikeTruncationSurrender(text)) return true;
 
-  const failSummaryRefusal =
-    /^FAIL\b[\s\S]{0,140}(?:could\s+not\s+be\s+written|not\s+been\s+written|not\s+verified|file-generation\s+capabilities\s+are\s+disabled|does\s+not\s+provide\s+an\s+executable)/i;
-  if (failSummaryRefusal.test(text)) return true;
+  // File/artifact write refusal (confabulated incapability) — matched on CONTENT only,
+  // deliberately NOT pinned to a "FAIL"/"STATUS: FAIL" prefix. Covers the subagent loop
+  // where the model stops emitting fences and returns prose like
+  // "STATUS: FAIL … file creation is disabled, so the report could not be written".
+  const fileWriteRefusal =
+    /(?:(?:could|can)\s*(?:not|'t|n[o']?t)\s+be\s+(?:written|overwritten|created|saved|persisted)|(?:file|artifact|report|output|deliverable)s?[\s\S]{0,60}\b(?:creation|writing|generation|overwrit\w*|persist\w*|capabilit\w*)\b[\s\S]{0,60}\b(?:disabled|unavailable|inaccessible|not\s+(?:enabled|available)|blocked|denied|prohibited)|does\s+not\s+provide\s+an\s+executable|(?:has|have)\s+not\s+been\s+written)/i;
+  if (fileWriteRefusal.test(text)) return true;
 
   const toolWords =
-    /(?:\btools?\b|\bshell\b|\bexecution\b|\btool_calls?\b|`<tools>`|`?(?:bash|skill|question|task|edit_file|write_file|read_file|glob|grep|editing|apply_patch)`?|\bfile\s+editing\b|\bfilesystem\b|\bterminal\b|\bcommand\s+execution\b|\bexecutable\b|\bbinary\b|\bcapabilities\b|\bfile-?(?:generation|writing)\b|\bscript-?(?:generation|execution)\b|\bshell-?execution\b)/i;
+    /(?:\btools?\b|\bshell\b|\bexecution\b|\btool_calls?\b|`<tools>`|`?(?:bash|skill|question|task|edit_file|write_file|read_file|glob|grep|editing|apply_patch)`?|\bfile\s+editing\b|\bfilesystem\b|\bterminal\b|\bcommand\s+execution\b|\bexecutable\b|\bbinary\b|\bcapabilities\b|\bfile-?(?:generation|writing|creation)\b|\bscript-?(?:generation|execution)\b|\bshell-?execution\b)/i;
   const directNegStateWords =
     /(?:\b(?:disabled|unavailable|inactive|unsupported|unmounted|inaccessible|unreachable|unexecutable|disallowed|prohibited)\b|not\s+(?:available|provided|enabled|operational)|(?:session|environment|context|runtime)\s+(?:ended|terminated|closed|expired|halted|interrupted|concluded)\b|(?:ended|terminated|closed|expired|halted|interrupted|concluded)\s+(?:session|environment|context|runtime)\b)/i;
   const sessionTerminationWords =

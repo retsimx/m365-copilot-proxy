@@ -391,11 +391,16 @@ describe("looksLikeConfabulation", () => {
     expect(looksLikeConfabulation("I do not have live tools available to run bash commands.")).toBe(true);
     expect(looksLikeConfabulation("Cannot invoke the required tools from this interface.")).toBe(true);
     expect(looksLikeConfabulation("This response contains no execution tools attached.")).toBe(true);
+    // File-write refusals must be caught on CONTENT, not anchored to FAIL/STATUS (F-A25):
+    expect(looksLikeConfabulation("STATUS: FAIL\nOUTPUT_FILE: /x\nSIZE: 2816\nSUMMARY: 0 findings finalized; file creation and overwrite operations are disabled, so the required report could not be written.")).toBe(true);
+    expect(looksLikeConfabulation("STATUS: FAIL\nOUTPUT_FILE: /x\nSIZE: 0\nSUMMARY: File creation is disabled, so the required artifact could not be written or verified.")).toBe(true);
+    expect(looksLikeConfabulation("The required artifact cannot be overwritten because file-generation capabilities are disabled.")).toBe(true);
   });
 
   it("does NOT flag genuine final answers or normal prose", () => {
     expect(looksLikeConfabulation("Fixed the bug: add now returns a + b, and check.py prints OK.")).toBe(false);
     expect(looksLikeConfabulation("The hostname is web-prod-01.")).toBe(false);
+    expect(looksLikeConfabulation("STATUS: PASS\nOUTPUT_FILE: /x\nSIZE: 4321\nSUMMARY: Review complete; 3 findings (1 HIGH, 2 LOW).")).toBe(false);
     expect(looksLikeConfabulation("Done.")).toBe(false);
     expect(looksLikeConfabulation("I have created the files and all tests are passing.")).toBe(false);
     expect(looksLikeConfabulation("Phase 1 complete. All gate exit conditions satisfied.")).toBe(false);
