@@ -55,6 +55,13 @@ These are what actually move compliance. In rough order of importance:
    rejection and context flush, confab retry, hallucinated-completion retry, tool-result
    labelling, one-call-per-turn, stripping invented `{confidence}`/`{final}` JSON.
    See [`tool-calling.md`](tool-calling.md).
+9. **Chatbot Advisor framing ("You write commands, I run them; do not make tool calls").**
+   Prompting the model to *be* an automated agent that *must* call tools contradicts M365's
+   retrieval-chatbot prior and triggers RLHF refusals ("I have no bash tool / I am not an
+   automated agent"). Recasting the model as a chat assistant that writes shell scripts
+   (```` ```bash ```` or ```` ```shell ```` fences) for the user to execute eliminates the
+   refusal reflex across all active models (GPT-6 Astra, GPT-5.6, GPT-5.5, Claude Sonnet,
+   and even recovers the default `magic` tone to 100% tool-call compliance). ([hyp §18, §19].)
 
 ## What does NOT work (confirmed dead-ends — don't re-litigate)
 

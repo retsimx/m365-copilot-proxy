@@ -2761,3 +2761,31 @@ Commits `e4f6c3b`, `acf0607`, `5c00c69`.
 stagger/pacing; the *wire* latency is recoverable from the debug log by pairing
 `WS send.clientCorrelationId` == response recv `requestId` (`wire = recv − send`). Example:
 astra ≈2–5 s wire vs 5.6-think-deeper ≈6 s for the same prompts, while both showed 22–28 s client.
+
+---
+
+## 19. October 6 2026 — Universal Advisor Framing across All Models & Tones 🟢
+
+**Headline.** The `advisor` framing (*"You write the shell commands; I run them and paste the real output back to you. Do not make any tool calls and do not try to run anything yourself"*) is not merely a workaround for refusal-prone models (GPT-6 Astra, GPT-5.6) — **it works universally well across all active M365 models, including the default `magic` tone, GPT-5.5 (Chat & Reasoning), and Claude Sonnet 4.5.** In an empirical sweep across all models on live M365, the advisor framing achieved a **100% tool-call rate (15/15 successful tool calls across 2 sweeps + dynamic task verification)** with 0% refusals and 0% Disengaged safety trips.
+
+**Live Model Scorecard (`scripts/advisor-all-tones-probe.mjs` against live M365):**
+
+| Model | Tone | Sweeps 1 & 2 (`ls -la`) | Dynamic Task (`grep`) | Latency Range | Status |
+|---|---|---|---|---|---|
+| `gpt-6-astra` | `Gpt_6_Astra` | ✅ 2/2 `ls -la` | ✅ `grep -RIn "TODO" src/` | 4.9s – 6.5s | 100% (3/3) |
+| `gpt-5.6-think-deeper` | `Gpt_5_6_Reasoning` | ✅ 2/2 `ls -la` | ✅ `grep -RIn -- "TODO" src/` | 9.1s – 12.6s | 100% (3/3) |
+| `gpt-5.5-think-deeper` | `Gpt_5_5_Reasoning` | ✅ 2/2 `ls -la` | — | 7.6s – 8.3s | 100% (2/2) |
+| `gpt-5.5` | `Gpt_5_5_Chat` | ✅ 2/2 `ls -la` | — | 6.1s – 7.4s | 100% (2/2) |
+| `m365-copilot` | `magic` | ✅ 2/2 `ls -la` | ✅ `grep -RIn -- "TODO" src/` | 5.5s – 5.9s | 100% (3/3) |
+| `claude-sonnet` | `Claude_Sonnet` | ✅ 2/2 `ls -la` | — | 4.8s – 6.1s | 100% (2/2) |
+| `think-deeper` / `quick` | `Gpt_Reasoning` / `Gpt_Quick` | ⚠️ Server Error (502) | — | 0.3s – 0.4s | Deprecated unversioned tones |
+
+**Key Insights:**
+1. **The Chatbot Prior is Universal in Microsoft Copilot:** Across all models deployed behind M365 Copilot, Microsoft's system alignment trains them as conversational assistants, not autonomous execution daemons. Framing the model as an automated agent ("You are the execution core of an automated agent... you have a real shell... tool use is required") triggers safety guardrails and confabulated refusals ("I don't have access to tools"). Recasting it as an author who writes shell commands for the user to run aligns with RLHF across every model family.
+2. **`magic` Tone Turnaround:** The default `m365-copilot` (`magic` tone) previously struggled under `baseline` agentic framing (often confabulating that it has no shell or refusing). Under `advisor` framing, it achieved 3/3 clean tool calls in ~5.5s with zero refusals.
+3. **Task-Specific Dynamic Generation:** Models under `advisor` framing don't just emit canned `ls -la` commands; when asked to search for code markers, they accurately output appropriate command lines (e.g. `grep -RIn -- "TODO" src/`).
+4. **Tooling & Overrides Added:**
+   - `scripts/advisor-all-tones-probe.mjs`: Automated probe script for evaluating framing strategies across models with configurable inter-turn pacing.
+   - `x-m365-framing` header: Allows per-request framing overrides (e.g. `advisor`, `baseline`) without server restarts.
+   - Wildcard `M365_ADVISOR_TONES="*"`: Allows routing all models to the advisor framing.
+

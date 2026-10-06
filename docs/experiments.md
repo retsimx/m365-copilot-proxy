@@ -100,6 +100,15 @@ gets a non-zero `SOLVED` / tool-call rate. **Always diff against the magic basel
   vs `--model quick --label quick`.
 - **Read:** SOLVED per model.  **Cost:** ~25 msgs/model.
 
+### E-C8 — Advisor framing sweep across all models (`scripts/advisor-all-tones-probe.mjs`)
+- **Hypothesis (§19):** Advisor framing ("You write shell commands; I run them and paste output back; make no tool calls") elicits clean ```` ```bash ```` blocks across all available M365 models, avoiding the RLHF agent-refusal reflex.
+- **Run:**
+  ```sh
+  node scripts/advisor-all-tones-probe.mjs --url http://10.0.1.15:4141 --framing advisor --delay 15000
+  ```
+- **Read:** Scorecard showing `TOOL_CALL`, `REFUSAL`, or `ERR`. 100% (15/15) tool-call compliance confirmed across `gpt-6-astra`, `gpt-5.6-think-deeper`, `gpt-5.5-think-deeper`, `gpt-5.5`, `m365-copilot` (magic), and `claude-sonnet`.
+- **Cost:** ~1 message per model tested, paced at 15s intervals to avoid thread throttle.
+
 ---
 
 ## B. Throttle / degradation (api doc §7)
