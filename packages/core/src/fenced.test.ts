@@ -321,11 +321,6 @@ describe("shell routing (Tier 1)", () => {
     expect(parseFencedToolCalls("```bash\nls\n```", specs).calls[0]?.function.name).toBe("bash");
   });
 
-  it("injects shell-first framing only when a shell tool is present", () => {
-    expect(formatFencedToolDefinitions([bash, readFile])).toContain("WRITING A SHELL SCRIPT");
-    expect(formatFencedToolDefinitions([readFile, writeFile])).not.toContain("WRITING A SHELL SCRIPT");
-  });
-
   // #7: these were silently demoted to prose, so a model correctly told to use
   // PowerShell produced turns that executed nothing.
   it("routes Windows shell fences to the harness shell tool", () => {
@@ -379,15 +374,16 @@ describe("hostPlatformNote", () => {
 });
 
 describe("formatFencedToolDefinitions", () => {
-  it("lists each tool as a fenced template inside <tools>", () => {
+  it("lists each tool as a fenced template inside <tools> with advisor framing", () => {
     const out = formatFencedToolDefinitions(ALL);
     expect(out).toContain("<tools>");
     expect(out).toContain("```bash");
     expect(out).toContain("```write_file");
     expect(out).toContain("<<<<<<< SEARCH");
-    // Stresses the action-not-illustration contract
-    expect(out).toContain("ACTION");
-    expect(out).toContain("PRIMARY JOB");
+    expect(out).toContain("You write the shell commands; I run them and paste the real output back to you");
+    expect(out).toContain("Do not make any tool calls and do not try to run anything yourself");
+    expect(out).not.toContain("execution core");
+    expect(out).not.toContain("TOOL USE IS REQUIRED");
   });
 
   it("derives task tool spec with prompt body and parses multiline prompt body correctly", () => {
@@ -600,11 +596,11 @@ EOF
 
 
 
-describe("advisor framing (GPT-6 Astra)", () => {
+describe("advisor framing", () => {
   const TOOLS = [bash, readFile];
 
   it("frames the model as a chat assistant that writes commands, not an executor", () => {
-    const out = formatFencedToolDefinitions(TOOLS, "advisor");
+    const out = formatFencedToolDefinitions(TOOLS);
     expect(out).toContain("You write the shell commands; I run them");
     expect(out).toContain("Do not make any tool calls");
     expect(out).toContain("I run them and paste the real output back");
@@ -614,7 +610,7 @@ describe("advisor framing (GPT-6 Astra)", () => {
   });
 
   it("omits every agentic pressure that makes Astra refuse", () => {
-    const out = formatFencedToolDefinitions(TOOLS, "advisor");
+    const out = formatFencedToolDefinitions(TOOLS);
     for (const banned of [
       "execution core",
       "real shell",
@@ -627,114 +623,30 @@ describe("advisor framing (GPT-6 Astra)", () => {
     }
   });
 
-  it("leaves the baseline agentic framing intact for other models (control)", () => {
-    const out = formatFencedToolDefinitions(TOOLS, "baseline");
-    expect(out).toContain("execution core");
-    expect(out).toContain("TOOL USE IS REQUIRED");
-    expect(out).not.toContain("Do not make any tool calls");
-  });
-
-  it("is registered as a discoverable variant", () => {
-    expect(FRAMING_VARIANT_NAMES).toContain("advisor");
+  it("is registered as the universal variant", () => {
+    expect(FRAMING_VARIANT_NAMES).toEqual(["advisor"]);
   });
 });
 
 describe("framingVariantForTone", () => {
-  const saved = {
-    variant: process.env.M365_FRAMING_VARIANT,
-    file: process.env.M365_FRAMING_FILE,
-    tones: process.env.M365_ADVISOR_TONES,
-    framing: process.env.M365_ADVISOR_FRAMING,
-  };
-  beforeEach(() => {
-    delete process.env.M365_FRAMING_VARIANT;
-    delete process.env.M365_FRAMING_FILE;
-    delete process.env.M365_ADVISOR_TONES;
-    delete process.env.M365_ADVISOR_FRAMING;
-  });
-  afterEach(() => {
-    const restore: Array<[string, string | undefined]> = [
-      ["M365_FRAMING_VARIANT", saved.variant],
-      ["M365_FRAMING_FILE", saved.file],
-      ["M365_ADVISOR_TONES", saved.tones],
-      ["M365_ADVISOR_FRAMING", saved.framing],
-    ];
-    for (const [k, v] of restore) {
-      if (v === undefined) delete process.env[k];
-      else process.env[k] = v;
-    }
-  });
-
-  it("routes the refusal-prone GPT tones to advisor (Astra + 5.6)", () => {
+  it("returns advisor for all tones universally", () => {
     expect(framingVariantForTone("Gpt_6_Astra")).toBe("advisor");
     expect(framingVariantForTone("Gpt_5_6_Reasoning")).toBe("advisor");
-  });
-
-  it("leaves other tones on the configured default", () => {
-    expect(framingVariantForTone("Gpt_5_5_Reasoning")).toBe("baseline");
-    expect(framingVariantForTone("magic")).toBe("baseline");
-  });
-
-  it("lets M365_ADVISOR_FRAMING change the variant for the advisor set", () => {
-    process.env.M365_ADVISOR_FRAMING = "baseline";
-    expect(framingVariantForTone("Gpt_6_Astra")).toBe("baseline");
-    expect(framingVariantForTone("Gpt_5_6_Reasoning")).toBe("baseline");
-  });
-
-  it("lets M365_ADVISOR_TONES redefine the set", () => {
-    process.env.M365_ADVISOR_TONES = "Gpt_6_Astra";
-    expect(framingVariantForTone("Gpt_6_Astra")).toBe("advisor");
-    expect(framingVariantForTone("Gpt_5_6_Reasoning")).toBe("baseline");
-    process.env.M365_ADVISOR_TONES = "";
-    expect(framingVariantForTone("Gpt_6_Astra")).toBe("baseline");
-  });
-
-  it("lets an explicit global framing override win (A/B sweeps)", () => {
-    process.env.M365_FRAMING_VARIANT = "softened";
-    expect(framingVariantForTone("Gpt_6_Astra")).toBe("softened");
-    expect(framingVariantForTone("Gpt_5_6_Reasoning")).toBe("softened");
+    expect(framingVariantForTone("Gpt_5_5_Reasoning")).toBe("advisor");
+    expect(framingVariantForTone("magic")).toBe("advisor");
+    expect(framingVariantForTone("Claude_Sonnet")).toBe("advisor");
   });
 });
 
 describe("isAdvisorTone", () => {
-  const savedTones = process.env.M365_ADVISOR_TONES;
-
-  beforeEach(() => {
-    delete process.env.M365_ADVISOR_TONES;
-  });
-
-  afterEach(() => {
-    if (savedTones === undefined) delete process.env.M365_ADVISOR_TONES;
-    else process.env.M365_ADVISOR_TONES = savedTones;
-  });
-
-  it("matches default advisor tones accurately", () => {
+  it("returns true for all tones universally", () => {
     expect(isAdvisorTone("Gpt_6_Astra")).toBe(true);
     expect(isAdvisorTone("Gpt_5_6_Reasoning")).toBe(true);
-  });
-
-  it("matches advisor tones case-insensitively", () => {
     expect(isAdvisorTone("gpt_6_astra")).toBe(true);
     expect(isAdvisorTone("GPT_6_ASTRA")).toBe(true);
-    expect(isAdvisorTone("gpt_5_6_reasoning")).toBe(true);
-    expect(isAdvisorTone("GPT_5_6_REASONING")).toBe(true);
-  });
-
-  it("returns false for non-advisor tones", () => {
-    expect(isAdvisorTone("Gpt_5_5_Reasoning")).toBe(false);
-    expect(isAdvisorTone("magic")).toBe(false);
-    expect(isAdvisorTone("Claude_Sonnet")).toBe(false);
-  });
-
-  it("respects M365_ADVISOR_TONES env override", () => {
-    process.env.M365_ADVISOR_TONES = "Custom_Tone, Another_Tone";
-    expect(isAdvisorTone("Custom_Tone")).toBe(true);
-    expect(isAdvisorTone("custom_tone")).toBe(true);
-    expect(isAdvisorTone("Another_Tone")).toBe(true);
-    expect(isAdvisorTone("Gpt_6_Astra")).toBe(false);
-
-    process.env.M365_ADVISOR_TONES = "";
-    expect(isAdvisorTone("Gpt_6_Astra")).toBe(false);
-    expect(isAdvisorTone("Custom_Tone")).toBe(false);
+    expect(isAdvisorTone("Gpt_5_5_Reasoning")).toBe(true);
+    expect(isAdvisorTone("magic")).toBe(true);
+    expect(isAdvisorTone("Claude_Sonnet")).toBe(true);
+    expect(isAdvisorTone()).toBe(true);
   });
 });

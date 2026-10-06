@@ -4,7 +4,6 @@ import {
   SessionPool,
   resetNewSessionPacing,
   resetTurnVelocityPacing,
-  ADVISOR_CONFAB_FORCE_PROMPT,
   CONFAB_FORCE_PROMPT,
 } from "./handler.js";
 import * as core from "@m365-copilot/core";
@@ -46,7 +45,7 @@ function bodyFor(model: string) {
   };
 }
 
-describe("per-model framing selection (GPT refusal-prone tones)", () => {
+describe("per-model framing selection (universal advisor framing)", () => {
   let captured: string[] = [];
 
   beforeEach(() => {
@@ -91,12 +90,6 @@ describe("per-model framing selection (GPT refusal-prone tones)", () => {
     expect(prompt).toContain("```bash");
   }
 
-  function expectBaseline(prompt: string) {
-    expect(prompt).toContain("execution core");
-    expect(prompt).toContain("TOOL USE IS REQUIRED");
-    expect(prompt).not.toContain("Do not make any tool calls");
-  }
-
   it("gpt-6-astra → advisor framing", async () => {
     expectAdvisor(await promptFor("gpt-6-astra"));
   }, 30000);
@@ -105,12 +98,12 @@ describe("per-model framing selection (GPT refusal-prone tones)", () => {
     expectAdvisor(await promptFor("gpt-5.6-think-deeper"));
   }, 30000);
 
-  it("gpt-5.5-think-deeper → baseline framing (deliberately unchanged)", async () => {
-    expectBaseline(await promptFor("gpt-5.5-think-deeper"));
+  it("gpt-5.5-think-deeper → advisor framing (universal standard)", async () => {
+    expectAdvisor(await promptFor("gpt-5.5-think-deeper"));
   }, 30000);
 });
 
-describe("forcing retry prompts for advisor vs baseline tones", () => {
+describe("forcing retry prompts for all models (unified advisor force prompt)", () => {
   let captured: string[] = [];
 
   beforeEach(() => {
@@ -132,7 +125,7 @@ describe("forcing retry prompts for advisor vs baseline tones", () => {
     vi.restoreAllMocks();
   });
 
-  it("uses advisor framing and ADVISOR_CONFAB_FORCE_PROMPT when an advisor tone (gpt-5.6-think-deeper) refuses on turn 0", async () => {
+  it("uses advisor framing and unified CONFAB_FORCE_PROMPT when gpt-5.6-think-deeper refuses on turn 0", async () => {
     let callCount = 0;
     vi.spyOn(core.ModelSession.prototype, "run").mockImplementation(async (text: string) => {
       captured.push(text);
@@ -175,14 +168,15 @@ describe("forcing retry prompts for advisor vs baseline tones", () => {
     expect(captured.length).toBe(2);
 
     const retryPrompt = captured[1];
-    expect(retryPrompt).toContain(ADVISOR_CONFAB_FORCE_PROMPT);
+    expect(retryPrompt).toContain(CONFAB_FORCE_PROMPT);
+    expect(retryPrompt).toContain("I will run the commands and paste the real output back to you");
+    expect(retryPrompt).toContain("Output ONE self-contained ```bash block with the commands for me to run, nothing else.");
     expect(retryPrompt).toContain("You write the shell commands; I run them");
     expect(retryPrompt).not.toContain("execution core");
     expect(retryPrompt).not.toContain("TOOL USE IS REQUIRED");
-    expect(retryPrompt).not.toContain(CONFAB_FORCE_PROMPT);
   });
 
-  it("uses advisor framing and ADVISOR_CONFAB_FORCE_PROMPT when gpt-6-astra refuses on turn 0", async () => {
+  it("uses advisor framing and unified CONFAB_FORCE_PROMPT when gpt-6-astra refuses on turn 0", async () => {
     let callCount = 0;
     vi.spyOn(core.ModelSession.prototype, "run").mockImplementation(async (text: string) => {
       captured.push(text);
@@ -225,14 +219,15 @@ describe("forcing retry prompts for advisor vs baseline tones", () => {
     expect(captured.length).toBe(2);
 
     const retryPrompt = captured[1];
-    expect(retryPrompt).toContain(ADVISOR_CONFAB_FORCE_PROMPT);
+    expect(retryPrompt).toContain(CONFAB_FORCE_PROMPT);
+    expect(retryPrompt).toContain("I will run the commands and paste the real output back to you");
+    expect(retryPrompt).toContain("Output ONE self-contained ```bash block with the commands for me to run, nothing else.");
     expect(retryPrompt).toContain("You write the shell commands; I run them");
     expect(retryPrompt).not.toContain("execution core");
     expect(retryPrompt).not.toContain("TOOL USE IS REQUIRED");
-    expect(retryPrompt).not.toContain(CONFAB_FORCE_PROMPT);
   });
 
-  it("uses baseline framing and CONFAB_FORCE_PROMPT when a non-advisor tone (gpt-5.5-think-deeper) refuses on turn 0", async () => {
+  it("uses advisor framing and unified CONFAB_FORCE_PROMPT when gpt-5.5-think-deeper refuses on turn 0", async () => {
     let callCount = 0;
     vi.spyOn(core.ModelSession.prototype, "run").mockImplementation(async (text: string) => {
       captured.push(text);
@@ -276,9 +271,10 @@ describe("forcing retry prompts for advisor vs baseline tones", () => {
 
     const retryPrompt = captured[1];
     expect(retryPrompt).toContain(CONFAB_FORCE_PROMPT);
-    expect(retryPrompt).toContain("execution core");
-    expect(retryPrompt).toContain("TOOL USE IS REQUIRED");
-    expect(retryPrompt).not.toContain(ADVISOR_CONFAB_FORCE_PROMPT);
-    expect(retryPrompt).not.toContain("You write the shell commands; I run them");
+    expect(retryPrompt).toContain("I will run the commands and paste the real output back to you");
+    expect(retryPrompt).toContain("Output ONE self-contained ```bash block with the commands for me to run, nothing else.");
+    expect(retryPrompt).toContain("You write the shell commands; I run them");
+    expect(retryPrompt).not.toContain("execution core");
+    expect(retryPrompt).not.toContain("TOOL USE IS REQUIRED");
   });
 });

@@ -890,7 +890,8 @@ describe("Dual-Engine Classifier Integration in Handler", () => {
     expect(runSpy).toHaveBeenCalledTimes(4);
     // Verify that retries sent CONFAB_FORCE_PROMPT
     const retryCallArg = runSpy.mock.calls[1][0];
-    expect(retryCallArg).toContain("Emit ONE fenced tool block this turn");
+    expect(retryCallArg).toContain("I will run the commands and paste the real output back to you");
+    expect(retryCallArg).toContain("Output ONE self-contained ```bash block");
     expect(classifySpy).toHaveBeenCalledWith(refusalText);
   });
 
@@ -935,7 +936,8 @@ describe("Dual-Engine Classifier Integration in Handler", () => {
     // Initial turn + 3 retries = 4 runs total
     expect(runSpy).toHaveBeenCalledTimes(4);
     const retryCallArg = runSpy.mock.calls[1][0];
-    expect(retryCallArg).toContain("Emit ONE fenced tool block this turn");
+    expect(retryCallArg).toContain("I will run the commands and paste the real output back to you");
+    expect(retryCallArg).toContain("Output ONE self-contained ```bash block");
   });
 
   it("forces a retry with TRUNCATION_SURRENDER_FORCE_PROMPT on truncation surrender and fails closed with HTTP 502 if persistent", async () => {
@@ -980,7 +982,7 @@ describe("Dual-Engine Classifier Integration in Handler", () => {
     // Verify that retries sent TRUNCATION_SURRENDER_FORCE_PROMPT
     const retryCallArg = runSpy.mock.calls[1][0];
     expect(retryCallArg).toContain(TRUNCATION_SURRENDER_FORCE_PROMPT);
-    expect(retryCallArg).toContain("CORRECTION: The execution session has NOT ended");
+    expect(retryCallArg).toContain("CORRECTION: The session has not ended.");
   });
 
   it("forces a retry with TRUNCATION_SURRENDER_FORCE_PROMPT on truncation surrender and recovers when model emits a tool call", async () => {

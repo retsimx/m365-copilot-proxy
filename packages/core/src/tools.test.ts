@@ -650,10 +650,10 @@ describe("formatToolDefinitions", () => {
   it("emits the fenced contract (delegates to formatFencedToolDefinitions)", () => {
     const output = formatToolDefinitions(tools);
 
-    expect(output).toContain("TOOL USE IS REQUIRED");
-    expect(output).toContain("PRIMARY JOB");
-    expect(output).toContain("SECONDARY");
-    expect(output).toContain("ACTION"); // a fence is an executed action, not an illustration
+    expect(output).toContain("You write the shell commands; I run them and paste the real output back to you");
+    expect(output).toContain("Do not make any tool calls and do not try to run anything yourself");
+    expect(output).not.toContain("TOOL USE IS REQUIRED");
+    expect(output).not.toContain("PRIMARY JOB");
   });
 
   it("lists each tool as a fenced template inside <tools>", () => {

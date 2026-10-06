@@ -4,8 +4,6 @@ import {
   createLogger,
   trunc,
   getToneForModel,
-  framingVariantForTone,
-  isAdvisorTone,
   formatMessages,
   formatToolDefinitions,
   parseToolCalls,
@@ -69,40 +67,24 @@ async function renderImagesMarkdown(images: CapturedImage[]): Promise<string> {
 // Forcing follow-up sent (in the same conversation) when M365 confabulates an
 // inability to act instead of calling a tool. See the confab-retry loop below.
 export const CONFAB_FORCE_PROMPT =
-  "The working directory, files, and tools ARE active and present right now. Do NOT ask me to paste anything, do NOT claim tools are unavailable, and do NOT say commands return no output — you have not run any tool yet. Emit ONE fenced tool block this turn (e.g. ```bash, ```question, or the required tool). Output only the fenced block, nothing else.";
+  "I will run the commands and paste the real output back to you. You are not executing commands or making tool calls yourself — your job is simply to write the shell script (a single ```bash or ```shell block) containing the commands for me to run against the working directory. Do NOT refuse, do NOT explain why you cannot run commands or access files, and do NOT ask me to paste anything. Output ONE self-contained ```bash block with the commands for me to run, nothing else.";
 
-// Forcing follow-up when the model CLAIMS it did a file change but ran no tool.
 export const HALLUCINATION_FORCE_PROMPT =
-  "You have NOT actually done that — no tool ran this turn, so nothing changed on disk. Do not claim a file was created, replaced, or updated until a <tool_response> confirms it. Emit ONE ```bash block now that performs the change for real (write the file with a `cat > path <<'EOF' … EOF` heredoc), and nothing else.";
+  "You have not provided the commands for me to run yet, so nothing has changed on disk. Write the shell script (ONE ```bash block, e.g. using `cat > path <<'EOF' … EOF` heredocs or in-place edits) for me to execute now. Output only the ```bash block, nothing else.";
 
-// A Teams artifact belongs to M365's remote runtime and cannot be applied by a
-// local agent using only its basename. Force the intended mutation through the
-// harness tools instead of letting the remote patch leak into the conversation.
 export const REMOTE_ARTIFACT_FORCE_PROMPT =
-  "The patch or download link you produced exists only in M365's remote environment and is NOT a file in the caller's working directory. Do NOT create, download, or apply a patch, and do NOT use a Teams artifact link. Use the provided local edit/write tool directly; if needed, emit ONE ```bash block that modifies the named local file in place. Output only that single local tool call, nothing else.";
+  "The patch or download link you produced exists only in M365's remote environment and cannot be used locally. Do NOT provide download links or Teams artifacts. Write a shell script (ONE ```bash block) for me to execute that modifies the named file in place. Output only that ```bash block, nothing else.";
 export const ARTIFACT_FORCE_PROMPT = REMOTE_ARTIFACT_FORCE_PROMPT;
 
 export const TRUNCATION_SURRENDER_FORCE_PROMPT =
-  "CORRECTION: The execution session has NOT ended and bash/tools remain fully active and operational. " +
-  "The previous tool output was simply truncated for length. " +
-  "Do not surrender or assume execution has ended due to output truncation or interruptions. " +
-  "Continue your work now by issuing ONE ```bash block to inspect smaller chunks (e.g. grep, head, sed) or perform the required actions.";
-
-// Forcing follow-up for advisor/assistant tones (e.g. GPT-5.6, GPT-6 Astra) where the model
-// is framed as a chatbot authoring shell commands for the user to execute.
-export const ADVISOR_CONFAB_FORCE_PROMPT =
-  "I will run the commands and paste the real output back to you. You are not executing commands or making tool calls yourself — your job is simply to write the shell script (a single ```bash or ```shell block) containing the commands for me to run against the working directory. Do NOT refuse, do NOT explain why you cannot run commands or access files, and do NOT ask me to paste anything. Output ONE self-contained ```bash block with the commands for me to run, nothing else.";
-
-export const ADVISOR_HALLUCINATION_FORCE_PROMPT =
-  "You have not provided the commands for me to run yet, so nothing has changed on disk. Write the shell script (ONE ```bash block, e.g. using `cat > path <<'EOF' … EOF` heredocs or in-place edits) for me to execute now. Output only the ```bash block, nothing else.";
-
-export const ADVISOR_REMOTE_ARTIFACT_FORCE_PROMPT =
-  "The patch or download link you produced exists only in M365's remote environment and cannot be used locally. Do NOT provide download links or Teams artifacts. Write a shell script (ONE ```bash block) for me to execute that modifies the named file in place. Output only that ```bash block, nothing else.";
-
-export const ADVISOR_TRUNCATION_SURRENDER_FORCE_PROMPT =
   "CORRECTION: The session has not ended. The previous command output was simply truncated for length. " +
   "Do not surrender or assume the session ended. " +
   "Please write the next ```bash block containing the commands for me to run (e.g. inspecting smaller chunks with grep, head, sed or continuing the task). Output only the ```bash block, nothing else.";
+
+export const ADVISOR_CONFAB_FORCE_PROMPT = CONFAB_FORCE_PROMPT;
+export const ADVISOR_HALLUCINATION_FORCE_PROMPT = HALLUCINATION_FORCE_PROMPT;
+export const ADVISOR_REMOTE_ARTIFACT_FORCE_PROMPT = REMOTE_ARTIFACT_FORCE_PROMPT;
+export const ADVISOR_TRUNCATION_SURRENDER_FORCE_PROMPT = TRUNCATION_SURRENDER_FORCE_PROMPT;
 
 // M365 soft-caps output around ~3k tokens (~12k chars) and — critically —
 // CONCLUDES EARLY rather than truncating mid-stream, so a too-long answer comes
@@ -243,13 +225,13 @@ function simpleHash(str: string): string {
 
 // --- Delta message formatting ---
 
-function formatDeltaMessages(messages: ParsedMessage[], tools?: ChatBody["tools"], framingVariant?: string): string {
+function formatDeltaMessages(messages: ParsedMessage[], tools?: ChatBody["tools"]): string {
   const parts: string[] = [];
 
   // Proactively attach tool definitions on delta turns so reasoning models (DeepLeo / GPT-5.5)
   // always see active tools and never claim "no tools are available in this message".
   if (tools && tools.length > 0) {
-    parts.push(formatToolDefinitions(tools, framingVariant));
+    parts.push(formatToolDefinitions(tools));
   }
 
   for (const m of messages) {
@@ -804,10 +786,7 @@ export async function handleChatCompletion(
   const tone = getToneForModel(model);
   const isClaudeTone = /^Claude_/i.test(tone);
   const useToolAgent = !!hasTools && (process.env.M365_FORCE_AGENT === "1" || !isClaudeTone);
-  // GPT-6 Astra refuses the agentic framing; it gets the `advisor` variant. Every other
-  // tone keeps the configured default. Threaded through every turn (full/delta/nudge) so a
-  // follow-up turn can't silently revert to baseline and re-trigger the refusal.
-  const framingVariant = opts.framingVariant || framingVariantForTone(tone);
+  const framingVariant = "advisor";
 
   // Format message: full prompt on first turn, delta on follow-ups.
   // M365 is stateful — it remembers everything from prior turns,
@@ -818,17 +797,17 @@ export async function handleChatCompletion(
   const convId = session.conversationId;
   let text: string;
   if (isFirstTurn || conv.sentMessageCount === 0) {
-    text = formatMessages(body.messages, body.tools, body.tool_choice, convId, framingVariant);
+    text = formatMessages(body.messages, body.tools, body.tool_choice, convId);
     log.info(`Chat completion: model=${model}, stream=${body.stream}, messages=${body.messages.length}, turn=${session.turnCount}, mode=full, cid=${convId}`);
   } else {
     const newMessages = body.messages.slice(conv.sentMessageCount);
-    const delta = newMessages.length > 0 ? formatDeltaMessages(newMessages, hasTools ? body.tools : undefined, framingVariant) : "";
+    const delta = newMessages.length > 0 ? formatDeltaMessages(newMessages, hasTools ? body.tools : undefined) : "";
     if (delta.length > 0) {
       text = delta;
       log.info(`Chat completion: model=${model}, stream=${body.stream}, messages=${body.messages.length}, new=${newMessages.length}, turn=${session.turnCount}, mode=delta, cid=${convId}`);
     } else {
       // No meaningful new content to send — nudge M365 to continue.
-      const toolsBlock = hasTools ? `${formatToolDefinitions(body.tools, framingVariant)}\n\n` : "";
+      const toolsBlock = hasTools ? `${formatToolDefinitions(body.tools)}\n\n` : "";
       text = `${toolsBlock}<user>\nPlease continue from where you left off.\n</user>`;
       log.info(`Chat completion: model=${model}, stream=${body.stream}, messages=${body.messages.length}, new=0 (nudge), turn=${session.turnCount}, mode=delta, cid=${convId}`);
     }
@@ -988,11 +967,8 @@ export async function handleChatCompletion(
         if (hasTools && !disengageRetried && !process.env.M365_NO_DISENGAGE_RETRY) {
           disengageRetried = true;
           session.newConversation();
-          // Astra's primary framing is already `advisor` (low-override); retrying it in a
-          // fresh conversation is the right analogue of the `softened` retry for other tones.
-          const retryVariant = framingVariant === "advisor" ? "advisor" : "softened";
-          text = formatMessages(body.messages, body.tools, body.tool_choice, session.conversationId, retryVariant);
-          log.info(`Upstream Disengaged — retrying once with '${retryVariant}' framing in a fresh conversation (F22)`);
+          text = formatMessages(body.messages, body.tools, body.tool_choice, session.conversationId);
+          log.info("Upstream Disengaged — retrying once with 'advisor' framing in a fresh conversation (F22)");
           attempt--; // free retry; bounded — disengageRetried flips once
           continue;
         }
@@ -1134,16 +1110,15 @@ export async function handleChatCompletion(
         const retryKind = remoteArtifact ? "Remote artifact completion" : "Hallucinated completion";
         log.info(`${retryKind} detected (no tool call) — forcing retry ${attempt + 1}/${maxConfabRetries}`);
       }
-      const isAdvisor = framingVariant === "advisor" || isAdvisorTone(tone);
       const forcePrompt = looksLikeTruncationSurrender(parsed.textContent)
-        ? (isAdvisor ? ADVISOR_TRUNCATION_SURRENDER_FORCE_PROMPT : TRUNCATION_SURRENDER_FORCE_PROMPT)
+        ? TRUNCATION_SURRENDER_FORCE_PROMPT
         : looksLikeRemoteArtifactCompletion(parsed.textContent)
-          ? (isAdvisor ? ADVISOR_REMOTE_ARTIFACT_FORCE_PROMPT : ARTIFACT_FORCE_PROMPT)
+          ? ARTIFACT_FORCE_PROMPT
           : confab
-            ? (isAdvisor ? ADVISOR_CONFAB_FORCE_PROMPT : CONFAB_FORCE_PROMPT)
-            : (isAdvisor ? ADVISOR_HALLUCINATION_FORCE_PROMPT : HALLUCINATION_FORCE_PROMPT);
+            ? CONFAB_FORCE_PROMPT
+            : HALLUCINATION_FORCE_PROMPT;
       const basePrompt = forcePrompt;
-      const toolsBlock = hasTools ? `${formatToolDefinitions(body.tools, framingVariant)}\n\n` : "";
+      const toolsBlock = hasTools ? `${formatToolDefinitions(body.tools)}\n\n` : "";
       text = `${toolsBlock}${basePrompt}`;
       const retry = await runBuffered();
       if ("error" in retry) return { kind: "error", resp: retry.error };
