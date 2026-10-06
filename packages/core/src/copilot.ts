@@ -27,11 +27,16 @@ const MODEL_TONES: Record<string, string> = {
   "gpt-5.5-think-deeper": "Gpt_5_5_Reasoning",
 
   // GPT-5.6 (live-validated 2026-08-06; M365 currently exposes reasoning only)
+  "gpt-5.6": "Gpt_5_6_Reasoning",
   "gpt-5.6-think-deeper": "Gpt_5_6_Reasoning",
+  "gpt-5.6-quick": "Gpt_5_6_Reasoning",
+  "gpt-5.6-chat": "Gpt_5_6_Reasoning",
+  "5.6": "Gpt_5_6_Reasoning",
 
   // GPT-6 Astra (live-validated 2026-09-08; routes DeepLeo reasoning pipeline).
   // Note: `Gpt_6_Reasoning` is registered-but-dead (deflects via BotConnection),
   // so the working GPT-6 tone is `Gpt_6_Astra`, not the generic `*_Reasoning`.
+  "gpt-6": "Gpt_6_Astra",
   "gpt-6-astra": "Gpt_6_Astra",
 
   // GPT-5.4
@@ -53,6 +58,8 @@ const MODEL_TONES: Record<string, string> = {
 export function getToneForModel(model: string): string {
   const exact = MODEL_TONES[model];
   if (exact) return exact;
+  if (/(^|[_-])5\.6([_-]|$)/i.test(model) || /^gpt-?5\.6/i.test(model)) return "Gpt_5_6_Reasoning";
+  if (/astra/i.test(model) || /^gpt-?6/i.test(model)) return "Gpt_6_Astra";
   // Unmapped `claude-*` strings (e.g. the `claude-opus-4-8[1m]` a Claude Code client
   // sends) must NOT fall back to the `magic` (GPT) tone. Empirically (route-probe,
   // 2026-07-07) the magic path does not tool-call right now — 0/2, confabulates

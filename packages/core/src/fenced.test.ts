@@ -6,6 +6,7 @@ import {
   buildSpecMap,
   formatFencedToolDefinitions,
   framingVariantForTone,
+  isAdvisorTone,
   FRAMING_VARIANT_NAMES,
   findShellTool,
   hostPlatformNote,
@@ -692,5 +693,48 @@ describe("framingVariantForTone", () => {
     process.env.M365_FRAMING_VARIANT = "softened";
     expect(framingVariantForTone("Gpt_6_Astra")).toBe("softened");
     expect(framingVariantForTone("Gpt_5_6_Reasoning")).toBe("softened");
+  });
+});
+
+describe("isAdvisorTone", () => {
+  const savedTones = process.env.M365_ADVISOR_TONES;
+
+  beforeEach(() => {
+    delete process.env.M365_ADVISOR_TONES;
+  });
+
+  afterEach(() => {
+    if (savedTones === undefined) delete process.env.M365_ADVISOR_TONES;
+    else process.env.M365_ADVISOR_TONES = savedTones;
+  });
+
+  it("matches default advisor tones accurately", () => {
+    expect(isAdvisorTone("Gpt_6_Astra")).toBe(true);
+    expect(isAdvisorTone("Gpt_5_6_Reasoning")).toBe(true);
+  });
+
+  it("matches advisor tones case-insensitively", () => {
+    expect(isAdvisorTone("gpt_6_astra")).toBe(true);
+    expect(isAdvisorTone("GPT_6_ASTRA")).toBe(true);
+    expect(isAdvisorTone("gpt_5_6_reasoning")).toBe(true);
+    expect(isAdvisorTone("GPT_5_6_REASONING")).toBe(true);
+  });
+
+  it("returns false for non-advisor tones", () => {
+    expect(isAdvisorTone("Gpt_5_5_Reasoning")).toBe(false);
+    expect(isAdvisorTone("magic")).toBe(false);
+    expect(isAdvisorTone("Claude_Sonnet")).toBe(false);
+  });
+
+  it("respects M365_ADVISOR_TONES env override", () => {
+    process.env.M365_ADVISOR_TONES = "Custom_Tone, Another_Tone";
+    expect(isAdvisorTone("Custom_Tone")).toBe(true);
+    expect(isAdvisorTone("custom_tone")).toBe(true);
+    expect(isAdvisorTone("Another_Tone")).toBe(true);
+    expect(isAdvisorTone("Gpt_6_Astra")).toBe(false);
+
+    process.env.M365_ADVISOR_TONES = "";
+    expect(isAdvisorTone("Gpt_6_Astra")).toBe(false);
+    expect(isAdvisorTone("Custom_Tone")).toBe(false);
   });
 });

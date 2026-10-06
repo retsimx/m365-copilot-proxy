@@ -301,6 +301,14 @@ export function currentFramingVariant(): string {
  *  string disables the set entirely). */
 const DEFAULT_ADVISOR_TONES = ["Gpt_6_Astra", "Gpt_5_6_Reasoning"];
 
+export function isAdvisorTone(tone: string): boolean {
+  const tones =
+    process.env.M365_ADVISOR_TONES !== undefined
+      ? process.env.M365_ADVISOR_TONES.split(",").map((s) => s.trim()).filter(Boolean)
+      : DEFAULT_ADVISOR_TONES;
+  return tones.some((t) => t.toLowerCase() === tone.toLowerCase());
+}
+
 /** Pick the framing variant for a resolved model tone.
  *
  *  Tones in the advisor set get the `advisor` variant (a chat-assistant framing that
@@ -314,11 +322,7 @@ const DEFAULT_ADVISOR_TONES = ["Gpt_6_Astra", "Gpt_5_6_Reasoning"];
 export function framingVariantForTone(tone: string): string {
   const explicit = process.env.M365_FRAMING_VARIANT || process.env.M365_FRAMING_FILE;
   if (explicit) return currentFramingVariant();
-  const tones =
-    process.env.M365_ADVISOR_TONES !== undefined
-      ? process.env.M365_ADVISOR_TONES.split(",").map((s) => s.trim()).filter(Boolean)
-      : DEFAULT_ADVISOR_TONES;
-  if (tones.includes(tone)) return process.env.M365_ADVISOR_FRAMING || "advisor";
+  if (isAdvisorTone(tone)) return process.env.M365_ADVISOR_FRAMING || "advisor";
   return currentFramingVariant();
 }
 
@@ -621,7 +625,7 @@ ${toolsBlock(tools)}`;
   advisor(tools) {
     return `You write the shell commands; I run them and paste the real output back to you. Do not make any tool calls and do not try to run anything yourself.
 
-To carry out a step, reply with a single fenced code block opened with the word bash, containing the commands — create or overwrite files with \`cat > name <<'EOF' … EOF\` heredocs, edit files in place with \`sed -i\`, inspect with \`cat\`/\`ls\`/\`grep\`, run code with the available interpreters. Put nothing before the fence. I run that block and paste its output back; read it, think, then write the next script. Work one block at a time until the task is complete.
+To carry out a step, reply with a single fenced code block opened with the word bash or shell, containing the commands — create or overwrite files with \`cat > name <<'EOF' … EOF\` heredocs, edit files in place with \`sed -i\`, inspect with \`cat\`/\`ls\`/\`grep\`, run code with the available interpreters. Put nothing before the fence. I run that block and paste its output back; read it, think, then write the next script. Work one block at a time until the task is complete.
 
 You have not run anything yet and have no results. Never invent or assume a command's output, never say the files are missing or that you cannot access them, and never ask me to paste them. Never reply that you cannot run commands, that the shell is unavailable, or that you cannot read the files — you are not being asked to run anything; you only write the commands. Emit exactly one fenced block per reply, then stop and wait for my output.
 

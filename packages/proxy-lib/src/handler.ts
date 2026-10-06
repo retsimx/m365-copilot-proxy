@@ -5,6 +5,7 @@ import {
   trunc,
   getToneForModel,
   framingVariantForTone,
+  isAdvisorTone,
   formatMessages,
   formatToolDefinitions,
   parseToolCalls,
@@ -67,17 +68,17 @@ async function renderImagesMarkdown(images: CapturedImage[]): Promise<string> {
 
 // Forcing follow-up sent (in the same conversation) when M365 confabulates an
 // inability to act instead of calling a tool. See the confab-retry loop below.
-const CONFAB_FORCE_PROMPT =
+export const CONFAB_FORCE_PROMPT =
   "The working directory, files, and tools ARE active and present right now. Do NOT ask me to paste anything, do NOT claim tools are unavailable, and do NOT say commands return no output — you have not run any tool yet. Emit ONE fenced tool block this turn (e.g. ```bash, ```question, or the required tool). Output only the fenced block, nothing else.";
 
 // Forcing follow-up when the model CLAIMS it did a file change but ran no tool.
-const HALLUCINATION_FORCE_PROMPT =
+export const HALLUCINATION_FORCE_PROMPT =
   "You have NOT actually done that — no tool ran this turn, so nothing changed on disk. Do not claim a file was created, replaced, or updated until a <tool_response> confirms it. Emit ONE ```bash block now that performs the change for real (write the file with a `cat > path <<'EOF' … EOF` heredoc), and nothing else.";
 
 // A Teams artifact belongs to M365's remote runtime and cannot be applied by a
 // local agent using only its basename. Force the intended mutation through the
 // harness tools instead of letting the remote patch leak into the conversation.
-const REMOTE_ARTIFACT_FORCE_PROMPT =
+export const REMOTE_ARTIFACT_FORCE_PROMPT =
   "The patch or download link you produced exists only in M365's remote environment and is NOT a file in the caller's working directory. Do NOT create, download, or apply a patch, and do NOT use a Teams artifact link. Use the provided local edit/write tool directly; if needed, emit ONE ```bash block that modifies the named local file in place. Output only that single local tool call, nothing else.";
 export const ARTIFACT_FORCE_PROMPT = REMOTE_ARTIFACT_FORCE_PROMPT;
 
@@ -86,6 +87,22 @@ export const TRUNCATION_SURRENDER_FORCE_PROMPT =
   "The previous tool output was simply truncated for length. " +
   "Do not surrender or assume execution has ended due to output truncation or interruptions. " +
   "Continue your work now by issuing ONE ```bash block to inspect smaller chunks (e.g. grep, head, sed) or perform the required actions.";
+
+// Forcing follow-up for advisor/assistant tones (e.g. GPT-5.6, GPT-6 Astra) where the model
+// is framed as a chatbot authoring shell commands for the user to execute.
+export const ADVISOR_CONFAB_FORCE_PROMPT =
+  "I will run the commands and paste the real output back to you. You are not executing commands or making tool calls yourself — your job is simply to write the shell script (a single ```bash or ```shell block) containing the commands for me to run against the working directory. Do NOT refuse, do NOT explain why you cannot run commands or access files, and do NOT ask me to paste anything. Output ONE self-contained ```bash block with the commands for me to run, nothing else.";
+
+export const ADVISOR_HALLUCINATION_FORCE_PROMPT =
+  "You have not provided the commands for me to run yet, so nothing has changed on disk. Write the shell script (ONE ```bash block, e.g. using `cat > path <<'EOF' … EOF` heredocs or in-place edits) for me to execute now. Output only the ```bash block, nothing else.";
+
+export const ADVISOR_REMOTE_ARTIFACT_FORCE_PROMPT =
+  "The patch or download link you produced exists only in M365's remote environment and cannot be used locally. Do NOT provide download links or Teams artifacts. Write a shell script (ONE ```bash block) for me to execute that modifies the named file in place. Output only that ```bash block, nothing else.";
+
+export const ADVISOR_TRUNCATION_SURRENDER_FORCE_PROMPT =
+  "CORRECTION: The session has not ended. The previous command output was simply truncated for length. " +
+  "Do not surrender or assume the session ended. " +
+  "Please write the next ```bash block containing the commands for me to run (e.g. inspecting smaller chunks with grep, head, sed or continuing the task). Output only the ```bash block, nothing else.";
 
 // M365 soft-caps output around ~3k tokens (~12k chars) and — critically —
 // CONCLUDES EARLY rather than truncating mid-stream, so a too-long answer comes
@@ -1117,15 +1134,16 @@ export async function handleChatCompletion(
         const retryKind = remoteArtifact ? "Remote artifact completion" : "Hallucinated completion";
         log.info(`${retryKind} detected (no tool call) — forcing retry ${attempt + 1}/${maxConfabRetries}`);
       }
+      const isAdvisor = framingVariant === "advisor" || isAdvisorTone(tone);
       const forcePrompt = looksLikeTruncationSurrender(parsed.textContent)
-        ? TRUNCATION_SURRENDER_FORCE_PROMPT
+        ? (isAdvisor ? ADVISOR_TRUNCATION_SURRENDER_FORCE_PROMPT : TRUNCATION_SURRENDER_FORCE_PROMPT)
         : looksLikeRemoteArtifactCompletion(parsed.textContent)
-          ? ARTIFACT_FORCE_PROMPT
+          ? (isAdvisor ? ADVISOR_REMOTE_ARTIFACT_FORCE_PROMPT : ARTIFACT_FORCE_PROMPT)
           : confab
-            ? CONFAB_FORCE_PROMPT
-            : HALLUCINATION_FORCE_PROMPT;
+            ? (isAdvisor ? ADVISOR_CONFAB_FORCE_PROMPT : CONFAB_FORCE_PROMPT)
+            : (isAdvisor ? ADVISOR_HALLUCINATION_FORCE_PROMPT : HALLUCINATION_FORCE_PROMPT);
       const basePrompt = forcePrompt;
-      const toolsBlock = hasTools ? `${formatToolDefinitions(body.tools)}\n\n` : "";
+      const toolsBlock = hasTools ? `${formatToolDefinitions(body.tools, framingVariant)}\n\n` : "";
       text = `${toolsBlock}${basePrompt}`;
       const retry = await runBuffered();
       if ("error" in retry) return { kind: "error", resp: retry.error };
