@@ -33,7 +33,11 @@ export default defineEventHandler(async (event) => {
     ?? getHeader(event, "x-opencode-session")
     ?? body.user;
 
+  const framingVariant = getHeader(event, "x-m365-framing")
+    ?? getHeader(event, "x-framing-variant")
+    ?? undefined;
+
   // handleChatCompletion returns a Web Response (JSON or an SSE ReadableStream
   // when stream:true). Returning it directly lets h3 forward it untouched.
-  return handleChatCompletion(body, pool, { signal: ac.signal, sessionId });
+  return handleChatCompletion(body, pool, { signal: ac.signal, sessionId, framingVariant });
 });

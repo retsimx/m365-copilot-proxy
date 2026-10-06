@@ -306,6 +306,7 @@ export function isAdvisorTone(tone: string): boolean {
     process.env.M365_ADVISOR_TONES !== undefined
       ? process.env.M365_ADVISOR_TONES.split(",").map((s) => s.trim()).filter(Boolean)
       : DEFAULT_ADVISOR_TONES;
+  if (tones.includes("*")) return true;
   return tones.some((t) => t.toLowerCase() === tone.toLowerCase());
 }
 

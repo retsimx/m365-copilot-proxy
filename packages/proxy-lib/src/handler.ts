@@ -771,7 +771,7 @@ export async function paceTurnVelocity(
 export async function handleChatCompletion(
   body: ChatBody,
   pool: SessionPool,
-  opts: { signal?: AbortSignal; sessionId?: string } = {},
+  opts: { signal?: AbortSignal; sessionId?: string; framingVariant?: string } = {},
 ): Promise<Response> {
   if (isDegradationBackoff()) {
     const remainingMs = getRemainingDegradationCooldownMs();
@@ -807,7 +807,7 @@ export async function handleChatCompletion(
   // GPT-6 Astra refuses the agentic framing; it gets the `advisor` variant. Every other
   // tone keeps the configured default. Threaded through every turn (full/delta/nudge) so a
   // follow-up turn can't silently revert to baseline and re-trigger the refusal.
-  const framingVariant = framingVariantForTone(tone);
+  const framingVariant = opts.framingVariant || framingVariantForTone(tone);
 
   // Format message: full prompt on first turn, delta on follow-ups.
   // M365 is stateful — it remembers everything from prior turns,
