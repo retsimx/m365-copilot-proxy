@@ -280,15 +280,18 @@ without NixOS: `nix run github:cramt/m365-copilot-proxy -- 4141`.
 
 | Model ID | M365 Tone | Description |
 |---|---|---|
-| `gpt-5.6-think-deeper` | Gpt_5_6_Reasoning | GPT-5.6 reasoning — live-validated and capable of robust tool execution and reasoning |
+| `gpt-5.6-think-deeper` / `gpt-5.6` | Gpt_5_6_Reasoning | GPT-5.6 reasoning — live-validated and capable of robust tool execution and reasoning |
+| `gpt-5.6-quick` / `gpt-5.6-chat` | Gpt_5_6_Chat | GPT-5.6 fast chat — live-validated on DeepLeo |
 | `gpt-6-astra` | Gpt_6_Astra | Live GPT-6-named tone, but self-IDs as GPT-5 chat, shows no reasoning trace, and GPT-6 isn't exposed in the M365 UI — treat as a GPT-5-class **chat** tone, **not** a reasoning upgrade ([hypotheses §18](docs/hypotheses.md)) |
 | `gpt-5.5-think-deeper` | Gpt_5_5_Reasoning | **Recommended default for agents/tool-calling** — robust tool compliance |
 | `gpt-5.5` / `gpt-5.5-quick` | Gpt_5_5_Chat | GPT-5.5 fast |
 | `m365-copilot` / `auto` | magic | Auto-routing — high-variance at tool-calling (confabulates; see below) |
 | `quick` | Gpt_Quick | Fast responses |
 | `think-deeper` | Gpt_Reasoning | Slower, more thorough |
-| `claude` / `claude-sonnet` | Claude_Sonnet | Real Anthropic Claude (agent-less path) |
+| `claude-sonnet-5.5` / `claude-sonnet` / `claude` | Claude_Sonnet | Real Anthropic Claude (Sonnet 5.5 in UI, agent-less path) |
+| `claude-sonnet-5` | Claude_Sonnet_5 | Claude Sonnet 5 — live-validated on DeepLeo |
 | `claude-sonnet-think-deeper` | Claude_Sonnet_Reasoning | Claude reasoning |
+| `claude-opus-5.5` / `claude-opus` | Claude_Opus | Claude Opus 5.5 (accepted tone; deflected upstream on commercial tenants) |
 | `gpt-5.4` / `gpt-5.4-quick` | Gpt_5_4_* | GPT-5.4 |
 | `gpt-5.3` / `gpt-5.3-think-deeper` | Gpt_5_3_* | GPT-5.3 |
 | `gpt-5.2` / `gpt-5.2-think-deeper` | Gpt_5_2_* | GPT-5.2 |

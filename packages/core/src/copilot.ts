@@ -18,19 +18,29 @@ const MODEL_TONES: Record<string, string> = {
   "claude": "Claude_Sonnet",
   "claude-sonnet": "Claude_Sonnet",
   "claude-sonnet-4.5": "Claude_Sonnet",
+  "claude-sonnet-5": "Claude_Sonnet_5",
+  "claude-5-sonnet": "Claude_Sonnet_5",
+  "sonnet-5": "Claude_Sonnet_5",
+  "claude-sonnet-5.5": "Claude_Sonnet",
+  "claude-5.5-sonnet": "Claude_Sonnet",
+  "sonnet-5.5": "Claude_Sonnet",
   "claude-sonnet-think-deeper": "Claude_Sonnet_Reasoning",
   "claude-opus": "Claude_Opus", // accepted tone; identity deflected, likely Opus
+  "claude-opus-5.5": "Claude_Opus",
+  "claude-5.5-opus": "Claude_Opus",
+  "opus-5.5": "Claude_Opus",
 
   // GPT-5.5 (current generation)
   "gpt-5.5": "Gpt_5_5_Chat",
   "gpt-5.5-quick": "Gpt_5_5_Chat",
   "gpt-5.5-think-deeper": "Gpt_5_5_Reasoning",
 
-  // GPT-5.6 (live-validated 2026-08-06; M365 currently exposes reasoning only)
+  // GPT-5.6 (live-validated 2026-10; M365 exposes both quick chat and reasoning)
   "gpt-5.6": "Gpt_5_6_Reasoning",
   "gpt-5.6-think-deeper": "Gpt_5_6_Reasoning",
-  "gpt-5.6-quick": "Gpt_5_6_Reasoning",
-  "gpt-5.6-chat": "Gpt_5_6_Reasoning",
+  "gpt-5.6-reasoning": "Gpt_5_6_Reasoning",
+  "gpt-5.6-quick": "Gpt_5_6_Chat",
+  "gpt-5.6-chat": "Gpt_5_6_Chat",
   "5.6": "Gpt_5_6_Reasoning",
 
   // GPT-6 Astra (live-validated 2026-09-08; routes DeepLeo reasoning pipeline).
@@ -58,16 +68,14 @@ const MODEL_TONES: Record<string, string> = {
 export function getToneForModel(model: string): string {
   const exact = MODEL_TONES[model];
   if (exact) return exact;
-  if (/(^|[_-])5\.6([_-]|$)/i.test(model) || /^gpt-?5\.6/i.test(model)) return "Gpt_5_6_Reasoning";
+  if (/(^|[_-])5\.6([_-]|$)/i.test(model) || /^gpt-?5\.6/i.test(model)) {
+    if (/quick|chat/i.test(model)) return "Gpt_5_6_Chat";
+    return "Gpt_5_6_Reasoning";
+  }
   if (/astra/i.test(model) || /^gpt-?6/i.test(model)) return "Gpt_6_Astra";
-  // Unmapped `claude-*` strings (e.g. the `claude-opus-4-8[1m]` a Claude Code client
-  // sends) must NOT fall back to the `magic` (GPT) tone. Empirically (route-probe,
-  // 2026-07-07) the magic path does not tool-call right now — 0/2, confabulates
-  // "I don't have a shell" — while the Claude tone agent-less path tool-calls 2/2 and
-  // fast (~5s). Route anything Claude-labelled to the working Claude_Sonnet tone
-  // rather than silently serving GPT under a Claude name and landing in the
-  // confabulation quadrant. (getAvailableModels still only advertises the exact keys.)
-  if (/^claude/i.test(model)) return "Claude_Sonnet";
+  if (/opus/i.test(model)) return "Claude_Opus";
+  if (/(^|[_-])5([_-]|$)/i.test(model) && /sonnet/i.test(model)) return "Claude_Sonnet_5";
+  if (/^claude/i.test(model) || /sonnet/i.test(model)) return "Claude_Sonnet";
   return MODEL_TONES["m365-copilot"];
 }
 

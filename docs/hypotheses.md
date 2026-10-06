@@ -31,6 +31,7 @@ than "we eyeballed one run." See §M (Methods) for the experimental rig.
   third-party): loopback redirect falsified, `nativeclient` corroborated by two forks
 - §12 — Multi-agent research dig (July 13 2026) + framing A/Bs, and §12.13: tool-less
   requests silently execute in M365's sandbox and return a real (wrong-machine) transcript
+- §20 — New Tones: GPT-5.6 Quick (Gpt_5_6_Chat) and Claude Sonnet 5 (Claude_Sonnet_5) (October 2026)
 
 ---
 
@@ -2788,4 +2789,34 @@ astra ≈2–5 s wire vs 5.6-think-deeper ≈6 s for the same prompts, while bot
    - `scripts/advisor-all-tones-probe.mjs`: Automated probe script for evaluating framing strategies across models with configurable inter-turn pacing.
    - `x-m365-framing` header: Allows per-request framing overrides (e.g. `advisor`, `baseline`) without server restarts.
    - Wildcard `M365_ADVISOR_TONES="*"`: Allows routing all models to the advisor framing.
+
+---
+
+## 20. October 2026 — New Tones: GPT-5.6 Quick (Gpt_5_6_Chat) and Claude Sonnet 5 (Claude_Sonnet_5) 🟢
+
+**Headline.** Microsoft has officially activated two previously unavailable or unversioned model tones on M365 Copilot's `DeepLeo` pipeline:
+1. **GPT-5.6 Quick (`Gpt_5_6_Chat`):** Previously in a "registered but dead" state (§12.15) where requests deflected to `BotConnection` with canned apologies. In October 2026 live probes, `Gpt_5_6_Chat` became fully active on `DeepLeo`, providing low-latency chat without reasoning traces.
+2. **Claude Sonnet 5 (`Claude_Sonnet_5`):** Live-validated on `DeepLeo` in October 2026, sitting alongside the flagship `Claude_Sonnet` (Anthropic Claude Sonnet 5.5).
+3. **Claude Opus 5.5 (`Claude_Opus`):** The tone is accepted by the SignalR schema but deflects upstream to `BotConnection` on standard commercial tenants.
+
+### Empirical Evidence & Live Probe Scorecard
+
+Live validation via `scripts/tone-probe.mjs` and agent-less chat probes (October 2026):
+
+| Tone | Model Aliases | Signal | `contentOrigin` | Observed Behavior & Self-ID |
+|---|---|---|---|---|
+| `Gpt_5_6_Chat` | `gpt-5.6-quick`, `gpt-5.6-chat` | 🟢 Content (fast) | `DeepLeo` | Fast GPT-5.6 chat responses, no reasoning chain, zero `BotConnection` deflection. |
+| `Gpt_5_6_Reasoning` | `gpt-5.6-think-deeper`, `gpt-5.6`, `5.6`, `gpt-5.6-reasoning` | 🟢 Content (10–25s) | `DeepLeo` | Full reasoning traces, robust tool compliance under advisor framing. |
+| `Claude_Sonnet_5` | `claude-sonnet-5`, `sonnet-5`, `claude-5-sonnet` | 🟢 Content (~5s) | `DeepLeo` | Real Anthropic Claude Sonnet 5 via M365 agent-less routing. |
+| `Claude_Sonnet` | `claude-sonnet-5.5`, `sonnet-5.5`, `claude-sonnet`, `claude` | 🟢 Content (~5s) | `DeepLeo` | Flagship Anthropic Claude Sonnet (Sonnet 5.5 in UI). |
+| `Claude_Opus` | `claude-opus-5.5`, `opus-5.5`, `claude-5.5-opus`, `claude-opus` | 🟡 Registered but dead | `BotConnection` | Accepted tone in schema; deflects to canned apology on commercial tenants. |
+
+### Model Mappings Implemented
+
+Updated in `MODEL_TONES` and `getToneForModel` (`packages/core/src/copilot.ts`):
+- `gpt-5.6-quick` and `gpt-5.6-chat` map to `Gpt_5_6_Chat`.
+- `gpt-5.6`, `gpt-5.6-think-deeper`, `5.6`, and `gpt-5.6-reasoning` map to `Gpt_5_6_Reasoning`.
+- `claude-sonnet-5`, `sonnet-5`, and `claude-5-sonnet` map to `Claude_Sonnet_5`.
+- `claude-sonnet-5.5`, `sonnet-5.5`, `claude-5.5-sonnet`, `claude-sonnet`, and `claude` map to `Claude_Sonnet`.
+- `claude-opus-5.5`, `opus-5.5`, `claude-5.5-opus`, and `claude-opus` map to `Claude_Opus`.
 
