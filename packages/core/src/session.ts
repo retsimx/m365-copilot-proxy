@@ -243,6 +243,7 @@ export class CopilotSession {
 
     const params = new URLSearchParams({
       chatsessionid: requestId,
+      XRoutingParameterSessionKey: claims.oid,
       clientrequestid: requestId,
       "X-SessionId": this.sessionId,
       ConversationId: this.conversationId,
@@ -251,9 +252,10 @@ export class CopilotSession {
       source: '"officeweb"',
       product: "Office",
       agentHost: "Bizchat.FullScreen",
-      licenseType: "Starter",
+      licenseType: process.env.M365_LICENSE_TYPE ?? "Premium",
+      isEdu: process.env.M365_IS_EDU ?? "true",
       agent: "web",
-      scenario: "OfficeWebIncludedCopilot",
+      scenario: process.env.M365_SCENARIO ?? "OfficeWebPaidCopilot",
     });
 
     const wsUrl = `wss://substrate.office.com/m365Copilot/Chathub/${claims.oid}@${claims.tid}?${params}`;

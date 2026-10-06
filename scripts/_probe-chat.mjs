@@ -63,15 +63,17 @@ export function oneTurn(o) {
     chatsessionid: requestId,
     clientrequestid: requestId,
     "X-SessionId": sessionId,
+    XRoutingParameterSessionKey: claims.oid,
     ConversationId: conversationId,
     access_token: token,
     variants,
     source: '"officeweb"',
     product: "Office",
     agentHost: "Bizchat.FullScreen",
-    licenseType: "Starter",
+    licenseType: process.env.M365_LICENSE_TYPE ?? "Premium",
+    isEdu: process.env.M365_IS_EDU ?? "true",
     agent: "web",
-    scenario: "OfficeWebIncludedCopilot",
+    scenario: process.env.M365_SCENARIO ?? "OfficeWebPaidCopilot",
   });
   const wsUrl = `wss://substrate.office.com/m365Copilot/Chathub/${claims.oid}@${claims.tid}?${params}`;
 

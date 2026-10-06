@@ -290,8 +290,7 @@ without NixOS: `nix run github:cramt/m365-copilot-proxy -- 4141`.
 | `think-deeper` | Gpt_Reasoning | Slower, more thorough |
 | `claude-sonnet-5.5` / `claude-sonnet` / `claude` | Claude_Sonnet | Real Anthropic Claude (Sonnet 5.5 in UI, agent-less path) |
 | `claude-sonnet-5` | Claude_Sonnet_5 | Claude Sonnet 5 — live-validated on DeepLeo |
-| `claude-sonnet-think-deeper` | Claude_Sonnet_Reasoning | Claude reasoning |
-| `claude-opus-5.5` / `claude-opus` | Claude_Opus | Claude Opus 5.5 (accepted tone; deflected upstream on commercial tenants) |
+| `claude-opus-5.5` / `opus-5.5` / `claude-opus` | Claude_Opus | Real Anthropic Claude Opus 4.8 (Opus 5.5 in UI) — live-validated on DeepLeo with full tool calling |
 | `gpt-5.4` / `gpt-5.4-quick` | Gpt_5_4_* | GPT-5.4 |
 | `gpt-5.3` / `gpt-5.3-think-deeper` | Gpt_5_3_* | GPT-5.3 |
 | `gpt-5.2` / `gpt-5.2-think-deeper` | Gpt_5_2_* | GPT-5.2 |

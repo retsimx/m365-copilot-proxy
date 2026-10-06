@@ -45,8 +45,11 @@ wss://substrate.office.com/m365Copilot/Chathub/{oid}@{tid}?{query}
 | `source` | `"officeweb"` (note: the literal value is double-quoted in the original client). |
 | `product` | `Office` |
 | `agentHost` | `Bizchat.FullScreen` |
-| `scenario` | `OfficeWebIncludedCopilot` |
-| `variants` | A long comma-separated list of feature flags (see `VARIANTS` in `copilot.ts`). Most are cargo-culted from a captured session; removing them is untested. |
+| `licenseType` | `"Premium"` (defaults to `"Premium"`; previously hardcoded `"Starter"` which locked out Claude Opus and high-tier models with `InternalError`). Override with `M365_LICENSE_TYPE`. |
+| `scenario` | `"OfficeWebPaidCopilot"` (defaults to `"OfficeWebPaidCopilot"`; previously `"OfficeWebIncludedCopilot"`). Override with `M365_SCENARIO`. |
+| `isEdu` | `"true"` |
+| `XRoutingParameterSessionKey` | `{oid}` from JWT claims. |
+| `variants` | A long comma-separated list of feature flags (see `VARIANTS` in `copilot.ts`). |
 
 ---
 
@@ -175,7 +178,7 @@ There is no `model` parameter. The `tone` string on the chat message picks the m
 | `claude-sonnet-5.5` / `sonnet-5.5` / `claude-sonnet` | `Claude_Sonnet` | Flagship Claude Sonnet (Sonnet 5.5 in UI) |
 | `claude-sonnet-5` / `sonnet-5` | `Claude_Sonnet_5` | Claude Sonnet 5 (live-validated 2026-10 on DeepLeo) |
 | `claude-sonnet-think-deeper` | `Claude_Sonnet_Reasoning` | Claude Sonnet 4.5 + reasoning |
-| `claude-opus-5.5` / `opus-5.5` / `claude-opus` | `Claude_Opus` | Opus 5.5 in UI; accepted by schema, deflected to BotConnection on standard commercial tenants |
+| `claude-opus-5.5` / `opus-5.5` / `claude-opus` | `Claude_Opus` | Real Anthropic Claude Opus 4.8 (Sonnet/Opus 5.5 in UI; live-validated 2026-10 on DeepLeo with Premium/PaidCopilot handshake) |
 | `gpt-5.6-think-deeper` / `gpt-5.6` | `Gpt_5_6_Reasoning` | GPT-5.6 Think deeper reasoning model |
 | `gpt-5.6-quick` / `gpt-5.6-chat` | `Gpt_5_6_Chat` | GPT-5.6 Quick chat model (live-validated 2026-10) |
 | `gpt-6-astra` | `Gpt_6_Astra` | live 2026-09-08; **2026-09-30:** self-IDs as GPT-5 chat, no reasoning trace, no GPT-6 tone exposed in the M365 UI — likely a GPT-5-class **chat** alias; **not** a reasoning upgrade (hypotheses §18) |
@@ -198,7 +201,7 @@ Mapping lives in `MODEL_TONES` (`copilot.ts`). `*_Reasoning` tones take 10–30s
 | **Rejected** | `type:3` error `Failed to invoke 'Chat'`, ~250-300ms | no such tone |
 | **Registered but dead** | canned *"Sorry, I wasn't able to respond to that"* + `contentOrigin: "BotConnection"`, ~1.6s | route exists, serves nothing |
 
-That third state is the trap: **"didn't error" is not sufficient to conclude a tone works.** `Claude_Opus` and `Gpt_6_Reasoning` sit there right now — accepted by the schema, but deflecting via `BotConnection` with canned apologies. (Earlier, `Gpt_5_6_Chat` sat in this state before being activated live in October 2026). Require `DeepLeo` before mapping anything.
+That third state is the trap: **"didn't error" is not sufficient to conclude a tone works.** `Gpt_6_Reasoning` sits there right now — accepted by the schema, but deflecting via `BotConnection` with canned apologies. Note that `Claude_Opus` was previously thought to be dead, but was discovered in October 2026 to be gated on the handshake: sending `licenseType: "Starter"` caused an upstream `InternalError` fallback to `BotConnection`, whereas updating the connection parameters to `licenseType: "Premium"` and `scenario: "OfficeWebPaidCopilot"` completely unlocked full **Claude Opus 4.8** on `DeepLeo`. Require `DeepLeo` before mapping anything.
 
 GPT-6 follows the same pattern: `Gpt_6_Astra` is live (`DeepLeo`, correct answers), while `Gpt_6_Reasoning` is registered-but-dead (canned "wasn't able to respond" via `BotConnection`) and `Gpt_6_Chat` / `Gpt_6_Quick` / `Gpt_6_Astra_*` are rejected outright (2026-09-08). So the only working GPT-6 tone is `Gpt_6_Astra`.
 
