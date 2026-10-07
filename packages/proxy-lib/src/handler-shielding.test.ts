@@ -96,8 +96,53 @@ describe("Handler Degradation Circuit Breaker & 429 Retry-After Shielding", () =
     const json = await response.json() as any;
     expect(json.error.type).toBe("rate_limit_error");
     expect(json.error.code).toBe("rate_limit_exceeded");
+    expect(json.error.message).toContain("gpt-5.5-think-deeper");
+    expect(json.error.message).toContain("exhausted its daily quota or priority access for today");
+    expect(json.error.message).toContain("Do not resume this session with this model");
     expect(json.error.message).toContain("throttle 3/600");
     expect(json.error.message).toContain("90s");
+  }, 15000);
+
+  it("advises model exhaustion and resets conversation when model receives empty response", async () => {
+    vi.spyOn(core, "isDegradationBackoff").mockReturnValue(false);
+    vi.spyOn(core, "getRemainingDegradationCooldownMs").mockReturnValue(90_000);
+    const resetSpy = vi.spyOn(core.ModelSession.prototype, "reset");
+    const refreshSpy = vi.spyOn(core.ModelSession.prototype, "refreshAgent");
+
+    vi.spyOn(core.ModelSession.prototype, "run").mockResolvedValue({
+      [Symbol.asyncIterator]: async function* () {},
+      fullText: "",
+      hasContent: false,
+      throttle: null,
+      scores: null,
+      turnCount: 1,
+    } as any);
+
+    const pool = new SessionPool();
+    const body = {
+      model: "claude-opus-5.5",
+      messages: [{ role: "user" as const, content: "Hello test model exhaustion" }],
+      stream: false,
+    };
+
+    // Pre-populate conversation with sent messages to verify reset
+    const preConv = pool.resolve(body.messages, body.tools);
+    preConv.sentMessageCount = 1;
+
+    const response = await handleChatCompletion(body, pool);
+
+    expect(response.status).toBe(429);
+    const json = (await response.json()) as any;
+    expect(json.error.type).toBe("rate_limit_error");
+    expect(json.error.code).toBe("rate_limit_exceeded");
+    expect(json.error.message).toContain("claude-opus-5.5");
+    expect(json.error.message).toContain("exhausted its daily quota or priority access for today");
+    expect(json.error.message).toContain("Do not resume this session with this model");
+
+    const conv = pool.resolve(body.messages, body.tools);
+    expect(conv.sentMessageCount).toBe(0);
+    expect(resetSpy).toHaveBeenCalled();
+    expect(refreshSpy).not.toHaveBeenCalled();
   }, 15000);
 
   it("returns HTTP 429 when conversation quota limit is reached (600/600)", async () => {
