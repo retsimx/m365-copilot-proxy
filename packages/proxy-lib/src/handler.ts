@@ -1013,24 +1013,16 @@ export async function handleChatCompletion(
         await new Promise(r => setTimeout(r, SHORT_RETRY_DELAY_MS));
         text = "Please continue."; // M365 already has context
       } else {
-        // Final empty after retries, and not an at-limit (per-conversation) cap:
-        // this is the thread-rate throttle signature (F13). Feed the degradation-
-        // backoff policy — once empties span enough distinct conversations it paces
-        // subsequent turns so the account can self-heal (H-R1).
-        noteRequestOutcome(true, convId);
+        // Final empty after retries: the model did not respond or has exhausted its daily quota.
+        // Fail closed immediately with HTTP 502 so the client terminates the turn instead of retrying.
         conv.session.reset();
         conv.sentMessageCount = 0;
-        const remainingMs = getRemainingDegradationCooldownMs();
-        const remainingSec = remainingMs > 0 ? Math.ceil(remainingMs / 1000) : 90;
-        return { error: emptyResponseResponse(t, remainingSec, model) };
+        return { error: modelExhaustedResponse(model, t) };
       }
     }
-    noteRequestOutcome(true, convId);
     conv.session.reset();
     conv.sentMessageCount = 0;
-    const remainingMs = getRemainingDegradationCooldownMs();
-    const remainingSec = remainingMs > 0 ? Math.ceil(remainingMs / 1000) : 90;
-    return { error: emptyResponseResponse(null, remainingSec, model) };
+    return { error: modelExhaustedResponse(model, null) };
   }
 
   // Produce the final turn result as DATA (not a Response), so the same logic
@@ -1476,25 +1468,22 @@ function degradationShieldResponse(remainingSec: number): Response {
   );
 }
 
-/** Empty upstream reply that is NOT an at-limit throttle — surfaces as a standard
- *  OpenAI 429 rate limit with Retry-After so OpenCode/Pi automatically waits
- *  and retries rather than aborting the turn. */
-function emptyResponseResponse(
-  throttle: { current: number; max: number } | null,
-  retryAfterSec: number = 60,
+/** Terminal error returned when a model produces an empty response (e.g. daily quota / priority access exhausted).
+ *  Returns HTTP 502 with no Retry-After so the client immediately terminates the turn and does NOT loop or retry. */
+function modelExhaustedResponse(
   modelName: string = "selected model",
+  throttle: { current: number; max: number } | null = null,
 ): Response {
   const detail = throttle ? ` (throttle ${throttle.current}/${throttle.max})` : "";
   return jsonResponse(
-    429,
+    502,
     {
       error: {
-        message: `M365 Copilot returned an empty response${detail} with model '${modelName}'. The selected model may have exhausted its daily quota or priority access for today, or an account rate limit was reached. Please choose another available model or wait until tomorrow to use this model again. Do not resume this session with this model. Backing off for ${retryAfterSec}s to allow upstream token bucket to recover. Client will retry automatically.`,
-        type: "rate_limit_error",
-        code: "rate_limit_exceeded",
+        message: `M365 Copilot returned an empty response${detail} with model '${modelName}'. The selected model has exhausted its daily quota or priority access for today. Please choose another available model or wait until tomorrow to use this model again. Do not resume this session with this model.`,
+        type: "model_exhausted",
+        code: "model_quota_exhausted",
       },
     },
-    { "Retry-After": retryAfterSec.toString() },
   );
 }
 

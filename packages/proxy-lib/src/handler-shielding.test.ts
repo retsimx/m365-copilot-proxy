@@ -68,7 +68,7 @@ describe("Handler Degradation Circuit Breaker & 429 Retry-After Shielding", () =
     expect(json.error.message).toContain("Client will retry automatically");
   });
 
-  it("returns HTTP 429 with Retry-After when upstream returns empty response after retries", async () => {
+  it("returns HTTP 502 terminal error when upstream returns empty response after retries", async () => {
     vi.spyOn(core, "isDegradationBackoff").mockReturnValue(false);
     vi.spyOn(core, "getRemainingDegradationCooldownMs").mockReturnValue(90_000);
 
@@ -91,17 +91,16 @@ describe("Handler Degradation Circuit Breaker & 429 Retry-After Shielding", () =
 
     const response = await handleChatCompletion(body, pool);
 
-    expect(response.status).toBe(429);
-    expect(response.headers.get("Retry-After")).toBe("90");
+    expect(response.status).toBe(502);
+    expect(response.headers.get("Retry-After")).toBeNull();
     const json = await response.json() as any;
-    expect(json.error.type).toBe("rate_limit_error");
-    expect(json.error.code).toBe("rate_limit_exceeded");
+    expect(json.error.type).toBe("model_exhausted");
+    expect(json.error.code).toBe("model_quota_exhausted");
     expect(json.error.message).toContain("gpt-5.5-think-deeper");
     expect(json.error.message).toContain("exhausted its daily quota or priority access for today");
     expect(json.error.message).toContain("Please choose another available model or wait until tomorrow");
     expect(json.error.message).toContain("Do not resume this session with this model");
     expect(json.error.message).toContain("throttle 3/600");
-    expect(json.error.message).toContain("90s");
   }, 15000);
 
   it("advises model exhaustion and resets conversation when model receives empty response", async () => {
@@ -132,10 +131,11 @@ describe("Handler Degradation Circuit Breaker & 429 Retry-After Shielding", () =
 
     const response = await handleChatCompletion(body, pool);
 
-    expect(response.status).toBe(429);
+    expect(response.status).toBe(502);
+    expect(response.headers.get("Retry-After")).toBeNull();
     const json = (await response.json()) as any;
-    expect(json.error.type).toBe("rate_limit_error");
-    expect(json.error.code).toBe("rate_limit_exceeded");
+    expect(json.error.type).toBe("model_exhausted");
+    expect(json.error.code).toBe("model_quota_exhausted");
     expect(json.error.message).toContain("claude-opus-5.5");
     expect(json.error.message).toContain("exhausted its daily quota or priority access for today");
     expect(json.error.message).toContain("Please choose another available model or wait until tomorrow");
