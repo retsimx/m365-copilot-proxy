@@ -1489,7 +1489,7 @@ function emptyResponseResponse(
     429,
     {
       error: {
-        message: `M365 Copilot returned an empty response${detail} with model '${modelName}'. The selected model may have exhausted its daily quota or priority access for today, or an account rate limit was reached. Please switch to another model (e.g. claude-sonnet-5.5, gpt-5.6-think-deeper) or wait until tomorrow to use this model again. Do not resume this session with this model. Backing off for ${retryAfterSec}s to allow upstream token bucket to recover. Client will retry automatically.`,
+        message: `M365 Copilot returned an empty response${detail} with model '${modelName}'. The selected model may have exhausted its daily quota or priority access for today, or an account rate limit was reached. Please choose another available model or wait until tomorrow to use this model again. Do not resume this session with this model. Backing off for ${retryAfterSec}s to allow upstream token bucket to recover. Client will retry automatically.`,
         type: "rate_limit_error",
         code: "rate_limit_exceeded",
       },

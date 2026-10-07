@@ -98,6 +98,7 @@ describe("Handler Degradation Circuit Breaker & 429 Retry-After Shielding", () =
     expect(json.error.code).toBe("rate_limit_exceeded");
     expect(json.error.message).toContain("gpt-5.5-think-deeper");
     expect(json.error.message).toContain("exhausted its daily quota or priority access for today");
+    expect(json.error.message).toContain("Please choose another available model or wait until tomorrow");
     expect(json.error.message).toContain("Do not resume this session with this model");
     expect(json.error.message).toContain("throttle 3/600");
     expect(json.error.message).toContain("90s");
@@ -137,6 +138,7 @@ describe("Handler Degradation Circuit Breaker & 429 Retry-After Shielding", () =
     expect(json.error.code).toBe("rate_limit_exceeded");
     expect(json.error.message).toContain("claude-opus-5.5");
     expect(json.error.message).toContain("exhausted its daily quota or priority access for today");
+    expect(json.error.message).toContain("Please choose another available model or wait until tomorrow");
     expect(json.error.message).toContain("Do not resume this session with this model");
 
     const conv = pool.resolve(body.messages, body.tools);
