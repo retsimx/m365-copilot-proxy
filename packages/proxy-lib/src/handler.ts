@@ -16,6 +16,8 @@ import {
   looksLikeRemoteArtifactCompletion,
   isProseDocument,
   getMessageContent,
+  buildSpecMap,
+  createProseStreamGate,
   noteRequestOutcome,
   awaitDegradationBackoff,
   isDegradationBackoff,
@@ -769,6 +771,9 @@ export async function handleChatCompletion(
   const { session } = conv;
   const hasTools = body.tools && body.tools.length > 0 && body.tool_choice !== "none";
   const model = body.model;
+  // Track A (§3.3): recognise tool fences byte-identically to the parser so the
+  // prose gate can seal at the first *known* tool fence. Built once per request.
+  const specs = hasTools ? buildSpecMap(body.tools ?? []) : undefined;
 
   // Claude (Claude_Sonnet tone) tool-calls reliably AGENT-LESS (probe: 4/4 ```bash,
   // 0 disengage) and self-IDs as Claude Sonnet 4.5; the declarative agent would
@@ -842,6 +847,7 @@ export async function handleChatCompletion(
   // one attempt that produced content and is never re-sent by a subsequent retry.
   async function runBuffered(
     onDelta?: (delta: string) => void,
+    onReasoning?: (text: string) => void,
   ): Promise<{ fullText: string } | { error: Response }> {
     let agentRefreshed = false;
     let disengageRetried = false;
@@ -896,7 +902,7 @@ export async function handleChatCompletion(
         // The agent overrides `tone` (forces GPT-5), so tool-less requests must
         // skip it to reach the model the tone selects (e.g. Claude). See
         // ModelSession.run / docs H8.6.
-        copilotStream = await session.run(text, model, opts.signal, useToolAgent);
+        copilotStream = await session.run(text, model, opts.signal, useToolAgent, { onReasoning });
         requestWireTurns++;
       } catch (err: any) {
         return { error: jsonResponse(502, { error: { message: err.message, type: "upstream_error" } }) };
@@ -1037,14 +1043,23 @@ export async function handleChatCompletion(
     | { kind: "text"; text: string }
     | { kind: "tools"; toolCalls: ReturnType<typeof parseToolCalls>["toolCalls"] };
 
-  // `onDelta` streams text to the client live (non-tool path only — see produce's
-  // caller). Tool mode ignores it: the raw text is parsed for tool-call fences and
-  // can't be shown verbatim, so it stays fully buffered.
-  async function produceInternal(onDelta?: (delta: string) => void): Promise<Produced> {
+  // `onDelta` streams text to the client live. Non-tool path: raw passthrough.
+  // Tool path: the SSE caller passes a fence-aware gated delta (§3.3); the JSON
+  // caller passes nothing, so tool mode stays fully buffered as before.
+  // `onReasoning` forwards CoT steps on both paths (§4.3).
+  //
+  // Track A commit-on-stream (§3.3): once any prose byte has been streamed live,
+  // the text-replacing branches below are skipped so `p.text` stays a direct
+  // extension of what was sent. Set by the gated SSE `liveDelta` closure.
+  let streamedProse = false;
+  async function produceInternal(
+    onDelta?: (delta: string) => void,
+    onReasoning?: (text: string) => void,
+  ): Promise<Produced> {
     try {
       // When tools are present, buffer full response to detect tool calls
       if (hasTools) {
-    const result = await runBuffered();
+    const result = await runBuffered(onDelta, onReasoning);
     if ("error" in result) return { kind: "error", resp: result.error };
     conv.sentMessageCount = body.messages.length;
     let fullText = result.fullText;
@@ -1090,7 +1105,14 @@ export async function handleChatCompletion(
       (m) => m.role === "assistant" && Array.isArray(m.tool_calls) && m.tool_calls.length > 0,
     );
     const disableConfabDetection = process.env.M365_DISABLE_CONFAB_DETECTION === "1";
-    for (let attempt = 0; attempt < maxConfabRetries && !parsed.hasToolCalls; attempt++) {
+    // Commit-on-stream (§3.3): if prose already reached the client, a retry with
+    // different text would diverge from `sent` and be silently dropped by the
+    // end-of-turn prefix guard — so skip the text-replacing retries entirely and
+    // leave the streamed answer as the result.
+    if (streamedProse && !parsed.hasToolCalls) {
+      log.info("Prose already streamed live (commit-on-stream) — skipping confab/hallucination retry to preserve the sent prefix");
+    }
+    for (let attempt = 0; attempt < maxConfabRetries && !parsed.hasToolCalls && !streamedProse; attempt++) {
       const truncationSurrender = !disableConfabDetection && looksLikeTruncationSurrender(parsed.textContent);
       const isRefusal =
         !disableConfabDetection &&
@@ -1120,7 +1142,7 @@ export async function handleChatCompletion(
       const basePrompt = forcePrompt;
       const toolsBlock = hasTools && nonShellTools(body.tools ?? []).length > 0 ? `${formatToolDefinitions(body.tools!)}\n\n` : "";
       text = `${toolsBlock}${basePrompt}`;
-      const retry = await runBuffered();
+      const retry = await runBuffered(onDelta, onReasoning);
       if ("error" in retry) return { kind: "error", resp: retry.error };
       conv.sentMessageCount = body.messages.length;
       fullText = retry.fullText;
@@ -1178,11 +1200,18 @@ export async function handleChatCompletion(
     if (parsed.hasToolCalls && parsed.textContent) {
       const extraText = parsed.textContent.trim();
       if (extraText.length > 0) {
-        log.info(`Mixed output detected (${extraText.length} chars of text alongside ${parsed.toolCalls.length} tool calls), stripping text`);
-        // Strip the text — the tool calls are what the client needs.
-        // Log the stripped text for debugging but don't send it downstream.
-        log.debug("Stripped text:", trunc(extraText, 500));
-        parsed = { ...parsed, textContent: null };
+        if (streamedProse) {
+          // Commit-on-stream (§3.3): the pre-fence prose was already sent live; do
+          // not rewrite the parse result. The reply/one-call handling below is
+          // unaffected (it keys off toolCalls, not textContent).
+          log.info("Prose already streamed live (commit-on-stream) — leaving mixed text intact");
+        } else {
+          log.info(`Mixed output detected (${extraText.length} chars of text alongside ${parsed.toolCalls.length} tool calls), stripping text`);
+          // Strip the text — the tool calls are what the client needs.
+          // Log the stripped text for debugging but don't send it downstream.
+          log.debug("Stripped text:", trunc(extraText, 500));
+          parsed = { ...parsed, textContent: null };
+        }
       }
     }
 
@@ -1238,7 +1267,7 @@ export async function handleChatCompletion(
     return { kind: "text", text: fullText };
   } else {
     // No tools — stream deltas live (onDelta) while buffering for the retry logic.
-    const result = await runBuffered(onDelta);
+    const result = await runBuffered(onDelta, onReasoning);
     if ("error" in result) return { kind: "error", resp: result.error };
     conv.sentMessageCount = body.messages.length;
     return { kind: "text", text: result.fullText };
@@ -1277,8 +1306,11 @@ export async function handleChatCompletion(
     }
   }
 
-  async function produce(onDelta?: (delta: string) => void): Promise<Produced> {
-    const p = await produceInternal(onDelta);
+  async function produce(
+    onDelta?: (delta: string) => void,
+    onReasoning?: (text: string) => void,
+  ): Promise<Produced> {
+    const p = await produceInternal(onDelta, onReasoning);
     await recordOutcome(p);
     return p;
   }
@@ -1314,10 +1346,11 @@ export async function handleChatCompletion(
   // produce() INSIDE the stream so the client never waits out the whole M365 turn
   // (up to ~160s) before the first byte — avoids client read-timeouts.
   //
-  // On the non-tool path we forward each text delta AS IT ARRIVES (`liveDelta`), so
-  // `stream:true` is genuinely incremental. Tool mode still buffers: the raw text is
-  // parsed for tool-call fences and can't be shown verbatim, so its tool_calls (or a
-  // prose fallback) are emitted once at the end.
+  // On the non-tool path we forward each text delta AS IT ARRIVES (raw `liveDelta`), so
+  // `stream:true` is genuinely incremental. On the tool path (Track A §3.3) we now
+  // stream prose live through a fence-aware gate that seals at the first known tool
+  // fence, then emit tool_calls (or the held tail) at the end. `M365_NO_TOOL_STREAM=1`
+  // restores the old fully-buffered tool path byte-for-byte.
   return sseResponse(new ReadableStream({
     async start(controller) {
       const enc = new TextEncoder();
@@ -1326,19 +1359,51 @@ export async function handleChatCompletion(
       send({ ...base, choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }] });
       const hb = setInterval(() => { try { controller.enqueue(enc.encode(": keepalive\n\n")); } catch {} }, 15000);
 
-      // Live token passthrough (non-tool only). Track exactly what we've sent so the
-      // final render emits only the not-yet-streamed remainder. session.ts guarantees
-      // every forwarded delta extends the answer, so `sent` is always a prefix of the
-      // final text — the remainder is a clean tail, never a duplicate.
+      // Live token passthrough. Track exactly what we've sent so the final render
+      // emits only the not-yet-streamed remainder. session.ts guarantees every
+      // forwarded delta extends the answer, so `sent` is always a prefix of the final
+      // text — the remainder is a clean tail, never a duplicate.
+      //
+      // Tool path (§3.3): gate emission so prose streams live but the *body* of the
+      // first known tool fence never reaches the content channel; `streamedProse`
+      // then triggers commit-on-stream in produceInternal.
       let sent = "";
-      const liveDelta = hasTools ? undefined : (delta: string) => {
-        if (!delta) return;
-        sent += delta;
-        try { send({ ...base, choices: [{ index: 0, delta: { content: delta }, finish_reason: null }] }); } catch {}
-      };
+      const gate = hasTools && !process.env.M365_NO_TOOL_STREAM && specs
+        ? createProseStreamGate(specs)
+        : undefined;
+      const liveDelta: ((delta: string) => void) | undefined = gate
+        ? (delta: string) => {
+            const out = gate.push(delta);
+            if (!out) return;
+            sent += out;
+            streamedProse = true;
+            try { send({ ...base, choices: [{ index: 0, delta: { content: out }, finish_reason: null }] }); } catch {}
+          }
+        : hasTools
+          ? undefined
+          : (delta: string) => {
+              if (!delta) return;
+              sent += delta;
+              try { send({ ...base, choices: [{ index: 0, delta: { content: delta }, finish_reason: null }] }); } catch {}
+            };
+
+      // Reasoning SSE (Track B §4.3): CoT steps arrive chunk-per-step and are emitted
+      // as `delta.reasoning_content` before the answer/tool_call, on both paths.
+      // `M365_NO_REASONING_STREAM=1` restores old behaviour. The dedupe set lives in
+      // this per-request closure (not per-`session.run`) so the same step re-emitted by
+      // a `runBuffered` retry attempt isn't repeated to the client (F3).
+      const seenReasoning = new Set<string>();
+      const liveReasoning: ((text: string) => void) | undefined =
+        process.env.M365_NO_REASONING_STREAM === "1"
+          ? undefined
+          : (text: string) => {
+              if (!text || seenReasoning.has(text)) return;
+              seenReasoning.add(text);
+              try { send({ ...base, choices: [{ index: 0, delta: { reasoning_content: text }, finish_reason: null }] }); } catch {}
+            };
 
       let p: Produced;
-      try { p = await produce(liveDelta); }
+      try { p = await produce(liveDelta, liveReasoning); }
       catch (err: any) { p = { kind: "error", resp: jsonResponse(502, { error: { message: err?.message ?? "stream error", type: "upstream_error" } }) }; }
       clearInterval(hb);
       try {
@@ -1355,12 +1420,23 @@ export async function handleChatCompletion(
         } else {
           // Emit only what wasn't already streamed live: the whole text if nothing was
           // (tool-mode prose fallback, or a fully-buffered turn), or just the tail when
-          // live deltas already covered a prefix. If `sent` somehow isn't a prefix of
-          // the final text (a divergent snapshot upstream chose not to stream), fall
-          // back to sending nothing more rather than duplicating already-sent bytes.
-          const remainder = p.text.startsWith(sent) ? p.text.slice(sent.length) : "";
-          if (!p.text.startsWith(sent)) log.info(`Streamed prefix diverged from final text (sent ${sent.length}, final ${p.text.length} chars) — not re-sending to avoid duplication`);
-          if (remainder) send({ ...base, choices: [{ index: 0, delta: { content: remainder }, finish_reason: null }] });
+          // live deltas already covered a prefix.
+          if (p.text.startsWith(sent)) {
+            const remainder = p.text.slice(sent.length);
+            if (remainder) send({ ...base, choices: [{ index: 0, delta: { content: remainder }, finish_reason: null }] });
+          } else if (streamedProse) {
+            // F1: pre-fence prose was streamed (commit-on-stream), but the held text
+            // does not extend it — the `reply` tool replaces `p.text` with the answer
+            // extracted from its fence, which is not a prefix-extension of the streamed
+            // narration. Emit it in full as a fresh content delta so the client's
+            // concatenation carries the answer instead of silently dropping it (§3.1).
+            log.info(`Held text does not extend streamed prose (sent ${sent.length}, held ${p.text.length} chars) — emitting it as a fresh content delta`);
+            if (p.text) send({ ...base, choices: [{ index: 0, delta: { content: p.text }, finish_reason: null }] });
+          } else {
+            // A divergent snapshot upstream chose not to stream: send nothing more
+            // rather than duplicating already-sent bytes.
+            log.info(`Streamed prefix diverged from final text (sent ${sent.length}, final ${p.text.length} chars) — not re-sending to avoid duplication`);
+          }
           send({ ...base, choices: [{ index: 0, delta: {}, finish_reason: outputFinishReason(p.text) }], ...(includeUsage ? { usage: usage(p.text.length) } : {}) });
         }
       } catch {

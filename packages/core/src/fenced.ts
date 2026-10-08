@@ -579,3 +579,64 @@ export function parseFencedToolCalls(
   return { calls, leftover: leftoverLines.join("\n") };
 }
 
+// --- Live prose streaming gate ----------------------------------------------
+//
+// Track A (design 002 §3.2): the tool path must stream prose live up to the first
+// *known tool* fence, then stop — the fence body is a tool call, not prose. The
+// gate reuses OPEN_FENCE_REGEX + the buildSpecMap aliases so "what streams" and
+// "what parses" recognise fences byte-identically (grug 25: use what exists).
+//
+// Emission is EAGER, token-granularity, no line buffering: after each delta we
+// rescan the whole buffer (a partial opener's bytes may already have been emitted)
+// for the earliest line matching OPEN_FENCE_REGEX whose info-string is a spec key.
+// Only the eager passthrough can leak the bytes of a partial opener
+// (`"``"` then `"`bash\n"`); the fence *body* never leaks because it begins only
+// after the recognised opener line. See design §3.2/§7.
+
+export interface ProseStreamGate {
+  /** Append a raw delta; returns the text safe to emit now (possibly ""). */
+  push(delta: string): string;
+  /** True once a known tool fence has opened; nothing more will stream. */
+  readonly sealed: boolean;
+}
+
+/** Offset of the earliest line in `buf` that opens a known tool fence, or -1. */
+function findToolFenceOffset(buf: string, specs: Map<string, FencedToolSpec>): number {
+  let pos = 0;
+  while (pos <= buf.length) {
+    const nl = buf.indexOf("\n", pos);
+    const lineEnd = nl === -1 ? buf.length : nl;
+    const line = buf.slice(pos, lineEnd).replace(/\r$/, "");
+    const m = line.match(OPEN_FENCE_REGEX);
+    if (m && specs.has(m[3])) return pos;
+    if (nl === -1) break;
+    pos = nl + 1;
+  }
+  return -1;
+}
+
+export function createProseStreamGate(specs: Map<string, FencedToolSpec>): ProseStreamGate {
+  let buf = "";
+  let emitted = 0;
+  let sealed = false;
+  return {
+    get sealed() {
+      return sealed;
+    },
+    push(delta: string): string {
+      if (sealed) return "";
+      buf += delta;
+      const fenceAt = findToolFenceOffset(buf, specs);
+      if (fenceAt >= 0) {
+        sealed = true;
+        const out = fenceAt > emitted ? buf.slice(emitted, fenceAt) : "";
+        emitted = buf.length;
+        return out;
+      }
+      const out = buf.slice(emitted);
+      emitted = buf.length;
+      return out;
+    },
+  };
+}
+

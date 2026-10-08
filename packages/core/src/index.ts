@@ -94,6 +94,10 @@ export {
   isAdvisorTone,
   nonShellTools,
   FRAMING_VARIANT_NAMES,
+  buildSpecMap,
+  createProseStreamGate,
+  type FencedToolSpec,
+  type ProseStreamGate,
 } from "./fenced.js";
 
 export { createLogger, trunc, LOG_PATH } from "./log.js";

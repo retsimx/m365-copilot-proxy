@@ -4,6 +4,7 @@ import {
   renderFencedCall,
   parseFencedToolCalls,
   buildSpecMap,
+  createProseStreamGate,
   formatFencedToolDefinitions,
   framingVariantForTone,
   isAdvisorTone,
@@ -716,6 +717,63 @@ describe("framingVariantForTone", () => {
     expect(framingVariantForTone("Gpt_5_5_Reasoning")).toBe("advisor");
     expect(framingVariantForTone("magic")).toBe("advisor");
     expect(framingVariantForTone("Claude_Sonnet")).toBe("advisor");
+  });
+});
+
+describe("createProseStreamGate (design 002 §3.2)", () => {
+  it("streams each delta eagerly at token granularity (no line buffering)", () => {
+    const gate = createProseStreamGate(specs);
+    expect(gate.push("Hello")).toBe("Hello");
+    expect(gate.push(", ")).toBe(", ");
+    expect(gate.push("world")).toBe("world");
+    expect(gate.sealed).toBe(false);
+  });
+
+  it("seals on a known tool fence and emits nothing after seal", () => {
+    const gate = createProseStreamGate(specs);
+    expect(gate.push("Let me check:\n")).toBe("Let me check:\n");
+    expect(gate.push("```bash\n")).toBe("");
+    expect(gate.sealed).toBe(true);
+    expect(gate.push("ls -la\n")).toBe("");
+    expect(gate.push("```\n")).toBe("");
+  });
+
+  it("does NOT seal on an unknown fence (```python) — keeps streaming it", () => {
+    const gate = createProseStreamGate(specs);
+    expect(gate.push("Example:\n")).toBe("Example:\n");
+    expect(gate.push("```python\n")).toBe("```python\n");
+    expect(gate.push("print('hi')\n")).toBe("print('hi')\n");
+    expect(gate.push("```\n")).toBe("```\n");
+    expect(gate.sealed).toBe(false);
+  });
+
+  it("reconstitutes exactly the pre-fence prefix", () => {
+    const gate = createProseStreamGate(specs);
+    let out = "";
+    out += gate.push("Here you go");
+    out += gate.push(":\n");
+    out += gate.push("```bash\n");
+    out += gate.push("ls\n```");
+    const prefix = "Here you go:\n";
+    expect(out).toBe(prefix);
+    expect(gate.sealed).toBe(true);
+  });
+
+  it("streams a partial opener split across deltas, then seals (accepted leak)", () => {
+    const gate = createProseStreamGate(specs);
+    expect(gate.push("``")).toBe("``");
+    expect(gate.push("`bash\n")).toBe("");
+    expect(gate.sealed).toBe(true);
+    expect(gate.push("ls\n")).toBe("");
+  });
+
+  it("seals only at the first tool fence, not on earlier prose fences", () => {
+    const gate = createProseStreamGate(specs);
+    let out = "";
+    out += gate.push("A ```python block, then a real one:\n");
+    out += gate.push("```bash\n");
+    expect(out).toBe("A ```python block, then a real one:\n");
+    expect(gate.sealed).toBe(true);
   });
 });
 

@@ -177,6 +177,65 @@ export interface ChatTurnOptions {
    *  optionsSets + the GenerateGraphicArt allowedMessageType; the generated
    *  images surface on `stream.images`. Agent-less only. */
   generateImages?: boolean;
+  /** Reasoning/chain-of-thought steps (`addToChainOfThought` frames), forwarded
+   *  as they arrive — before the answer/tool_call. See design 002 §4.2. */
+  onReasoning?: (text: string) => void;
+}
+
+/** The bot-message fields the routing decision keys on (design 002 §4.2/§5). */
+export interface BotMessageLike {
+  author?: string;
+  text?: string;
+  addToChainOfThought?: boolean;
+  messageType?: string;
+  contentType?: string;
+  messageId?: string;
+}
+
+/**
+ * Pure routing decision for one bot message (design 002 §5, normative table):
+ *  - "reasoning" — `addToChainOfThought:true` → the reasoning channel, never answer.
+ *  - "answer"    — plain bot text with no `messageType`/control `contentType`.
+ *  - "suppress"  — non-bot, empty, `EarlyProgress`/`Code`, `Disengaged`, etc.
+ * Extracted so core/session.test.ts can assert routing without a live WebSocket.
+ */
+export type BotMessageKind = "reasoning" | "answer" | "suppress";
+
+export function classifyBotMessage(m: BotMessageLike): BotMessageKind {
+  if (m.author !== "bot" || !m.text) return "suppress";
+  if (m.addToChainOfThought === true) return "reasoning";
+  if (!m.messageType && m.contentType !== "EarlyProgress" && m.contentType !== "Code") {
+    return "answer";
+  }
+  return "suppress";
+}
+
+/**
+ * Stateful bot-message router mirroring the `onDelta` pattern: it owns the CoT
+ * dedupe set (a step may be re-sent across progress updates) and dispatches each
+ * classified message to the answer or reasoning channel. Constructed at Promise
+ * scope so steps arriving before iteration begins are still delivered.
+ */
+export function createBotMessageRouter(handlers: {
+  onAnswer: (text: string) => void;
+  onReasoning: (text: string) => void;
+}): (m: BotMessageLike) => void {
+  const seenReasoningIds = new Set<string>();
+  return (m: BotMessageLike) => {
+    const kind = classifyBotMessage(m);
+    if (kind === "answer") {
+      handlers.onAnswer(m.text!);
+      return;
+    }
+    if (kind === "reasoning") {
+      const id = m.messageId;
+      if (id) {
+        if (seenReasoningIds.has(id)) return;
+        seenReasoningIds.add(id);
+      }
+      handlers.onReasoning(m.text!);
+    }
+  };
 }
 
 export interface CopilotSessionOptions {
@@ -364,6 +423,14 @@ export class CopilotSession {
         }
         if (r.emit) onDelta(r.emit);
       };
+
+      // Route answer vs reasoning (chain-of-thought) frames. Owns the CoT dedupe
+      // set; the reasoning callback fires as steps arrive, exactly like onDelta,
+      // so steps emitted before the consumer starts iterating aren't lost.
+      const routeBotMessage = createBotMessageRouter({
+        onAnswer: advance,
+        onReasoning: (text) => opts?.onReasoning?.(text),
+      });
 
       const stream: CopilotStream = {
         get fullText() {
@@ -792,9 +859,7 @@ export class CopilotSession {
                   // it and auto-approve on the same socket (H-NATIVE-6).
                   maybeResumeAction(m);
                 }
-                if (m.author === "bot" && m.text && !m.messageType) {
-                  advance(m.text);
-                }
+                routeBotMessage(m);
               }
               continue;
             }

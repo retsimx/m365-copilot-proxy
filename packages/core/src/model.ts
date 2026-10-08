@@ -1,6 +1,6 @@
 import { getToken } from "./auth.js";
 import { getOrCreateAgent } from "./agent.js";
-import { CopilotSession } from "./session.js";
+import { CopilotSession, type ChatTurnOptions } from "./session.js";
 import { createLogger, trunc } from "./log.js";
 import type { CopilotStream } from "./copilot.js";
 
@@ -79,7 +79,13 @@ export class ModelSession {
    * If `signal` aborts (the HTTP client disconnects) the in-flight turn is
    * cancelled by sending M365's Stop frame, mirroring the real UI's Stop button.
    */
-  async run(text: string, model: string = "m365-copilot", signal?: AbortSignal, useAgent: boolean = true): Promise<CopilotStream> {
+  async run(
+    text: string,
+    model: string = "m365-copilot",
+    signal?: AbortSignal,
+    useAgent: boolean = true,
+    turnOptions?: ChatTurnOptions,
+  ): Promise<CopilotStream> {
     const token = await this.resolveToken();
     const wantAgent = this.useAgent && useAgent;
 
@@ -110,7 +116,10 @@ export class ModelSession {
     // the tool-calling agent path — image optionsSets are agent-less, and we don't
     // want the image tool competing with fenced tool-call emission. Opt out with
     // M365_NO_IMAGE_GEN for a pure-text agent-less turn.
-    const turnOpts = { generateImages: !agentForTurn && !process.env.M365_NO_IMAGE_GEN };
+    const turnOpts: ChatTurnOptions = {
+      generateImages: !agentForTurn && !process.env.M365_NO_IMAGE_GEN,
+      ...turnOptions,
+    };
 
     try {
       return await this.copilotSession.chat(token, text, model, signal, turnOpts);

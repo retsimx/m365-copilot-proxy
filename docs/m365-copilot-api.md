@@ -273,6 +273,20 @@ See §7.
 ### Control messageTypes you'll see
 `Disengaged` (see §9), `ReferencesListComplete`, `Progress`, `InternalSearchQuery`, `RenderCardRequest`, `EndOfRequest`, … — none of these carry the answer text.
 
+### Message kinds
+
+The wire interleaves five bot-message kinds; only one advances the answer. Classify by these discriminators — a bot frame with **no `messageType` and no `contentType`** is answer text:
+
+| Message | Discriminator | Advance to answer? | Reasoning channel? |
+|---|---|---|---|
+| Answer text | `author:"bot"`, no `messageType`, no `contentType` | yes | no |
+| Reasoning / CoT step | `addToChainOfThought:true` (`isPersisted:true`, `isExpanded:false`; carries `messageType:"Progress"`) | no | yes |
+| Early-progress placeholder | `contentType:"EarlyProgress"` / `messageType:"Progress"` | no | no |
+| Code-interpreter frame | `contentType:"Code"` (script in `hiddenText`; M365's own sandbox) | no | no |
+| Disengaged refusal | `messageType:"Disengaged"` (see §9) | no | no |
+
+The proxy's classifier (`session.ts`) routes `addToChainOfThought:true` to the reasoning channel and suppresses `EarlyProgress`/`Code` (UI fluff / M365's sandbox, unused by the harness). Source finding: `docs/plans/designs/002-streaming-prose-and-reasoning.md` §1/§5 (957 MB `WS recv` scan — 4,238 CoT / 5,903 EarlyProgress / 402 Code frames). **Provisional:** `messageType` presence on CoT is partially inferred (the log capped message bodies at 500 chars); confirm with a full `M365_DUMP_FRAMES=1` capture (see below).
+
 ### End of turn
 A `type:2` (stream item), `type:3` (completion), or `type:7` (close) ends the turn; we close the socket. Reply to `type:6` pings in the meantime.
 

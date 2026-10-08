@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { foldStreamText, isThrottled } from "./session.js";
+import {
+  foldStreamText,
+  isThrottled,
+  classifyBotMessage,
+  createBotMessageRouter,
+} from "./session.js";
 import { MessageUpdate } from "./schemas.js";
 
 /** Replay a sequence of raw M365 frames (deltas as {d}, snapshots as {s}) through
@@ -109,6 +114,89 @@ describe("GraphicArt image frame parsing (§14)", () => {
     expect(parsed.success).toBe(true);
     const m = parsed.data!.messages[0] as any;
     expect(m.contentGenerationProgressList).toBeUndefined();
+  });
+});
+
+describe("BotMessage discriminator retention (design 002 §4.1)", () => {
+  it("retains addToChainOfThought through MessageUpdate.safeParse", () => {
+    const parsed = MessageUpdate.safeParse({
+      messages: [
+        { text: "**Inspecting files**\nI will read…", author: "bot", addToChainOfThought: true },
+      ],
+    });
+    expect(parsed.success).toBe(true);
+    const m = parsed.data!.messages[0] as any;
+    expect(m.addToChainOfThought).toBe(true);
+  });
+
+  it("still strips unrelated unknown keys (no schema loosening)", () => {
+    const parsed = MessageUpdate.safeParse({
+      messages: [{ text: "hi", author: "bot", someUnknownField: 1 }],
+    });
+    expect(parsed.success).toBe(true);
+    expect((parsed.data!.messages[0] as any).someUnknownField).toBeUndefined();
+  });
+});
+
+describe("classifyBotMessage (design 002 §5)", () => {
+  it("routes addToChainOfThought to reasoning, never answer", () => {
+    expect(classifyBotMessage({ author: "bot", text: "step", addToChainOfThought: true }))
+      .toBe("reasoning");
+  });
+
+  it("advances plain bot text with no messageType", () => {
+    expect(classifyBotMessage({ author: "bot", text: "answer" })).toBe("answer");
+  });
+
+  it("suppresses EarlyProgress and Code control frames", () => {
+    expect(classifyBotMessage({ author: "bot", text: "Just a sec…", messageType: "Progress", contentType: "EarlyProgress" })).toBe("suppress");
+    expect(classifyBotMessage({ author: "bot", text: "mkdir -p …", contentType: "Code" })).toBe("suppress");
+  });
+
+  it("suppresses Disengaged and ordinary messageType'd control frames", () => {
+    expect(classifyBotMessage({ author: "bot", text: "I can't help", messageType: "Disengaged" })).toBe("suppress");
+    expect(classifyBotMessage({ author: "bot", text: "loading", messageType: "Progress" })).toBe("suppress");
+  });
+
+  it("suppresses non-bot and empty messages", () => {
+    expect(classifyBotMessage({ author: "user", text: "hi" })).toBe("suppress");
+    expect(classifyBotMessage({ author: "bot" })).toBe("suppress");
+  });
+});
+
+describe("createBotMessageRouter (design 002 §4.2)", () => {
+  function makeRouter() {
+    const answered: string[] = [];
+    const reasoned: string[] = [];
+    const route = createBotMessageRouter({
+      onAnswer: (t) => answered.push(t),
+      onReasoning: (t) => reasoned.push(t),
+    });
+    return { answered, reasoned, route };
+  }
+
+  it("routes CoT to onReasoning and never to the answer stream", () => {
+    const { answered, reasoned, route } = makeRouter();
+    route({ author: "bot", text: "step one", addToChainOfThought: true, messageId: "m1" });
+    route({ author: "bot", text: "the answer", messageId: "m2" });
+    expect(reasoned).toEqual(["step one"]);
+    expect(answered).toEqual(["the answer"]);
+  });
+
+  it("emits a duplicate messageId CoT step exactly once", () => {
+    const { reasoned, route } = makeRouter();
+    route({ author: "bot", text: "step", addToChainOfThought: true, messageId: "m1" });
+    route({ author: "bot", text: "step", addToChainOfThought: true, messageId: "m1" });
+    route({ author: "bot", text: "step two", addToChainOfThought: true, messageId: "m2" });
+    expect(reasoned).toEqual(["step", "step two"]);
+  });
+
+  it("suppresses EarlyProgress/Code from both channels", () => {
+    const { answered, reasoned, route } = makeRouter();
+    route({ author: "bot", text: "Just a sec…", messageType: "Progress", contentType: "EarlyProgress" });
+    route({ author: "bot", text: "mkdir -p …", contentType: "Code" });
+    expect(answered).toEqual([]);
+    expect(reasoned).toEqual([]);
   });
 });
 

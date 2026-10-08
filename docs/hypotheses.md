@@ -1302,6 +1302,8 @@ The `scripts/frame-dump-probe.mjs` script writes ALL fields we observe to
 `scripts/frame-dump-out/<ts>/keys-summary.json` so the next dig finds new ones
 without code changes.
 
+**PROVISIONAL (graduated):** the three non-answer wire message kinds — CoT (`addToChainOfThought:true`), `EarlyProgress`/`Progress` placeholders, `Code` interpreter frames — are now documented in [`m365-copilot-api.md`](m365-copilot-api.md) §6 "Message kinds" (source: `docs/plans/designs/002-streaming-prose-and-reasoning.md` §1/§5; 957 MB `WS recv` scan — 4,238 CoT / 5,903 EarlyProgress / 402 Code frames). `messageType` presence on CoT is still partially inferred (500-char log cap), pending task D's `M365_DUMP_FRAMES=1` confirm capture — **do not treat as confirmed yet**.
+
 ---
 
 ## 5. The "Disengaged" filter — open questions

@@ -53,6 +53,10 @@ export const BotMessage = z.object({
   requestId: z.string().optional(),
   offense: z.string().optional(),
   messageType: z.string().optional(),
+  // Reasoning/CoT step marker (design 002 §4.1). True on frames that carry a
+  // chain-of-thought bullet (e.g. "**Inspecting files and output**…") rather than
+  // answer content. The session routes these to the reasoning channel.
+  addToChainOfThought: z.boolean().optional(),
   adaptiveCards: z.array(z.any()).optional(),
   sourceAttributions: z.array(z.any()).optional(),
   contentOrigin: z.string().optional(),
