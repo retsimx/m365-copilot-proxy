@@ -6,6 +6,7 @@ import {
   getToneForModel,
   formatMessages,
   formatToolDefinitions,
+  nonShellTools,
   parseToolCalls,
   looksLikeConfabulation,
   looksLikeSafetyRefusal,
@@ -232,7 +233,8 @@ function formatDeltaMessages(messages: ParsedMessage[], tools?: ChatBody["tools"
 
   // Proactively attach tool definitions on delta turns so reasoning models (DeepLeo / GPT-5.5)
   // always see active tools and never claim "no tools are available in this message".
-  if (tools && tools.length > 0) {
+  // Shell tools are elided from <tools>, so skip the block entirely on shell-only sessions.
+  if (tools && nonShellTools(tools).length > 0) {
     parts.push(formatToolDefinitions(tools));
   }
 
@@ -812,7 +814,7 @@ export async function handleChatCompletion(
       log.info(`Chat completion: model=${model}, stream=${body.stream}, messages=${body.messages.length}, new=${newMessages.length}, turn=${session.turnCount}, mode=delta, cid=${convId}`);
     } else {
       // No meaningful new content to send — nudge M365 to continue.
-      const toolsBlock = hasTools ? `${formatToolDefinitions(body.tools)}\n\n` : "";
+      const toolsBlock = hasTools && nonShellTools(body.tools ?? []).length > 0 ? `${formatToolDefinitions(body.tools!)}\n\n` : "";
       text = `${toolsBlock}<user>\nPlease continue from where you left off.\n</user>`;
       log.info(`Chat completion: model=${model}, stream=${body.stream}, messages=${body.messages.length}, new=0 (nudge), turn=${session.turnCount}, mode=delta, cid=${convId}`);
     }
@@ -1138,7 +1140,7 @@ export async function handleChatCompletion(
             ? CONFAB_FORCE_PROMPT
             : HALLUCINATION_FORCE_PROMPT;
       const basePrompt = forcePrompt;
-      const toolsBlock = hasTools ? `${formatToolDefinitions(body.tools)}\n\n` : "";
+      const toolsBlock = hasTools && nonShellTools(body.tools ?? []).length > 0 ? `${formatToolDefinitions(body.tools!)}\n\n` : "";
       text = `${toolsBlock}${basePrompt}`;
       const retry = await runBuffered(onDelta, onReasoning);
       if ("error" in retry) return { kind: "error", resp: retry.error };

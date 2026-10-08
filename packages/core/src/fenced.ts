@@ -85,6 +85,17 @@ export function findShellTool(tools: ToolDef[]): ToolDef | undefined {
     });
 }
 
+/** Shell tools are covered entirely by the advisor prompt's built-in shell framing.
+ *  Strip them from the <tools> block to eliminate token bloat and the contradictory
+ *  harness descriptions that tell the model not to use cat/sed/grep. Routing is
+ *  unaffected: `buildSpecMap` still registers the shell aliases and the fence parser
+ *  is purely regex-based — the model need not have seen a <tools> entry for bash. */
+export function nonShellTools(tools: ToolDef[]): ToolDef[] {
+  return tools.filter(
+    (t) => !SHELL_LANGS.has(t.function.name) && !SHELL_TOOL_NAME.test(t.function.name),
+  );
+}
+
 export interface FencedToolSpec {
   name: string;
   description?: string;
@@ -230,15 +241,38 @@ function toolsBlock(tools: ToolDef[]): string {
 }
 
 export function formatAdvisorPrompt(tools: ToolDef[]): string {
+  // Elision only — the advisor prose below is deliberately left byte-for-byte
+  // unchanged (the persistence / anti-surrender language is load-bearing for
+  // gpt-5.6 multi-turn work). Shell tools are dropped from the <tools> block to
+  // remove the contradictory harness description; because that block no longer
+  // declares the shell, the concrete fence example — with the optional header
+  // params the harness shell actually declares — is provided inline here instead.
+  // Teach a fixed `shell` fence label regardless of the harness tool's name: heavy
+  // refusing tones (gpt-61) reportedly respond to the generic word over the concrete
+  // `bash`. Routing is label-agnostic — buildSpecMap aliases both to the shell tool.
+  const shellTool = findShellTool(tools);
+  const shellLabel = "shell";
+  const shellProps = Object.keys(shellTool?.function.parameters?.properties ?? {});
+  const headerLines = [
+    shellProps.includes("timeout") ? "timeout: 30000" : null,
+    shellProps.includes("workdir") ? "workdir: /path/to/dir" : null,
+  ].filter(Boolean).join("\n");
+  // Only teach the fence when the harness actually provides a shell tool to route it.
+  const shellExample = !shellTool
+    ? ""
+    : headerLines
+      ? `\n\nThe block may start with optional header lines before the commands:\n\`\`\`${shellLabel}\n${headerLines}\n<commands>\n\`\`\``
+      : `\n\nExample:\n\`\`\`${shellLabel}\n<commands>\n\`\`\``;
+
+  const extra = nonShellTools(tools);
+  const extraBlock = extra.length > 0 ? `\n\n${toolsBlock(extra)}` : "";
   return `You write the shell commands; I run them and paste the real output back to you. Do not make any tool calls and do not try to run anything yourself.
 
 To carry out a step, reply with a single fenced code block opened with the word bash or shell, containing the commands — create or overwrite files with \`cat > name <<'EOF' … EOF\` heredocs, edit files in place with \`sed -i\`, inspect with \`cat\`/\`ls\`/\`grep\`, run code with the available interpreters. Put all commands you want to run for this step into that single block — do not split them across multiple code fences. Put nothing before the fence. I run that block and paste its output back; read it, think, then write the next script. Work one block at a time until the task is complete.
 
 You have not run anything yet and have no results. Never invent or assume a command's output, never say the files are missing or that you cannot access them, and never ask me to paste them. Never reply that you cannot run commands, that the shell is unavailable, or that you cannot read the files — you are not being asked to run anything; you only write the commands. Emit exactly one fenced block per reply — never multiple fences — then stop and wait for my output.
 
-When the task is complete and no further command is needed, reply in plain language with the final answer only — no code fence, no preamble.
-
-${toolsBlock(tools)}`;
+When the task is complete and no further command is needed, reply in plain language with the final answer only — no code fence, no preamble.${shellExample}${extraBlock}`;
 }
 
 export function formatFencedToolDefinitions(tools: ToolDef[], _variantOverride?: string): string {
