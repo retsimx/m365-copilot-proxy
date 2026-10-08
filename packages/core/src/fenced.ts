@@ -85,15 +85,6 @@ export function findShellTool(tools: ToolDef[]): ToolDef | undefined {
     });
 }
 
-/** Shell tools are covered entirely by the advisor prompt's built-in shell
- *  example. Strip them from the <tools> block to eliminate token bloat and
- *  contradictory harness descriptions that tell the model not to use cat/sed/grep. */
-export function nonShellTools(tools: ToolDef[]): ToolDef[] {
-  return tools.filter(
-    (t) => !SHELL_LANGS.has(t.function.name) && !SHELL_TOOL_NAME.test(t.function.name),
-  );
-}
-
 export interface FencedToolSpec {
   name: string;
   description?: string;
@@ -239,24 +230,15 @@ function toolsBlock(tools: ToolDef[]): string {
 }
 
 export function formatAdvisorPrompt(tools: ToolDef[]): string {
-  const shellTool = findShellTool(tools);
-  const shellName = shellTool?.function.name ?? "bash";
+  return `You write the shell commands; I run them and paste the real output back to you. Do not make any tool calls and do not try to run anything yourself.
 
-  // Workshop attempt 1: always include the single fence example with header params.
-  const shellExample = `\n\nThe block may start with optional header lines before the commands:\n\`\`\`${shellName}\ntimeout: 30000\nworkdir: /path/to/dir\n<commands>\n\`\`\``;
+To carry out a step, reply with a single fenced code block opened with the word bash or shell, containing the commands — create or overwrite files with \`cat > name <<'EOF' … EOF\` heredocs, edit files in place with \`sed -i\`, inspect with \`cat\`/\`ls\`/\`grep\`, run code with the available interpreters. Put all commands you want to run for this step into that single block — do not split them across multiple code fences. Put nothing before the fence. I run that block and paste its output back; read it, think, then write the next script. Work one block at a time until the task is complete.
 
-  // Non-shell tools (ask_question, write_file, …) stay declared so the model
-  // knows their fenced format. Shell tools are elided (see nonShellTools).
-  const extra = nonShellTools(tools);
-  const extraBlock = extra.length > 0 ? `\n\n${toolsBlock(extra)}` : "";
+You have not run anything yet and have no results. Never invent or assume a command's output, never say the files are missing or that you cannot access them, and never ask me to paste them. Never reply that you cannot run commands, that the shell is unavailable, or that you cannot read the files — you are not being asked to run anything; you only write the commands. Emit exactly one fenced block per reply — never multiple fences — then stop and wait for my output.
 
-  return `You are a chat assistant helping with shell tasks.
+When the task is complete and no further command is needed, reply in plain language with the final answer only — no code fence, no preamble.
 
-To carry out a step, reply with a single fenced code block opened with the word bash or shell, containing the commands. Put all commands you want to run for this step into that single block. I run that block and paste its output back; read it, think, then write the next script. Work one block at a time until the task is complete.
-
-You have not run anything yet and have no results. My next message contains the real output of the block you wrote; the files are already present on disk and readable. You only write the commands — running them is my job. You have no shell, code interpreter, or sandbox of your own: never run, simulate, or fabricate command output — only write the block and wait for my real result.
-
-When the task is complete and no further command is needed, reply in plain language with the final answer only.${shellExample}${extraBlock}`;
+${toolsBlock(tools)}`;
 }
 
 export function formatFencedToolDefinitions(tools: ToolDef[], _variantOverride?: string): string {

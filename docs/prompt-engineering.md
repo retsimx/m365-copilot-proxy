@@ -118,16 +118,6 @@ Advisor framing inverts the prompting contract from autonomous agency to an advi
 
 By directing the model to emit a single ```bash or ```shell block per turn while the proxy executes the block and feeds the real output back, advisor framing matches the chat model's pretraining and completely eliminates JSON string-escaping overhead and agentic hesitation.
 
-### Advisor framing is shape-frozen — imperative/prohibition rewrites disengage (Oct 2026)
-
-A proposed rewrite of the advisor framing into a terser "chat assistant" voice — swapping the descriptive shell/anti-confab prose for imperative/prohibition clauses (`emit a single fenced block`, `Do not invoke any tools or APIs directly; only write the commands in the fence`, `Any reasoning … before the fence, not after`, `Repeat until the task is complete`, `reply in plain text only`) — **disengaged (HTTP 502) on 100% of tool requests**, while the original descriptive framing tool-called normally **contemporaneously** (interleaved live A/B on `10.0.1.15`; `magic`, `gpt-5.5-think-deeper`, `gpt-5.6-think-deeper`). This is the F22 **additive shape threshold**, confirmed by clause-by-clause live bisection (`hypotheses.md` §22):
-
-- the new opener alone is safe; `<tools>` elision and the header example are safe;
-- `each step` + `emit` + the terse "fenced bash block" wording disengage **only when summed** (each subset passes);
-- but `Do not invoke any tools or APIs directly; only write the commands in the fence.` is **individually sufficient** — the *old* prohibition (`Do not make any tool calls…`) is not.
-
-**Rule — the advisor framing is shape-frozen: describe the session, never command it.** Do not "lean-ify" it with imperatives/prohibitions; each added clause is disengage weight (F22). "Leaner" ≠ "softer." Safe simplifications (verified live): elide the shell tool from `<tools>`; always include the single bash header example with params; drop the bash-usage idioms (routing is regex-based, so the model needn't be taught bash); drop the format prescriptions (`Put nothing before the fence`, `never multiple fences`, `do not split them across multiple code fences`, `no code fence / no preamble`); and recast anti-confab from `Never…` prohibitions to **descriptive facts**. The resulting de-shaped framing tool-calls on `magic`, `gpt-5.5-think-deeper`, `gpt-5.6-think-deeper`, and **`gpt-6-astra`** (the restrictive tone), including delta turns. Implementation: `packages/core/src/fenced.ts` (`formatAdvisorPrompt`).
-
 ### Production findings & confabulation bypass (`docs/hypotheses.md` §21)
 
 As documented in [`docs/hypotheses.md` §21](./hypotheses.md#21-october-8-2026--production-analysis-advisor-framing-renders-proxy-confabulation-machinery-obsolete-m365_disable_confab_detection-), long-term production telemetry across 1,306 production turns under universal advisor framing revealed:
