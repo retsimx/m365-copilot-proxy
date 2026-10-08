@@ -182,6 +182,7 @@ There is no `model` parameter. The `tone` string on the chat message picks the m
 | `gpt-5.6-think-deeper` / `gpt-5.6` | `Gpt_5_6_Reasoning` | GPT-5.6 Think deeper reasoning model |
 | `gpt-5.6-quick` / `gpt-5.6-chat` | `Gpt_5_6_Chat` | GPT-5.6 Quick chat model (live-validated 2026-10) |
 | `gpt-6-astra` | `Gpt_6_Astra` | live 2026-09-08; **2026-09-30:** self-IDs as GPT-5 chat, no reasoning trace, no GPT-6 tone exposed in the M365 UI — likely a GPT-5-class **chat** alias; **not** a reasoning upgrade (hypotheses §18) |
+| `gpt-6.1-sol` / `gpt-6.1-sol-reasoning` / `sol` | `Gpt_61_Sol_Reasoning` | GPT-6.1 Sol reasoning (2026-10). Limited/premium tone — same handshake-gated class as `Claude_Opus`; requires the `Premium`/`OfficeWebPaidCopilot` connection (proxy default). |
 | `gpt-5.5` / `gpt-5.5-quick` | `Gpt_5_5_Chat` | current GPT generation |
 | `gpt-5.5-think-deeper` | `Gpt_5_5_Reasoning` | **recommended for tool calling** (paired with fenced/shell routing) |
 | `gpt-5.4` / `gpt-5.4-think-deeper` | `Gpt_5_4_Reasoning` | |

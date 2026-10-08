@@ -49,6 +49,13 @@ const MODEL_TONES: Record<string, string> = {
   "gpt-6": "Gpt_6_Astra",
   "gpt-6-astra": "Gpt_6_Astra",
 
+  // GPT-6.1 Sol reasoning — limited/premium tone, same handshake-gated class as
+  // Claude_Opus: needs the Premium/OfficeWebPaidCopilot connection (now the default).
+  "gpt-6.1-sol": "Gpt_61_Sol_Reasoning",
+  "gpt-6.1-sol-reasoning": "Gpt_61_Sol_Reasoning",
+  "gpt-61-sol": "Gpt_61_Sol_Reasoning",
+  "sol": "Gpt_61_Sol_Reasoning",
+
   // GPT-5.4
   "gpt-5.4": "Gpt_5_4_Reasoning",
   "gpt-5.4-think-deeper": "Gpt_5_4_Reasoning",
@@ -72,6 +79,7 @@ export function getToneForModel(model: string): string {
     if (/quick|chat/i.test(model)) return "Gpt_5_6_Chat";
     return "Gpt_5_6_Reasoning";
   }
+  if (/sol/i.test(model)) return "Gpt_61_Sol_Reasoning";
   if (/astra/i.test(model) || /^gpt-?6/i.test(model)) return "Gpt_6_Astra";
   if (/opus/i.test(model)) return "Claude_Opus";
   if (/(^|[_-])5([_-]|$)/i.test(model) && /sonnet/i.test(model)) return "Claude_Sonnet_5";

@@ -183,6 +183,7 @@ M365 Copilot enforces two separate rate-limiting horizons on paid tenant account
 | `gpt-5.6-think-deeper` / `gpt-5.6` | `Gpt_5_6_Reasoning` | GPT-5.6 reasoning — live-validated for complex agentic tasks and deep tool execution. |
 | `gpt-5.6-quick` / `gpt-5.6-chat` | `Gpt_5_6_Chat` | GPT-5.6 fast chat — live-validated on DeepLeo. |
 | `gpt-6-astra` / `gpt-6` | `Gpt_6_Astra` | Live GPT-6-named tone; routes through DeepLeo. Self-identifies as GPT-5 chat without reasoning trace — treat as a GPT-5-class chat tone. |
+| `gpt-6.1-sol` / `gpt-6.1-sol-reasoning` / `sol` | `Gpt_61_Sol_Reasoning` | GPT-6.1 Sol reasoning. Limited/premium tone — same handshake-gated class as `Claude_Opus` (needs the Premium/PaidCopilot connection, which is the default). |
 | `gpt-5.5-think-deeper` | `Gpt_5_5_Reasoning` | **Recommended default for coding & tool execution** — robust compliance and high benchmark solve rate. |
 | `gpt-5.5` / `gpt-5.5-quick` | `Gpt_5_5_Chat` | GPT-5.5 fast chat. |
 | `claude-sonnet-5.5` / `claude-sonnet` / `claude` | `Claude_Sonnet` | Anthropic Claude Sonnet 4.5/5.5 via Sydney backend (agent-less path). |
