@@ -9,6 +9,7 @@ import {
   isAdvisorTone,
   FRAMING_VARIANT_NAMES,
   findShellTool,
+  nonShellTools,
   hostPlatformNote,
 } from "./fenced.js";
 import type { ToolDef } from "./tools.js";
@@ -334,6 +335,48 @@ describe("shell routing (Tier 1)", () => {
   });
 });
 
+describe("nonShellTools", () => {
+  const runCommand: ToolDef = {
+    type: "function",
+    function: {
+      name: "run_command",
+      description: "Run a shell command.",
+      parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] },
+    },
+  };
+  const shell: ToolDef = {
+    type: "function",
+    function: {
+      name: "shell",
+      description: "Run a shell command.",
+      parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] },
+    },
+  };
+  const task: ToolDef = {
+    type: "function",
+    function: {
+      name: "task",
+      description: "Spawn a subagent.",
+      parameters: { type: "object", properties: { prompt: { type: "string" } }, required: ["prompt"] },
+    },
+  };
+
+  it("filters shell aliases and passes non-shell tools through without mutating input", () => {
+    const input = [bash, runCommand, shell, readFile, writeFile, task];
+    const out = nonShellTools(input);
+    expect(out.map((t) => t.function.name)).toEqual(["read_file", "write_file", "task"]);
+    expect(input.map((t) => t.function.name)).toEqual([
+      "bash",
+      "run_command",
+      "shell",
+      "read_file",
+      "write_file",
+      "task",
+    ]);
+    expect(out).not.toBe(input);
+  });
+});
+
 describe("hostPlatformNote", () => {
   it("is empty off Windows, so POSIX framing stays byte-for-byte", () => {
     expect(hostPlatformNote(bash, "linux")).toBe("");
@@ -374,16 +417,54 @@ describe("hostPlatformNote", () => {
 });
 
 describe("formatFencedToolDefinitions", () => {
-  it("lists each tool as a fenced template inside <tools> with advisor framing", () => {
+  it("lists each non-shell tool as a fenced template inside <tools> with advisor framing", () => {
     const out = formatFencedToolDefinitions(ALL);
     expect(out).toContain("<tools>");
-    expect(out).toContain("```bash");
+    // The header example legitimately contains ```bash, so assert the shell tool's
+    // own <tools> entry (its description) is elided instead.
+    expect(out).not.toContain("Run a shell command.");
     expect(out).toContain("```write_file");
     expect(out).toContain("<<<<<<< SEARCH");
-    expect(out).toContain("You write the shell commands; I run them and paste the real output back to you");
-    expect(out).toContain("Do not make any tool calls and do not try to run anything yourself");
+    expect(out).toContain("You are a chat assistant helping with shell tasks");
+    expect(out).toContain("reply with a single fenced code block opened with the word bash or shell");
     expect(out).not.toContain("execution core");
     expect(out).not.toContain("TOOL USE IS REQUIRED");
+  });
+
+  it("elides the shell tool from <tools> for shell-only and mixed toolsets (C6)", () => {
+    const shellOnly = formatFencedToolDefinitions([bash]);
+    expect(shellOnly).not.toContain("<tools>");
+    expect(shellOnly).not.toContain("Run a shell command.");
+
+    const mixed = formatFencedToolDefinitions([bash, readFile, writeFile]);
+    expect(mixed).toContain("<tools>");
+    expect(mixed).toContain("```write_file");
+    expect(mixed).not.toContain("Run a shell command.");
+  });
+
+  it("always includes the inline shell header example with params", () => {
+    const bashWithHeaders: ToolDef = {
+      type: "function",
+      function: {
+        name: "bash",
+        description: "Run a shell command.",
+        parameters: {
+          type: "object",
+          properties: {
+            command: { type: "string" },
+            timeout: { type: "number" },
+            workdir: { type: "string" },
+          },
+          required: ["command"],
+        },
+      },
+    };
+
+    for (const out of [formatFencedToolDefinitions([bashWithHeaders]), formatFencedToolDefinitions([bash])]) {
+      expect(out).toContain("The block may start with optional header lines");
+      expect(out).toContain("timeout: 30000");
+      expect(out).toContain("workdir: /path/to/dir");
+    }
   });
 
   it("derives task tool spec with prompt body and parses multiline prompt body correctly", () => {
@@ -601,10 +682,10 @@ describe("advisor framing", () => {
 
   it("frames the model as a chat assistant that writes commands, not an executor", () => {
     const out = formatFencedToolDefinitions(TOOLS);
-    expect(out).toContain("You write the shell commands; I run them");
-    expect(out).toContain("Do not make any tool calls");
-    expect(out).toContain("I run them and paste the real output back");
-    // still presents the tools + shell idiom so the fence routes to the shell
+    expect(out).toContain("You are a chat assistant helping with shell tasks");
+    expect(out).toContain("reply with a single fenced code block opened with the word bash or shell");
+    expect(out).toContain("I run that block and paste its output back");
+    // still presents the non-shell tools + shell idiom so the fences route
     expect(out).toContain("<tools>");
     expect(out).toContain("```bash");
   });

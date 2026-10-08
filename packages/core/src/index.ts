@@ -92,6 +92,7 @@ export {
   currentFramingVariant,
   framingVariantForTone,
   isAdvisorTone,
+  nonShellTools,
   FRAMING_VARIANT_NAMES,
 } from "./fenced.js";
 
