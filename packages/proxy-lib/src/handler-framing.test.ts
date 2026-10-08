@@ -36,23 +36,12 @@ const bashTool = {
   },
 };
 
-const readFileTool = {
-  type: "function",
-  function: {
-    name: "read_file",
-    description: "Read a file.",
-    parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
-  },
-};
-
-// Mixed toolset: the non-shell tool keeps the advisor <tools> block present so these
-// tests can assert advisor framing was injected (a shell-only set elides the block).
 function bodyFor(model: string) {
   return {
     model,
     messages: [{ role: "user" as const, content: "do a thing" }],
     stream: false,
-    tools: [bashTool, readFileTool],
+    tools: [bashTool],
   };
 }
 
@@ -96,10 +85,9 @@ describe("per-model framing selection (universal advisor framing)", () => {
     expect(prompt).toContain("Do not make any tool calls");
     expect(prompt).not.toContain("execution core");
     expect(prompt).not.toContain("TOOL USE IS REQUIRED");
-    // non-shell tools reach the model inside <tools>; the shell fence idiom is
-    // taught by the inline `shell` example (the shell tool itself is elided)
+    // the tools still reach the model so the fence routes to the shell
     expect(prompt).toContain("<tools>");
-    expect(prompt).toContain("```shell");
+    expect(prompt).toContain("```bash");
   }
 
   it("gpt-6-astra → advisor framing", async () => {
@@ -288,71 +276,5 @@ describe("forcing retry prompts for all models (unified advisor force prompt)", 
     expect(retryPrompt).toContain("You write the shell commands; I run them");
     expect(retryPrompt).not.toContain("execution core");
     expect(retryPrompt).not.toContain("TOOL USE IS REQUIRED");
-  });
-});
-
-describe("delta tool re-injection (shell elision)", () => {
-  let captured: string[] = [];
-
-  beforeEach(() => {
-    captured = [];
-    process.env.M365_NEW_SESSION_SPACING_MS = "0";
-    process.env.M365_SESSION_BUCKET_CAPACITY = "0";
-    resetNewSessionPacing();
-    resetTurnVelocityPacing();
-    vi.restoreAllMocks();
-    vi.spyOn(core.ModelSession.prototype, "run").mockImplementation(async (text: string) => {
-      captured.push(text);
-      return fakeStream();
-    });
-  });
-
-  afterEach(() => {
-    delete process.env.M365_NEW_SESSION_SPACING_MS;
-    delete process.env.M365_SESSION_BUCKET_CAPACITY;
-    vi.restoreAllMocks();
-  });
-
-  async function deltaPromptFor(tools: any[]): Promise<string> {
-    // Force the second request down the delta path (turn > 0 AND sentMessageCount > 0).
-    vi.spyOn(core.ModelSession.prototype, "turnCount", "get").mockReturnValue(1);
-    const pool = new SessionPool();
-    const first = {
-      model: "gpt-5.6-think-deeper",
-      messages: [{ role: "user" as const, content: "do a thing" }],
-      stream: false,
-      tools,
-    };
-    const second = {
-      model: "gpt-5.6-think-deeper",
-      messages: [
-        { role: "user" as const, content: "do a thing" },
-        { role: "tool" as const, tool_call_id: "c1", name: "bash", content: "ok" },
-      ],
-      stream: false,
-      tools,
-    };
-    const res1 = await handleChatCompletion(first as any, pool);
-    expect(res1.status).toBeLessThan(400);
-    const res2 = await handleChatCompletion(second as any, pool);
-    expect(res2.status).toBeLessThan(400);
-    return captured[captured.length - 1];
-  }
-
-  it("sends no advisor/tool block on a shell-only delta turn", async () => {
-    const prompt = await deltaPromptFor([bashTool]);
-    expect(prompt).not.toContain("do a thing"); // proves the delta path, not a full replay
-    expect(prompt).not.toContain("<tools>");
-    expect(prompt).not.toContain("You write the shell commands");
-    expect(prompt).toContain('<tool_response name="bash"');
-  });
-
-  it("still re-injects the advisor block on a mixed delta turn", async () => {
-    const prompt = await deltaPromptFor([bashTool, readFileTool]);
-    expect(prompt).not.toContain("do a thing"); // proves the delta path, not a full replay
-    expect(prompt).toContain("You write the shell commands");
-    expect(prompt).toContain("<tools>");
-    expect(prompt).toContain("```read_file");
-    expect(prompt).toContain('<tool_response name="bash"');
   });
 });

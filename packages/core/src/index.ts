@@ -92,7 +92,6 @@ export {
   currentFramingVariant,
   framingVariantForTone,
   isAdvisorTone,
-  nonShellTools,
   FRAMING_VARIANT_NAMES,
   buildSpecMap,
   createProseStreamGate,

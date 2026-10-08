@@ -174,9 +174,8 @@ describe("M365_INJECT_REPLY_TOOL", () => {
     const fmt = await importFormat();
     const out = fmt(userMsg, sampleTools);
     expect(out).toContain("```reply");
-    // The caller's shell tool is elided from <tools>; the shell fence contract
-    // reaches the model via the inline `shell` example instead.
-    expect(out).toContain("```shell");
+    // It must also still include the caller's tools (fenced template)
+    expect(out).toContain("```bash");
     delete process.env.M365_INJECT_REPLY_TOOL;
   });
 
