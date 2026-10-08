@@ -228,7 +228,7 @@ code_interpreter_interactive_charts, code_interpreter_matplotlib_patching
 
 …plus `GeneratedCode` (and `GenerateContentQuery`) in `allowedMessageTypes`. The model then **writes and runs real Python** and returns true results — verified with a SHA-256 oracle (a correct digest of a unique string is impossible to fake from memory; M365 emitted a `GeneratedCode` frame running `hashlib.sha256(...).hexdigest()` and returned the correct hash). `contentOrigin: DeepLeo`.
 
-The proxy enables this on the **agent-less path** (so plain chat can compute; the tool/agent path is left alone so it doesn't compete with tool-JSON emission). `CODE_INTERPRETER_OPTIONS_SETS` in `session.ts`; disable with `M365_NO_CODE_INTERPRETER=1`. Note it's M365's sandbox, not the harness's — useful for accuracy (hashing, math, parsing, data transforms), not a substitute for the harness's own tools.
+**The proxy does NOT enable this** (and never should). It was briefly wired onto the agent-less path, then removed (Oct 2026): the sandbox holds none of the caller's files, so the model treats fabricated sandbox results as ground truth and abandons the shell handoff ("you write the script, I run it and return the output"). Observed failure: Claude Opus self-executed in `/home/oai` + `/mnt/user-data`, hit file-not-found, then reported spurious success/blocked instead of emitting a script. Execution belongs to the harness. The flags are retained here and in `scripts/code-interpreter-probe.mjs` **for reference only** — the proxy sends `optionsSets` without them and omits `GeneratedCode` from `allowedMessageTypes`.
 
 > The `optionsSets` array was previously sent **empty**. Live reference implementations (`kuchris/m365-copilot-openai-proxy`, Microsoft's own `PyRIT`) populate it richly — code interpreter, memory, custom-instructions, image input. See `docs/hypotheses.md` §8 for the full catalogue of flags still on the table.
 
@@ -561,7 +561,7 @@ Evidence (`scripts/dataverse-bot-probe.mjs`, with a `<org>.crm4.dynamics.com/.de
 | 20 | **I/O is asymmetric:** input is retrieval-backed ≥500k tokens (benign size never Disengages); output soft-caps ~3k tokens by *concluding early*, not truncating — so big writes look complete but aren't. Proxy advertises 128k window + emits `finish_reason:"length"` near the cap | §6/F9/F10 |
 | 21 | **The agent overrides Claude `tone` → GPT-5.** Non-GPT tones (e.g. Claude) only take effect with NO agent attached; with the agent they silently route to GPT. Proxy attaches the agent only for tool requests | §5/§10 |
 | 22 | **`tone` is server-validated** (unknown → `type:3` error), so an accepted tone is real. `Claude_Sonnet` = real Claude Sonnet 4.5; `Gpt_5_5_*` current gen; `Claude_Reasoning` accepted but actually GPT | §5 |
-| 23 | **Code interpreter is real:** `cwc_code_interpreter*` optionsSets + `GeneratedCode` msg type → genuine server-side Python execution. Proxy enables it on the agent-less path | §5 |
+| 23 | **Code interpreter is real:** `cwc_code_interpreter*` optionsSets + `GeneratedCode` msg type → genuine server-side Python execution. **Proxy does NOT enable it** — self-execution hijacks the shell handoff (wrong-machine transcripts) | §5 |
 | 24 | **`optionsSets` was sent empty** — leaves code-interpreter/memory/custom-instructions/image off the table. Reference impls (PyRIT, kuchris) populate it | §5/hypotheses §8 |
 
 ---

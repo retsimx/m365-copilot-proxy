@@ -30,19 +30,13 @@ const log = createLogger("session");
 // the partial answer. See docs/m365-copilot-api.md §6 and hypotheses.md F11.
 const STOP_FRAME = JSON.stringify({ arguments: [{}], invocationId: "1", target: "stop", type: 1 }) + RS;
 
-// Enabling these optionsSets unlocks M365's real server-side Python sandbox:
-// the model writes and EXECUTES Python and returns true results (verified with a
-// SHA-256 oracle — docs/hypotheses.md §8.9 / scripts/code-interpreter-probe.mjs).
-// Applied only on the agent-less (plain-chat) path: the tool-calling agent wants
-// the model to emit tool JSON, not run its own Python, so we leave that path
-// untouched. Disable with M365_NO_CODE_INTERPRETER=1.
-const CODE_INTERPRETER_OPTIONS_SETS = [
-  "cwc_code_interpreter",
-  "cwc_code_interpreter_amsfix",
-  "cwc_code_interpreter_citation_fix",
-  "code_interpreter_interactive_charts",
-  "code_interpreter_matplotlib_patching",
-];
+// M365's server-side code interpreter (cwc_code_interpreter* optionsSets + the
+// GeneratedCode message type) is intentionally NEVER enabled. It executes in
+// M365's sandbox, which does not contain the caller's files, so the model treats
+// fabricated sandbox results as ground truth and abandons the shell handoff
+// ("you write the script, I run it and return the output"). Execution belongs to
+// the harness. The wire behaviour is retained for reference — see
+// docs/m365-copilot-api.md §"Code interpreter" and scripts/code-interpreter-probe.mjs.
 
 // The image-generation optionsSets, lifted verbatim from the official web client
 // capture (§14). `flux_v3` is BizChat's orchestration codename, NOT the model —
@@ -600,7 +594,6 @@ export class CopilotSession {
               // agent-path "replace X→Y" Disengage (F17/F21). The GUI sends a rich
               // set + NO agent; we send [] + agent and Disengage.
               optionsSets: [
-                ...((!agentId && !process.env.M365_NO_CODE_INTERPRETER) ? CODE_INTERPRETER_OPTIONS_SETS : []),
                 ...(wantImages ? IMAGE_GEN_OPTIONS_SETS : []),
                 ...(process.env.M365_EXTRA_OPTIONSSETS ? process.env.M365_EXTRA_OPTIONSSETS.split(",").map((s) => s.trim()).filter(Boolean) : []),
               ],
@@ -623,7 +616,6 @@ export class CopilotSession {
                 "DeveloperLogs",
                 "EndOfRequest",
                 "ReferencesListComplete",
-                "GeneratedCode",        // code-interpreter execution frames
                 // Image generation (§14): the server only SENDS the GraphicArt
                 // frame if the client declares it can handle it — same
                 // declare-to-receive rule as native actions.

@@ -1523,11 +1523,12 @@ on "Please continue." retries.
 **Probes added:** `code-interpreter-probe.mjs`, `tone-probe.mjs`; `_probe-chat.mjs`
 gained `optionsSets` / `extraAllowed` / `plugins` / `variants` overrides.
 
-**Also shipped:** code interpreter is now wired into the proxy on the agent-less
-(plain-chat) path — `CODE_INTERPRETER_OPTIONS_SETS` in `session.ts`, on by
-default, disable with `M365_NO_CODE_INTERPRETER=1`. Verified end-to-end through
-the proxy (SHA-256 oracle). Left off the agent/tool path so it doesn't compete
-with tool-JSON emission.
+**Also shipped, then removed (Oct 2026):** code interpreter was wired into the
+proxy on the agent-less (plain-chat) path (`CODE_INTERPRETER_OPTIONS_SETS`),
+verified end-to-end via a SHA-256 oracle. It is now **never enabled** — on the
+agent-less *tool-calling* path (Claude/Opus) it hijacked the shell handoff and the
+model treated wrong-machine sandbox output as truth. Retained as an RE finding only
+(`docs/m365-copilot-api.md` §"Code interpreter", `scripts/code-interpreter-probe.mjs`).
 
 **MCP / native-action foothold (H8.4/H8.5) — infra ready, schema RE pending.**
 A cloudflared **quick tunnel needs no account** (`cloudflared tunnel --url
@@ -2169,14 +2170,18 @@ deliberately in the §8.9 dig:
 1. The declarative agent attaches **only when the request carries tools**
    (`model.ts:82`, `useAgent=hasTools`) — so a Claude tone on plain chat reaches real Claude
    instead of being force-routed to GPT-5 (§8.9 H8.6).
-2. Code interpreter is **on by default whenever the agent is absent**
-   (`session.ts:455`, `!agentId && !M365_NO_CODE_INTERPRETER`) — free server-side compute on
-   the plain-chat path, deliberately kept off the tool path so it doesn't compete with tool-JSON
-   emission.
+2. Code interpreter was **formerly on whenever the agent was absent**
+   (`!agentId && !M365_NO_CODE_INTERPRETER`) — free server-side compute on the plain-chat path.
+   **Removed (Oct 2026):** it is now **never** enabled. On the agent-less *tool-calling* path
+   (Claude/Opus) it hijacked the shell handoff and produced the wrong-machine transcript below.
 
 Compose them: a harness that sends **no tools** gets the agent-less path, which has a live Python
 sandbox with a writable filesystem. The model does the only sensible thing available to it —
 runs the command in the one filesystem it can see — and reports honestly. Nobody lied.
+
+**Closed (Oct 2026):** the interpreter is no longer enabled on any path, so the only execution
+route is the harness. The shell-handoff framing now also states the model has **no** shell /
+interpreter / sandbox of its own and must never simulate or fabricate output.
 
 **Why this is worse than a confab.** Every detector in `handler.ts` (`looksLikeConfabulation`,
 `looksLikeHallucinatedCompletion`) keys on *prose that claims an action without a tool call*.
@@ -2194,8 +2199,9 @@ machine. §12.11's lesson repeats: the SOLVED-shaped output masks the failure.
 - Is it Windows-specific? The `F:\` prompt is the only native-Windows report we have, and
   Windows is far less tested here than Linux. Predicted **not** Windows-specific — the routing
   decision is server-side and platform-blind — but worth an explicit Linux repro.
-- Does `M365_NO_CODE_INTERPRETER=1` suppress it? Predicted **yes**, and that's the cheap
-  mitigation if we want one.
+- ~~Does `M365_NO_CODE_INTERPRETER=1` suppress it?~~ **Resolved (Oct 2026):** the proxy no longer
+  enables the interpreter on *any* path, so this leak cannot occur through the proxy; the
+  shell-handoff framing also forbids self-execution outright.
 
 **Fixes — two shipped (Aug 1 2026), both from [@EatonWu](https://github.com/EatonWu)'s fork.**
 He hit this independently and split it the right way, along a line the original write-up

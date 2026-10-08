@@ -254,7 +254,7 @@ export function formatAdvisorPrompt(tools: ToolDef[]): string {
 
 To carry out a step, reply with a single fenced code block opened with the word bash or shell, containing the commands. Put all commands you want to run for this step into that single block. I run that block and paste its output back; read it, think, then write the next script. Work one block at a time until the task is complete.
 
-You have not run anything yet and have no results. My next message contains the real output of the block you wrote; the files are already present on disk and readable. You only write the commands — running them is my job.
+You have not run anything yet and have no results. My next message contains the real output of the block you wrote; the files are already present on disk and readable. You only write the commands — running them is my job. You have no shell, code interpreter, or sandbox of your own: never run, simulate, or fabricate command output — only write the block and wait for my real result.
 
 When the task is complete and no further command is needed, reply in plain language with the final answer only.${shellExample}${extraBlock}`;
 }
