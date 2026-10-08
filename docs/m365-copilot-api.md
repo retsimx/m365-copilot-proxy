@@ -285,7 +285,13 @@ The wire interleaves five bot-message kinds; only one advances the answer. Class
 | Code-interpreter frame | `contentType:"Code"` (script in `hiddenText`; M365's own sandbox) | no | no |
 | Disengaged refusal | `messageType:"Disengaged"` (see §9) | no | no |
 
-The proxy's classifier (`session.ts`) routes `addToChainOfThought:true` to the reasoning channel and suppresses `EarlyProgress`/`Code` (UI fluff / M365's sandbox, unused by the harness). Source finding: `docs/plans/designs/002-streaming-prose-and-reasoning.md` §1/§5 (957 MB `WS recv` scan — 4,238 CoT / 5,903 EarlyProgress / 402 Code frames). **Provisional:** `messageType` presence on CoT is partially inferred (the log capped message bodies at 500 chars); confirm with a full `M365_DUMP_FRAMES=1` capture (see below).
+The proxy's classifier (`session.ts`) routes `addToChainOfThought:true` to the reasoning channel and suppresses `EarlyProgress`/`Code` (UI fluff / M365's sandbox, unused by the harness). Source finding: `docs/plans/designs/002-streaming-prose-and-reasoning.md` §1/§5 (957 MB `WS recv` scan — 4,238 CoT / 5,903 EarlyProgress / 402 Code frames).
+
+**Confirmed (Oct 2026)** by a one-turn `M365_DUMP_FRAMES=1` capture through the live proxy plus a re-scan of `debug.log` (4,265 CoT / 5,977 EarlyProgress / 402 Code frames):
+- **CoT** frames carry `addToChainOfThought:true`, `isPersisted:true`, `isExpanded:false`, **and** `messageType:"Progress"`.
+- **EarlyProgress** frames carry `contentType:"EarlyProgress"`, `messageType:"Progress"`, `isPersisted:false`, **and `addToChainOfThought:false`**.
+
+So `messageType:"Progress"` is shared by CoT and EarlyProgress and is **not** a usable discriminator — `addToChainOfThought` is the reliable one. Note the answer stream may emit a **partial fence opener** (`"````"`) as its own snapshot; dedupe bot messages by `messageId`.
 
 ### End of turn
 A `type:2` (stream item), `type:3` (completion), or `type:7` (close) ends the turn; we close the socket. Reply to `type:6` pings in the meantime.
