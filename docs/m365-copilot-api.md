@@ -423,13 +423,13 @@ Two traps for anyone else doing this:
 
 M365 Copilot has **no native `tool_calls`**. We emulate it:
 
-1. Inject tool definitions into the prompt as compact text.
-2. Instruct the model to emit a JSON object `{"tool":"name","arguments":{…}}` (a fenced ```` ```json ```` block is fine — `parseToolCalls()` strips the fence).
-3. Parse that back into OpenAI `tool_calls`. A synthetic `reply` tool lets the model return plain text in the same channel.
+1. Format tools as Markdown fenced code blocks (`packages/core/src/fenced.ts`) using **Universal Advisor Framing** ("You write the shell commands; I run them and paste the real output back to you...").
+2. The model emits single fenced code blocks (e.g. ```bash, ```read_file), eliminating JSON string-escaping friction and aligning with chat pretraining.
+3. Parse the fences back into OpenAI `tool_calls`, routing shell blocks (`SHELL_LANGS`) directly to the harness's command executor (see [`docs/tool-calling.md`](tool-calling.md)).
 
-**The catch:** with prompt-injection alone, M365 **ignores the instructions and answers in prose, or hallucinates tool *results*.** The thing that actually makes it comply is a **server-side system prompt**, delivered via a **Copilot Studio agent**.
+> **Legacy JSON format retired:** The earlier JSON object format (`{"tool":"name","arguments":{…}}`) scored 0/5 on real agentic tasks due to string escaping friction and prompt-induced confabulation ([`docs/hypotheses.md` §9](hypotheses.md)). Tool calling is now exclusively fenced Markdown with shell-routing.
 
-> Empirically, the JSON *format* (bare vs ```` ```json ```` vs ```` ```tool_call ````) barely matters — all ~3/3 compliant **with the agent on**. The agent is the lever, not the syntax.
+**The catch:** with prompt-injection alone, M365 **ignores the instructions and answers in prose, or hallucinates tool *results*.** The thing that actually makes it comply is a **server-side system prompt**, delivered via a **Copilot Studio agent**. The agent's instructions provide the anchor that prevents the model from defaulting to standard conversational chat.
 
 ### Model behaviour under tool calling (measurement traps)
 Two behaviours of the chat-tuned model distort any naïve "is it tool-calling yet?" read:
@@ -554,9 +554,15 @@ Evidence (`scripts/dataverse-bot-probe.mjs`, with a `<org>.crm4.dynamics.com/.de
 | `packages/core/src/session.ts` | Stateful `CopilotSession` (reconnect per turn, reuse ids), SignalR frame handling |
 | `packages/core/src/model.ts` | `ModelSession` — auth + agent + conversation continuity, string-in/stream-out |
 | `packages/core/src/agent.ts` | Copilot Studio agent create/publish, BAP env discovery |
+| `packages/core/src/fenced.ts` | Fenced tool definitions, Universal Advisor Framing, shell-routing (`SHELL_LANGS`), heredoc-aware parsing |
+| `packages/core/src/classifier.ts` | Dual-Engine SLM turn classifier (remote OpenAI / local Gemma 4 E2B ONNX) evaluating refusals vs deliverables |
+| `packages/core/src/auth-recovery.ts` | Degradation backoff & circuit breaker controller; distinct-conversation empty response tracking and pacing |
 | `packages/core/src/schemas.ts` | Zod schemas for SignalR frames & JWT claims |
-| `packages/proxy-lib/src/handler.ts` | OpenAI ↔ M365 translation, `SessionPool`, delta mode, tool-call parsing, one-call-per-turn, empty-response fail-fast |
-| `packages/core/src/tools.ts` | Tool-definition prompt, real-tool few-shot, `parseToolCalls` (bare + fenced, strips `confidence`/`final`) |
+| `packages/core/src/tools.ts` | Tool definitions, clause-based refusal/confabulation NLP heuristics, parameter normalization |
+| `packages/proxy-lib/src/handler.ts` | OpenAI ↔ M365 translation, `SessionPool`, priority FIFO pacing (`paceTurnVelocity`), stagger queue, shielding |
+| `packages/proxy-lib/src/persistence.ts` | Atomic state persistence (`proxy-state.json`) for governor history, stagger queue tokens, and circuit breaker |
+| `packages/proxy-lib/src/metrics.ts` | In-memory and persisted telemetry collector (turn quality, first-pass yield, pacing delay, session pool snapshots) |
+| `packages/proxy-lib/src/dashboard-html.ts` | Embedded single-page HTML5/SVG observability console served at `/dashboard` with zero external CDN dependencies |
 
 ### Reverse-engineering probe scripts (`scripts/`, read-only)
 

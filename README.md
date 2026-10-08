@@ -1,85 +1,16 @@
 # m365-copilot-proxy
 
-Use Microsoft 365 Copilot as an LLM backend for OpenAI-compatible coding agents like [pi](https://pi.dev/) and [OpenClaw](https://docs.openclaw.ai/). Wraps M365 Copilot's WebSocket/SignalR API in an OpenAI-compatible interface with tool calling support.
+Use Microsoft 365 Copilot as an LLM backend for OpenAI-compatible coding agents like [pi](https://pi.dev/) and [OpenClaw](https://docs.openclaw.ai/). Wraps M365 Copilot's WebSocket/SignalR API in an OpenAI-compatible interface with robust tool-calling support.
 
-> **Want the gory protocol details?** See [docs/m365-copilot-api.md](docs/m365-copilot-api.md) — a full write-up of M365 Copilot's undocumented WebSocket API: auth, SignalR frames, tones/models, throttling, the "Disengaged" filter, and the Copilot Studio agent trick that makes tool calling work.
+> 📖 **Looking for the protocol deep-dive?** See [docs/m365-copilot-api.md](docs/m365-copilot-api.md) for the complete reference on M365 Copilot's undocumented WebSocket API: MSAL PKCE auth, SignalR frames, tones/models, throttling, the "Disengaged" filter, and the Copilot Studio agent trick that enables tool calling. For prompt-engineering and tool compliance strategies, see [docs/prompt-engineering.md](docs/prompt-engineering.md).
 
-## How it works
+---
 
-M365 Copilot uses a SignalR WebSocket protocol, not the OpenAI API. This project translates between the two:
+## ⚡ Quick Start
 
-1. **Standalone proxy** — HTTP server with `/v1/chat/completions` and `/v1/models` endpoints. Works with any OpenAI-compatible client (pi, OpenClaw, etc.).
-2. **OpenClaw plugin** — Config generator + setup CLI for OpenClaw's provider system.
+Get up and running in minutes:
 
-### Tool calling
-
-M365 Copilot doesn't support OpenAI-style `tool_calls` natively. Instead, tools are
-emulated via a **Markdown-fence format** (the JSON `{"tool":...}` format was removed —
-it scored 0/5 on real agentic tasks; see [hypotheses §9](docs/hypotheses.md)):
-
-- Tool definitions are injected into the prompt as fenced templates inside a `<tools>` block
-- The model emits a fenced tool call — a code block whose info-string is the tool name
-  (scalar args as `key: value` header lines, one free-form body arg as the fence body,
-  `old`/`new` edits as aider-style `SEARCH/REPLACE` diffs)
-- The proxy/handler parses that and converts it to OpenAI `tool_calls` format
-- **Shell-routing (the key lever):** M365's chat-tuned model won't "act as an agent" on
-  demand but *will* reflexively write a ```` ```bash ```` block. When the toolset includes a
-  shell tool (`bash`/`shell`/`run`/`run_command`/… — any name), the proxy injects "do the
-  whole step by writing one ```` ```bash ```` block" framing and routes that block to the
-  shell tool. This exploits the one agentic behavior Microsoft's system prompt permits, and
-  is what turns 0/5 into real multi-turn loops (verified 9-tool-call bug fix).
-- **Framing — assistant tone, *not* tool-call enforcement:** prompting the model to *be* an agent
-  that "has a shell and must call tools" is refusal-prone (`unresolved_tool_refusal`; the proxy's
-  own agentic `baseline` framing is the trigger). The reliable framing addresses it as a **chat
-  assistant that writes commands the user runs** ("You write the shell commands; I run them. Do not
-  make any tool calls."). The ```` ```bash ```` fence is routed to the shell **mechanically** either
-  way, so only *elicitation* depends on the tone. `M365_ADVISOR_TONES` / the `advisor` framing
-  select this for refusal-prone tones — see [hypotheses §18](docs/hypotheses.md).
-- **Reliability comes from the Copilot Studio agent (below) + the fenced/shell framing** —
-  without the agent, M365 ignores tool instructions and answers in prose
-- **Structural Clause NLP:** Replaces brittle regexes with clause-boundary segmentation (`[Tool Anchor] + [Negation] + [Availability State]`) to intercept subtle refusals, existence claims, truncation surrenders, and shell failure deferrals.
-- **Circuit Breaker Local Shielding:** Automatically intercepts requests during thread-rate cooldowns and returns `HTTP 429` with a client-capped `Retry-After: 60` header. Enforces a 30-minute (1800s) default cooldown baseline sending zero traffic upstream so Microsoft's leaky bucket can fully recover, while standard OpenAI clients (OpenCode, Pi) auto-pause and self-heal without aborting turns. Also incorporates a 15-second in-flight stagger queue for fresh sessions (`turn === 0`) to prevent parallel dispatch drops.
-
-### Agent mode
-
-On first use, the system creates a **Copilot Studio agent** with tool-calling instructions baked into its server-side system prompt. This is done via the PowerPlatform API:
-
-1. Discovers the environment URL via the BAP API (`api.bap.microsoft.com`)
-2. Creates a bot with instructions in the Copilot Studio `minimalBots` API
-3. Publishes the bot to get a `TitleId`
-4. Uses the agent ID (`T_{titleId}.{botId}.gpt.default`) in WebSocket chat requests
-5. Caches the agent ID in `~/.config/opencode-m365/agent-id.json`
-
-### Conversation reuse & Session Isolation
-
-Each agent session reuses the same M365 conversation (same `sessionId` + `conversationId`). The WebSocket reconnects per turn but M365 maintains server-side context. The proxy's `SessionPool` isolates subagents via SHA-256 fingerprinting and session headers (`x-session-id`, `x-opencode-session`). Follow-up delta turns re-inject tool definitions so reasoning models (`DeepLeo`) never lose tool context. Output usage blocks provide estimated token counts for context window gauges.
-
-## Packages
-
-```
-@m365-copilot/core          — Shared: auth, WebSocket client, tool formatting, proxy server, agent management, session
-├── @m365-copilot/proxy     — Standalone HTTP proxy binary
-└── @m365-copilot/openclaw-plugin  — OpenClaw config generator + setup CLI + skill
-```
-
-## Setup
-
-### Prerequisites
-
-- Node.js 24+
-- pnpm 10+
-- An M365 account with Copilot access
-- A way to sign in, either:
-  - **TOTP-based MFA with the base32 secret in hand** — the automated login types the
-    6-digit code itself, so it needs the seed, not an app on your phone. See
-    [Getting the TOTP secret](#getting-the-totp-secret). This is the headless-friendly
-    option; prefer it if your tenant allows it.
-  - **or a display and 30 seconds** — set `M365_ENABLE_INTERACTIVE_APPROVAL=1` and sign
-    in by hand once. Required if your tenant has [no TOTP option](#if-your-tenant-has-no-totp-option)
-    (push-only MFA, FIDO2, Okta/Ping/Duo).
-
-### 1. Install
-
+### 1. Clone & Build
 ```sh
 git clone https://github.com/cramt/m365-copilot-proxy
 cd m365-copilot-proxy
@@ -87,10 +18,8 @@ pnpm install
 pnpm build
 ```
 
-### 2. Configure credentials
-
+### 2. Configure Credentials
 Create `~/.config/opencode-m365/secrets.json`:
-
 ```json
 {
   "email": "you@company.com",
@@ -98,98 +27,26 @@ Create `~/.config/opencode-m365/secrets.json`:
   "mfaSecret": "YOUR_TOTP_BASE32_SECRET"
 }
 ```
+*`mfaSecret` is your authenticator app's base32 seed (e.g. `JBSWY3DPEHPK3PXP`). See [Getting the TOTP secret](#getting-the-totp-secret) for how to retrieve or generate it.*
 
-`mfaSecret` is the **base32 seed** your authenticator app derives its 6-digit codes
-from — not a code itself. It looks like `JBSWY3DPEHPK3PXP`: 16–32 characters, `A`–`Z`
-and `2`–`7` only, no spaces.
+> **No TOTP option on your tenant?** (push-only MFA, FIDO2, Okta/Ping/Duo): Skip `secrets.json` and set `export M365_ENABLE_INTERACTIVE_APPROVAL=1` to complete sign-in in a visible browser window once. Tokens refresh silently thereafter. See [Interactive approval fallback](#if-your-tenant-has-no-totp-option).
 
-#### Getting the TOTP secret
-
-**Already using a password manager for TOTP? Just read it back out.** 1Password,
-Bitwarden, KeePassXC, Aegis, Ente Auth and friends all keep the seed and will show it
-on demand — open the item's one-time-password field and reveal it. You'll get either a
-bare base32 string or an `otpauth://totp/...?secret=JBSWY3DPEHPK3PXP&...` URI; in the
-second case the `secret=` parameter is the bit you want. No re-enrollment needed.
-
-**If the seed is trapped in Microsoft Authenticator, enroll a second method.** That app
-deliberately never exposes it, and Microsoft's security-info page won't re-display the
-key after enrollment either — between them that's the only case where the seed is
-genuinely unrecoverable. Enroll a fresh entry and copy it on the way past:
-
-1. Go to <https://aka.ms/mfasetup> (**My Account → Security info**).
-2. **Add sign-in method → Authenticator app**.
-3. Click **"I want to use a different authenticator app"**. This step is the one that
-   matters — the default path assumes Microsoft Authenticator and registers a
-   push-only method with no seed you can extract.
-4. At the QR-code screen, click **"Can't scan image?"**. It reveals a **Secret key** —
-   that's your base32 string.
-5. Generate a code from it to finish enrollment — `oathtool --totp -b <secret>`, or
-   paste the seed into your password manager — and enter that code.
-
-Store it somewhere that will give it back (see above) so this is a one-time chore. The
-new entry sits alongside your existing sign-in methods; you don't have to remove
-Microsoft Authenticator.
-
-#### If your tenant has no TOTP option
-
-Plenty of tenants can't do the above, and then there is no seed to extract:
-
-- the authenticator-app / software-OATH method is disabled by tenant policy;
-- MFA is push / number-matching only, FIDO2, Windows Hello, or certificate-based;
-- sign-in is federated to a third-party IdP (Okta, Ping, Duo) that owns the MFA step.
-
-The stored-credentials flow above cannot work in those cases — the automated login has
-no code to type, and no amount of configuration fixes that.
-
-**Use interactive approval instead.** Skip `secrets.json` entirely and set:
-
+### 3. Start the Proxy
 ```sh
-export M365_ENABLE_INTERACTIVE_APPROVAL=1
-m365-proxy 4141
+pnpm run proxy 4141
+# or: m365-proxy 4141
+# or: pnpm run dev
 ```
 
-A real browser window opens; you complete SSO/MFA by hand exactly as you would in
-Outlook — push, FIDO2, Okta, whatever your tenant enforces. The proxy captures the
-resulting OAuth code and from then on refreshes tokens silently from the MSAL cache,
-so the window is a **one-time cost**, not a per-run prompt. It also kicks in when
-stored credentials exist but stop working (policy change, MFA method swap).
+### 4. Connect Your Agent
 
-Contributed by [@EatonWu](https://github.com/EatonWu). Two honest caveats:
-
-- It is **opt-in on purpose.** Without the flag a headless host (systemd, CI, a second
-  PC) fails loudly instead of hanging on a window nobody can see. Set
-  `M365_NO_INTERACTIVE=1` to veto it outright.
-- The redirect capture and token exchange are the same ones the automated path uses in
-  production, but **nobody has yet run this end to end against a federated Okta/Ping/Duo
-  tenant.** If that's you, please report in
-  [#4](https://github.com/cramt/m365-copilot-proxy/issues/4) — working or not.
-
-> **Not device code.** The obvious headless alternative — `login.microsoft.com/device`
-> with a short code — is permanently dead here, not merely unimplemented. Initiation
-> returns a valid code, but redeeming it fails with `AADSTS7000218`: Entra treats
-> Microsoft's own Copilot client as confidential for that grant and demands a
-> `client_secret` only Microsoft holds. No tenant admin can grant it. Measured, with the
-> sign-in actually completed, in [§13 H13.2](docs/hypotheses.md).
-
-#### First run
-
-On first run, the system does an automated browser login (via Playwright/Chromium) to get OAuth tokens. After that, tokens refresh silently from the MSAL cache.
-
-### 3. Use with pi (or any OpenAI-compatible agent)
-
-Start the proxy:
-
-```sh
-m365-proxy 4143        # or: pnpm run proxy 4143
-```
-
-Point [pi](https://pi.dev/) at it via `~/.pi/agent/models.json`:
-
+#### Option A: [pi](https://pi.dev/)
+Add the provider to `~/.pi/agent/models.json`:
 ```json
 {
   "providers": {
     "m365": {
-      "baseUrl": "http://localhost:4143/v1",
+      "baseUrl": "http://localhost:4141/v1",
       "api": "openai-completions",
       "apiKey": "m365",
       "compat": {
@@ -198,52 +55,201 @@ Point [pi](https://pi.dev/) at it via `~/.pi/agent/models.json`:
         "supportsUsageInStreaming": false
       },
       "models": [
-        { "id": "gpt-5.5-think-deeper", "name": "M365 Copilot (GPT-5.5, recommended)" },
-        { "id": "m365-copilot", "name": "M365 Copilot (Auto)" }
+        { "id": "gpt-5.5-think-deeper", "name": "M365 Copilot (GPT-5.5 Reasoning, recommended)" },
+        { "id": "gpt-5.6-think-deeper", "name": "M365 Copilot (GPT-5.6 Reasoning)" },
+        { "id": "claude-opus-5.5", "name": "M365 Copilot (Claude Opus 5.5)" }
       ]
     }
   }
 }
 ```
-
-Then run pi (use `gpt-5.5-think-deeper` — the reliable tool-calling model — and keep the
-toolset lean; M365 "disengages" on very large tool payloads, see
-[docs/m365-copilot-api.md](docs/m365-copilot-api.md#the-disengaged-filter)):
-
+Run `pi` against the proxy (keep tools lean to stay clear of M365's Disengaged filter):
 ```sh
 pi --models "gpt-5.5-think-deeper" -p --tools read,list,edit,write "your task"
 ```
 
-This is verified working end-to-end, including multi-tool calls and real file edits.
-
-### 4. Use with OpenClaw
-
+#### Option B: [OpenClaw](https://docs.openclaw.ai/)
+Configure and launch automatically:
 ```sh
-# Configure and start in one command
+# Configure provider and start proxy in one command:
 m365-openclaw-setup --start
 
-# Or configure only, then start separately
+# Or configure provider only, then launch proxy manually:
 m365-openclaw-setup
 m365-proxy 4141
 ```
 
-The proxy uses session reuse and delta messages — follow-up turns only send new messages, saving M365 quota. New conversations are detected automatically when the message array shrinks or the first user message changes.
+#### Option C: Any OpenAI-Compatible Client
+Configure your client with:
+- **Base URL**: `http://localhost:4141/v1`
+- **API Key**: `m365` (or any string)
+- **Model**: `gpt-5.5-think-deeper` (recommended for coding/tools) or `gpt-5.6-think-deeper`
 
-### 5. Use as standalone proxy
+---
 
+## 📊 Web Dashboard & Monitoring Endpoints
+
+The proxy includes a zero-dependency real-time web interface and REST observability endpoints:
+
+### Interactive Web Dashboard (`/` or `/dashboard`)
+Visit **`http://localhost:4141/`** or **`http://localhost:4141/dashboard`** in your browser. The dashboard runs directly from the proxy binary with zero client-side dependencies:
+- **Rate Limit Meters**: Real-time gauges for fresh-session tokens, 10-minute burst turns, and 60-minute sustained volume.
+- **Turn Velocity & Wire Pacing**: Visual status of the Priority FIFO Turn Gatekeeper (`paceTurnVelocity`), including in-flight spacing and retry queue depth.
+- **Active Sessions**: Inspect currently open conversation sessions, turn counts, active models, and last-activity timestamps.
+- **Sliding-Window Quality Metrics**: Tracks clean tool executions, confabulation retries, classified prose deliverables, and upstream content refusals.
+- **Real-Time SVG Sparklines**: Visualizes request traffic, turn rate, and throttle events across rolling 1h, 6h, and 24h windows.
+- Automatically polls and updates every 2 seconds via `/api/metrics`.
+
+### Diagnostic Endpoints
+- **`GET /health`**: Returns `{"status":"ok"}`. Ideal for container readiness/liveness checks and systemd watchdog probes.
+- **`GET /api/metrics`** (also accessible at `/metrics` and `/v1/metrics`): Returns the complete `MetricsSnapshot` JSON:
+  - Supports query parameter `?range=1h` (default), `?range=6h`, or `?range=24h`.
+  - Exposes system rate limiters, active sessions, turn quality counters, bucketed time series, and lifetime totals.
+- **`GET /v1/models`**: Standard OpenAI models list with advertised `context_window` (1,000,000 tokens) and `max_output_tokens` (1,000,000 tokens) to prevent agent frameworks from pre-truncating prompts.
+
+---
+
+## 📦 Packages
+
+The repository is organized as a pnpm workspace across four TypeScript/ESM packages:
+
+| Package | Role |
+|---|---|
+| [`@m365-copilot/core`](packages/core) | Core protocol engine: MSAL PKCE auth, SignalR WebSocket client, Copilot Studio agent provisioning, fenced tool formatting, Dual-Engine SLM turn classifier, and image generation. |
+| [`@m365-copilot/proxy-lib`](packages/proxy-lib) | Framework-free Web-standard `createApp()` fetch handler, `SessionPool`, Dual-Horizon Leaky Bucket, Turn Gatekeeper, dashboard HTML/SVG generation, and atomic state persistence. |
+| [`@m365-copilot/proxy`](packages/proxy) | Standalone [Nitro](https://nitro.build/) server executable wrapper (`m365-proxy`). File-based routes, startup auth plugin, and production builds. |
+| [`@m365-copilot/openclaw-plugin`](packages/openclaw-plugin) | OpenClaw provider generator, interactive setup CLI (`m365-openclaw-setup`), and agent skill integration. |
+
+---
+
+## 🛠️ How It Works & Architecture
+
+M365 Copilot communicates over an internal SignalR WebSocket protocol, not the OpenAI REST schema. `m365-copilot-proxy` bridges the two with specialized translation layers:
+
+### 1. Tool Calling
+M365 Copilot does not support native OpenAI-style `tool_calls`. Instead, tools are emulated via a **Markdown-fence format** (legacy bare-JSON schemas were removed after scoring 0/5 on real agentic tasks; see [hypotheses §9](docs/hypotheses.md)):
+
+- **Fenced Templates (`fenced.ts`)**: Tool definitions are injected into the prompt within a `<tools>` block using code-fence examples.
+- **Mechanical Shell-Routing**: M365's chat model resists "acting as an autonomous agent" but reflexively emits ```` ```bash ```` blocks when asked for commands. When a shell tool (`bash`, `shell`, `run`, `run_command`, etc.) is present in the toolset, the proxy routes the code block directly to the client's shell tool.
+- **Universal Advisor Framing**: Rather than coercing the model with aggressive agent-identity prompts (which trigger model refusals), the proxy frames interaction as an advisor: *"You write the shell commands; I run them and paste the real output back to you..."*.
+- **Delta Turn Tool Re-Injection**: On multi-turn conversations (`turn > 0`), the proxy automatically re-injects tool definitions into `formatDeltaMessages`. M365 reasoning models (`DeepLeo`) require continuous tool context; without re-injection, follow-up turns often confabulate that tools are no longer available.
+- **Simulation Rejection**: If a model hallucinates assistant-simulated `<tool_response>` tags in its output, the proxy strips them and flushes the session context to force a clean full-history replay on the next turn.
+- **Structural Clause NLP (`tools.ts`)**: Uses clause-boundary segmentation (`[Tool Anchor] + [Negation] + [Availability State]`) to intercept subtle refusals, fake file existence claims, truncation surrenders, and shell error deferrals without tripping on filenames with dots (e.g. `test_candidate_claim.py`).
+- **Dual-Engine SLM Turn Classifier (`classifier.ts`)**: Distinguishes genuine prose deliverables (such as security audit write-ups or test failure analyses) from tool confabulations using Gemma 4 E2B with Chain-of-Thought reasoning. If `M365_CLASSIFIER_OPENAI_URL` is set, queries the remote endpoint; otherwise runs in-process via `@kessler/gemma` ONNX. Completely bypassed for tool-calling turns (~95% of requests) for 0ms overhead.
+
+### 2. Copilot Studio Agent Mode
+On first request with tools, the proxy provisions a dedicated **Copilot Studio agent** with tool-calling system instructions baked into its server-side prompt via the PowerPlatform API:
+1. Discovers environment URL via the BAP API (`api.bap.microsoft.com`).
+2. Creates a bot using Copilot Studio's `minimalBots` API.
+3. Publishes the bot to obtain a `TitleId`.
+4. Attaches the agent identifier (`T_{titleId}.{botId}.gpt.default`) via `threadLevelGptId` in WebSocket frames.
+5. **Immutable Instruction Hashing**: The bot is named `m365-tool-agent-<sha256(instructions)[:8]>`. Changing instructions creates a fresh bot while leaving previous bots intact, eliminating race conditions across multi-host environments.
+6. Caches the resolved agent ID in `~/.config/opencode-m365/agent-id.json`.
+
+### 3. Dual-Horizon Rate Limiting & Resilience
+M365 Copilot enforces two separate rate-limiting horizons on paid tenant accounts:
+
+- **Thread-Rate Protection (`PerScenarioThrottled`)**:
+  - Microsoft throttles *conversations created per unit time*, not message volume.
+  - Exceeding the rate trips an upstream `PerScenarioThrottled` completion frame and arms a 30-minute cooldown (`M365_THROTTLE_COOLDOWN_SEC = 1800`).
+  - **Protection**: A local token bucket (`M365_SESSION_BUCKET_CAPACITY = 10`, refilling every 150s) combined with a 15-second stagger queue (`M365_NEW_SESSION_SPACING_MS = 15000`) restricts fresh conversation starts (`turn === 0`) to 4/minute. Follow-up turns (`turn > 0`) bypass this queue entirely.
+- **Hourly Turn Volume Protection (`PerUserThrottled`)**:
+  - Microsoft enforces an account ceiling of ~120 turns in a 60-minute rolling window (`M365_SUSTAINED_MAX_TURNS = 120`).
+  - Tripping this limit arms a 20-minute cooldown (`M365_USER_THROTTLE_COOLDOWN_SEC = 1200`).
+  - **Protection**: A serialized Priority FIFO Turn Gatekeeper (`paceTurnVelocity`) enforces a minimum 1500ms wire pacing (`M365_MIN_TURN_SPACING_MS = 1500`) to eliminate thundering herd bursts. Short-term bursts are bounded to 35 turns per 10 minutes (`M365_BURST_MAX_TURNS = 35`, soft warning at 30). Forcing retries (`attempt > 0`) queue with priority to jump ahead of normal turns while preserving FIFO order among retries.
+- **Local Circuit Breaker Shield**:
+  - When upstream throttling (`PerScenarioThrottled` or `PerUserThrottled`) is detected, the proxy enters local cooldown (1800s or 1200s).
+  - During this window, requests are intercepted locally and return **`HTTP 429 Too Many Requests`** with a client header capped at **`Retry-After: 60`** (`M365_MAX_RETRY_AFTER_SEC = 60`).
+  - **Zero traffic is sent to Microsoft** during cooldown, letting Microsoft's token bucket fully recover while standard OpenAI clients (OpenCode, Pi) pause and automatically resume without failing the turn.
+- **Content Safety Separation vs. Confabulation**:
+  - Upstream content policy violations (`looksLikeSafetyRefusal`) fail immediately with **`HTTP 400 content_policy_refusal`** and flush session context.
+  - Unresolved tool confabulations that persist after exhausting forcing retries fail closed with **`HTTP 502 unresolved_tool_refusal`**.
+- **Bypassing Confabulation Retries (`M365_DISABLE_CONFAB_DETECTION=1`)**:
+  - With advisor framing, model confabulation drops to ~0.3% of turns while keyword checks can trigger false positives on legitimate completion prose.
+  - Setting `M365_DISABLE_CONFAB_DETECTION=1` disables proxy-level confabulation retries and 502 fails, passing prose deliverables directly through to client orchestrators.
+
+### 4. Conversation Reuse & Session Isolation
+- Each distinct client conversation maps to an isolated M365 session (`sessionId` + `conversationId`).
+- The WebSocket client reconnects per turn while M365 maintains server-side conversation history.
+- The `SessionPool` isolates concurrent agent sessions using SHA-256 fingerprinting of message history and session headers (`x-session-id`, `x-opencode-session`).
+- Follow-up turns only transmit new delta messages, conserving conversational quota.
+
+---
+
+## 🤖 Supported Models
+
+| Model ID | M365 Tone | Description |
+|---|---|---|
+| `gpt-5.6-think-deeper` / `gpt-5.6` | `Gpt_5_6_Reasoning` | GPT-5.6 reasoning — live-validated for complex agentic tasks and deep tool execution. |
+| `gpt-5.6-quick` / `gpt-5.6-chat` | `Gpt_5_6_Chat` | GPT-5.6 fast chat — live-validated on DeepLeo. |
+| `gpt-6-astra` / `gpt-6` | `Gpt_6_Astra` | Live GPT-6-named tone; routes through DeepLeo. Self-identifies as GPT-5 chat without reasoning trace — treat as a GPT-5-class chat tone. |
+| `gpt-5.5-think-deeper` | `Gpt_5_5_Reasoning` | **Recommended default for coding & tool execution** — robust compliance and high benchmark solve rate. |
+| `gpt-5.5` / `gpt-5.5-quick` | `Gpt_5_5_Chat` | GPT-5.5 fast chat. |
+| `claude-sonnet-5.5` / `claude-sonnet` / `claude` | `Claude_Sonnet` | Anthropic Claude Sonnet 4.5/5.5 via Sydney backend (agent-less path). |
+| `claude-sonnet-5` | `Claude_Sonnet_5` | Claude Sonnet 5 — live-validated on DeepLeo. |
+| `claude-sonnet-think-deeper` | `Claude_Sonnet_Reasoning` | Claude Sonnet with reasoning traces. |
+| `claude-opus-5.5` / `claude-opus` / `opus-5.5` | `Claude_Opus` | Anthropic Claude Opus 4.8 / 5.5 on DeepLeo with full tool calling capability. |
+| `m365-copilot` / `auto` | `magic` | Default auto-routing chat tone. Unreliable for tools (confabulates; proxy defaults to `gpt-5.5-think-deeper` for tool turns). |
+| `quick` | `Gpt_Quick` | Fast responses. |
+| `think-deeper` | `Gpt_Reasoning` | Slower, thorough generic reasoning tone. |
+| `gpt-5.4` / `gpt-5.4-think-deeper` / `gpt-5.4-quick` | `Gpt_5_4_*` | Legacy GPT-5.4 generation. |
+| `gpt-5.3` / `gpt-5.3-think-deeper` / `gpt-5.3-quick` | `Gpt_5_3_*` | Legacy GPT-5.3 generation. |
+| `gpt-5.2` / `gpt-5.2-think-deeper` / `gpt-5.2-quick` | `Gpt_5_2_*` | Legacy GPT-5.2 generation. |
+
+> 💡 **Model Selection Recommendation:**
+> - For agentic coding with tool execution, always specify **`gpt-5.5-think-deeper`** (or `gpt-5.6-think-deeper`). A request without a `model` parameter defaults to `gpt-5.5-think-deeper`.
+> - The default `m365-copilot` (`magic`) tone is tuned for general prose and confabulates on tool execution (~0% solve rate).
+> - Older reasoning tones (`gpt-5.2` through `gpt-5.4` `*-think-deeper`) route through DeepLeo prompt meta-analysis and can disengage under large tool payloads.
+
+---
+
+## 🔐 Authentication
+
+The proxy uses Azure MSAL with PKCE across three authentication stages:
+
+1. **Silent Refresh**: Uses cached OAuth tokens stored in `~/.config/opencode-m365/msal-cache.json`. Standard execution path; instant and headless.
+2. **Automated Login**: Uses Playwright/Chromium to automate the Entra ID login flow using credentials and TOTP seeds from `secrets.json`.
+3. **Interactive Approval**: Fallback visible browser window for complex tenant setups.
+
+Acquired token scopes:
+- `substrate.office.com/sydney/*` — M365 Copilot chat and SignalR WebSocket access.
+- `api.powerplatform.com/.default` — Copilot Studio agent provisioning.
+- `api.bap.microsoft.com/.default` — PowerPlatform environment discovery.
+
+### Getting the TOTP Secret
+
+#### From an Existing Password Manager
+If you use 1Password, Bitwarden, KeePassXC, Aegis, or Ente Auth for MFA, open the item's one-time password field and reveal the secret. You will get either a raw base32 string or an `otpauth://totp/...?secret=JBSWY3DPEHPK3PXP&...` URI; extract the `secret` value.
+
+#### Enrolling a New Method (if trapped in Microsoft Authenticator)
+Microsoft Authenticator does not display existing seeds. Enroll a parallel authenticator entry:
+1. Navigate to [https://aka.ms/mfasetup](https://aka.ms/mfasetup) (**My Account → Security info**).
+2. Select **Add sign-in method → Authenticator app**.
+3. Click **"I want to use a different authenticator app"** *(crucial: the default path enforces push notifications with no exportable seed)*.
+4. On the QR code screen, click **"Can't scan image?"**.
+5. Copy the displayed **Secret key** (your base32 seed).
+6. Verify and finish enrollment:
+   ```sh
+   oathtool --totp -b "YOUR_COPIED_SECRET"
+   ```
+   Enter the resulting 6-digit code into the Microsoft setup page to confirm.
+
+### If Your Tenant Has No TOTP Option
+If your organization enforces push notifications, FIDO2/WebAuthn hardware keys, Windows Hello, or third-party federated IdPs (Okta, Ping, Duo), automated credential login cannot run.
+
+Set `M365_ENABLE_INTERACTIVE_APPROVAL=1` and start the proxy:
 ```sh
-npx m365-proxy 4141
-# or
-pnpm run dev
+export M365_ENABLE_INTERACTIVE_APPROVAL=1
+m365-proxy 4141
 ```
+A visible browser window opens once. Complete SSO and MFA manually. The proxy intercepts the OAuth callback code, exchanges it via MSAL, and saves the tokens to `msal-cache.json`. Subsequent starts refresh silently without opening a browser window.
+- Set `M365_NO_INTERACTIVE=1` on headless servers, systemd units, or CI environments to forbid opening browser windows and fail loudly instead.
 
-Then point any OpenAI-compatible client at `http://localhost:4141/v1`.
+---
 
-### 6. Run on NixOS (systemd service)
+## ❄️ NixOS Service
 
-The proxy is a [Nitro](https://nitro.build/) service. The flake exposes a package
-(built from the workspace via [pnpm2nix](https://github.com/cramt/pnpm2nix)) and a NixOS
-module:
+The repository provides a Nix flake with an automated NixOS module:
 
 ```nix
 # flake.nix
@@ -257,11 +263,11 @@ module:
         {
           services.m365-copilot-proxy = {
             enable = true;
-            # JSON with { email, password, mfaSecret } — kept out of the Nix store,
-            # delivered via systemd LoadCredential. Manage with sops-nix/agenix.
+            # JSON containing { email, password, mfaSecret }
+            # Kept out of the Nix store, delivered via systemd LoadCredential
             secretsFile = "/run/secrets/m365-copilot.json";
             # port = 4141;          # default
-            # host = "127.0.0.1";   # default — do not expose; unauthenticated, paid account
+            # host = "127.0.0.1";   # default (unauthenticated proxy)
             # openFirewall = false;
           };
         }
@@ -271,157 +277,44 @@ module:
 }
 ```
 
-The service runs as a hardened `DynamicUser` unit. Auth state (`msal-cache.json`,
-`agent-id.json`) persists in `/var/lib/m365-copilot-proxy`; a fresh deploy self-bootstraps
-via headless login using `secretsFile` + the bundled Chromium. To run the package directly
-without NixOS: `nix run github:cramt/m365-copilot-proxy -- 4141`.
+The service runs under a hardened `DynamicUser` unit. State is stored in `/var/lib/m365-copilot-proxy`. To run the binary directly via Nix without deploying the module:
+```sh
+nix run github:cramt/m365-copilot-proxy -- 4141
+```
 
-## Available models
+---
 
-| Model ID | M365 Tone | Description |
-|---|---|---|
-| `gpt-5.6-think-deeper` / `gpt-5.6` | Gpt_5_6_Reasoning | GPT-5.6 reasoning — live-validated and capable of robust tool execution and reasoning |
-| `gpt-5.6-quick` / `gpt-5.6-chat` | Gpt_5_6_Chat | GPT-5.6 fast chat — live-validated on DeepLeo |
-| `gpt-6-astra` | Gpt_6_Astra | Live GPT-6-named tone, but self-IDs as GPT-5 chat, shows no reasoning trace, and GPT-6 isn't exposed in the M365 UI — treat as a GPT-5-class **chat** tone, **not** a reasoning upgrade ([hypotheses §18](docs/hypotheses.md)) |
-| `gpt-5.5-think-deeper` | Gpt_5_5_Reasoning | **Recommended default for agents/tool-calling** — robust tool compliance |
-| `gpt-5.5` / `gpt-5.5-quick` | Gpt_5_5_Chat | GPT-5.5 fast |
-| `m365-copilot` / `auto` | magic | Auto-routing — high-variance at tool-calling (confabulates; see below) |
-| `quick` | Gpt_Quick | Fast responses |
-| `think-deeper` | Gpt_Reasoning | Slower, more thorough |
-| `claude-sonnet-5.5` / `claude-sonnet` / `claude` | Claude_Sonnet | Real Anthropic Claude (Sonnet 5.5 in UI, agent-less path) |
-| `claude-sonnet-5` | Claude_Sonnet_5 | Claude Sonnet 5 — live-validated on DeepLeo |
-| `claude-opus-5.5` / `opus-5.5` / `claude-opus` | Claude_Opus | Real Anthropic Claude Opus 4.8 (Opus 5.5 in UI) — live-validated on DeepLeo with full tool calling |
-| `gpt-5.4` / `gpt-5.4-quick` | Gpt_5_4_* | GPT-5.4 |
-| `gpt-5.3` / `gpt-5.3-think-deeper` | Gpt_5_3_* | GPT-5.3 |
-| `gpt-5.2` / `gpt-5.2-think-deeper` | Gpt_5_2_* | GPT-5.2 |
+## 🎨 Image Generation
 
-> ✅ **For tool calling, use `gpt-5.5-think-deeper` (the default when no model is sent).**
-> The current agent + fenced/shell-routing path makes this reasoning tone robust —
-> 100% compliance and solve across prompt/toolset sizes on the bench (docs/hypotheses.md
-> §12.10/§12.11). The **default `m365-copilot` (magic) tone is *not* reliable** for
-> tools — it confabulates ("I no longer have access to the filesystem tools") and solves
-> ~0% of real tasks (§12.11); a proxy request with no `model` field already defaults to
-> `gpt-5.5-think-deeper` for this reason.
->
-> **Framing (2026-09-30):** the proxy now prefers an **assistant-tone ("advisor") framing** for
-> refusal-prone tones (`M365_ADVISOR_TONES`, default `Gpt_6_Astra,Gpt_5_6_Reasoning`). Do **not**
-> try to force tool-calling by asserting agent identity — it backfires. See [hypotheses §18](docs/hypotheses.md).
->
-> ⚠️ The **older** reasoning tones (`gpt-5.2`/`gpt-5.3`/`gpt-5.4` `*-think-deeper`, bare
-> `think-deeper`) route through M365's `DeepLeo` pipeline, which meta-analyzes the
-> injected prompt and can disengage from tools. Prefer `gpt-5.5-think-deeper`.
-> See [docs/m365-copilot-api.md](docs/m365-copilot-api.md) §5/§10.
+M365 Copilot generates images through a server-side tool. The proxy provides direct programmatic access and chat-syntax generation:
 
-## Image generation
-
-M365 Copilot generates images through a built-in server-side tool, and the core
-package exposes it as one call. The picture comes back on a `GraphicArt` frame as
-a URL (never as chat text), and the bytes sit behind a separate auth boundary —
-`generateImage()` handles both, returning the image with bytes attached:
-
+### Programmatic API
 ```ts
 import { generateImage } from "@m365-copilot/core";
 
 const [img] = await generateImage("A minimalist flat-design logo of a lighthouse, teal and white.");
-// img.data      -> Buffer (real PNG, verified end-to-end)
-// img.base64    -> same bytes, ready for an OpenAI-style b64_json response
-// img.contentType, img.size, img.orientation
+// img.data        -> Buffer (PNG binary bytes)
+// img.base64      -> Base64 string for OpenAI b64_json payloads
+// img.contentType -> "image/png"
+// img.size, img.orientation
 ```
 
-Everything the M365 web client can do is reachable — the proxy sends the same image
-optionsSets it does. Steer type and aspect with options (they nudge the prompt the
-way the GUI's meta-prompting does; the model still makes the final call):
-
+### Options & Aspect Ratios
 ```ts
-await generateImage("a lighthouse on a cliff", { orientation: "portrait" });   // landscape | portrait | square
-await generateImage("a lighthouse", { style: "icon" });                        // natural | icon | story | designer
+await generateImage("a lighthouse on a cliff", { orientation: "portrait" }); // landscape | portrait | square
+await generateImage("a lighthouse", { style: "icon" });                     // natural | icon | story | designer
 ```
 
-**You don't have to call `generateImage` at all.** Just like the web client, a plain
-chat turn draws when asked — send `"draw me an image of a green teapot"` to
-`/v1/chat/completions` (or `ModelSession.run`) with no tools and the image comes back
-embedded in the reply as a markdown data-URI. (Image gen is enabled on the agent-less
-path only, so it never competes with tool calling; set `M365_NO_IMAGE_GEN=1` to force
-pure text.)
+### Chat-Syntax Generation
+In tool-less chat mode, prompts such as `"draw me an image of a green teapot"` return images directly embedded as markdown data-URIs. (Set `M365_NO_IMAGE_GEN=1` to disable image generation in chat turns).
 
-Runs its own agent-less session. Uses the same login as chat; the artifact fetch uses
-a `designerappservice` token acquired silently from the existing cache. Protocol
-write-up: [docs/hypotheses.md §14](docs/hypotheses.md).
+> ⚠️ **Quota Warning:** Image generation draws against a separate, scarcer daily quota distinct from the ~600-message chat limit. When exhausted, `generateImage()` throws an `ImageGenerationError` with `reason: "quota_exceeded"` (mapping to HTTP 429).
 
-> **Separate, scarcer budget.** Image generation draws on its own daily quota, distinct
-> from the ~600-message conversation limit and not metered by the chat throttle — treat
-> image calls as the expensive ones. When it's exhausted, `generateImage()` throws
-> `ImageGenerationError` with `reason: "quota_exceeded"` (map it to HTTP 429); a plain
-> chat turn instead returns M365's "can't generate any more images today" message as text.
+---
 
-An OpenAI-compatible `POST /v1/images/generations` endpoint on top of this is the
-next step — the core API it needs is already in place.
+## 📈 Usage & Context-Window % in Responses
 
-## Authentication
-
-The auth flow uses Azure MSAL with PKCE:
-
-1. **Silent refresh** — cached tokens from `~/.config/opencode-m365/msal-cache.json`. The
-   normal path; costs nothing and opens nothing.
-2. **Automated login** — headless Playwright browser driving the AAD form with stored
-   credentials + a TOTP code generated from `mfaSecret`.
-3. **Interactive approval** — visible browser, human completes SSO/MFA (§13). Only when
-   `M365_ENABLE_INTERACTIVE_APPROVAL=1`, and only after step 2 is unavailable or has
-   actually failed. This is the path for tenants where no TOTP seed exists.
-
-All three redeem the code against `https://login.microsoftonline.com/common/oauth2/nativeclient`
-with PKCE. That redirect isn't a stylistic choice: the client is Microsoft's own Copilot app
-(the Sydney scopes are granted to no other), so nobody can register a loopback URI — a
-generated `http://localhost:<port>` callback is rejected with `AADSTS50011`, and the device-code
-grant demands a `client_secret` only Microsoft holds (`AADSTS7000218`). Both measured live in
-[§13](docs/hypotheses.md); don't spend probes re-deriving them.
-
-Three token scopes are acquired:
-- `substrate.office.com/sydney/*` — For M365 Copilot chat
-- `api.powerplatform.com/.default` — For Copilot Studio agent management
-- `api.bap.microsoft.com/.default` — For environment discovery
-
-## Environment variables
-
-| Variable | Description |
-|---|---|
-| `M365_DEBUG` | Set to `1` to enable debug logging to `~/.config/opencode-m365/debug.log` (truncated payloads) |
-| `M365_TRACE` | Set to `1` for full, untruncated debug logging (every WS frame/prompt/response) — implies `M365_DEBUG`. For reverse engineering. |
-| `M365_LOG_STDOUT` | Set to `1` to mirror debug lines to the proxy's stdout as well as the log file, so you can watch a run without tailing it in a second terminal. Needs `M365_DEBUG` or `M365_TRACE` — on its own it logs nothing. |
-| `M365_DUMP_FRAMES` | Set to `1` to write every WebSocket frame (both directions) to `~/.config/opencode-m365/frames/<requestId>.ndjson`. For offline diffing of new M365 fields. |
-| `M365_ALLOW_MULTI_TOOL` | Allow the model to emit multiple tool calls per turn (default: only the first is kept) |
-| `M365_INJECT_REPLY_TOOL` | Set to `1` to inject a synthetic `reply(text)` tool. Forces every turn to be a tool call, including pure-prose answers. Cleaner contract for the model, +1 tool to the prompt (watch the Disengaged threshold). Confirmed 5/5 compliance on June 9 2026 ([hypotheses §1.1](docs/hypotheses.md)). |
-| `M365_NO_CONFAB_RETRY` / `M365_CONFAB_RETRIES` | M365's chat model sometimes produces prose instead of a tool call when it should act — either confabulating an inability ("I can't access the files, please paste them") **or** claiming a completion it never did ("I've replaced the README", with no tool call). By default the proxy detects both and re-prompts forcefully **in the same conversation** (`M365_CONFAB_RETRIES`, default `1`) to force a real action. Set `M365_NO_CONFAB_RETRY=1` to disable. |
-| `M365_NO_BACKOFF` (alias `M365_NO_AUTO_REAUTH`) | Set to `1` to disable degradation backoff. By default, when empty/throttled responses span several **distinct conversations** in a short window (the thread-rate-throttle signature, [F13](docs/hypotheses.md)), the proxy **paces subsequent turns** (a jittered delay before starting new backend conversations) to let the account self-heal. This replaced the old auto-reauth: a fresh login does **not** clear this throttle (it's `oid`-keyed — [§11 H-R1](docs/hypotheses.md)) and raised our detection profile. A single long pi thread never trips the trigger. |
-| `M365_BACKOFF_THRESHOLD` / `M365_BACKOFF_WINDOW_MS` / `M365_BACKOFF_BASE_MS` / `M365_BACKOFF_MAX_MS` | Tune backoff: distinct-conversation empties to trigger (default `3`), the window they must fall in (default `120000`), the initial pacing window (default `90000`), and its escalation cap (default `600000`). |
-| `M365_THROTTLE_COOLDOWN_SEC` | Degradation cooldown window in seconds (default `1800`, i.e. 30 minutes). |
-| `M365_MAX_RETRY_AFTER_SEC` | Maximum `Retry-After` header value sent to clients (default `60`). |
-| `M365_SESSION_BUCKET_CAPACITY` | Maximum conversation burst tokens for fresh sessions (default `10`). |
-| `M365_SESSION_REFILL_MS` | Refill duration per conversation token in milliseconds (default `150000`, 2.5 minutes). |
-| `M365_NEW_SESSION_SPACING_MS` | Minimum spacing between new session (`turn === 0`) starts in milliseconds (default `15000`, i.e. 15s). |
-| `M365_BURST_MAX_TURNS` | Maximum burst turns in the 10-minute window before drain wait (default `35`). |
-| `M365_BURST_WINDOW_MS` | Burst window duration in milliseconds (default `600000`, 10 minutes). |
-| `M365_SUSTAINED_MAX_TURNS` | Maximum sustained turns across the 60-minute macro-window (default `120`). |
-| `M365_SUSTAINED_WINDOW_MS` | Sustained window duration in milliseconds (default `3600000`, 60 minutes). |
-| `M365_SUSTAINED_WARN_TURNS` | Turn threshold where progressive 5s..25s resistance begins (default `90`). |
-| `M365_CLASSIFIER_OPENAI_URL` | Base URL for remote OpenAI-compatible turn classifier (e.g. `http://gpu-host:11434/v1`). If unset, uses in-process `@kessler/gemma` E2B ONNX. |
-| `M365_CLASSIFIER_OPENAI_MODEL` | Model name requested at the remote classifier endpoint (default `gemma4:e2b`). |
-| `M365_CLASSIFIER_TIMEOUT_MS` | Max milliseconds to wait for remote GPU classifier before falling back to in-process Gemma E2B (default `10000`, i.e. 10s). |
-| `M365_CLASSIFIER_MAX_TOKENS` | Token budget for classifier reasoning and tag output (default `1000`). |
-| `M365_BROWSER_PROFILE` / `M365_LOGIN_UA` | Override the persistent browser-profile dir and the login User-Agent used for the (rare) automated interactive login. The persistent profile keeps AAD SSO/device cookies so repeat logins are silent and look like a familiar device ([§11 H-R3](docs/hypotheses.md)). |
-| `M365_ENABLE_INTERACTIVE_APPROVAL` | Set to `1` to allow a **visible** browser window for sign-in when the automated login can't work or fails — the fallback for tenants with no TOTP option (push-only MFA, FIDO2, Okta/Ping/Duo). You complete SSO/MFA by hand once; tokens refresh silently afterwards. Off by default so headless hosts fail loudly rather than hang. See [If your tenant has no TOTP option](#if-your-tenant-has-no-totp-option). |
-| `M365_NO_INTERACTIVE` | Set to `1` to hard-disable any visible browser login, overriding the flag above. For systemd/CI hosts where a window must never open. |
-| `M365_INTERACTIVE_TIMEOUT_MS` | How long to wait for you to finish the interactive sign-in (default `600000`, i.e. 10 minutes). |
-| `M365_LOGIN_LOCALE` / `M365_LOGIN_TIMEZONE` | Browser locale and timezone presented during login (defaults `en-GB` / `Europe/Copenhagen`). These are part of the anti-bot-scoring fingerprint ([§11 F25](docs/hypotheses.md)) — set them to match your own machine if AAD starts treating your automated login as a bot. |
-| `M365_CACHE_FILE` | Override MSAL token cache location |
-| `M365_SECRETS_FILE` | Override credentials file location |
-| `CHROMIUM_PATH` | Path to Chromium binary for automated login |
-
-### Usage / context-window % in responses
-
-The OpenAI `usage` block in every chat completion response now includes M365
-extension fields with the **per-conversation message quota** — the closest
-proxy we have to "context-window utilisation" since M365 hides token counts:
+M365 Copilot does not report raw token counts over WebSocket. The proxy estimates conversational usage and includes M365-specific extension fields in the standard OpenAI `usage` block:
 
 ```json
 "usage": {
@@ -444,48 +337,114 @@ proxy we have to "context-window utilisation" since M365 hides token counts:
 }
 ```
 
-`x_m365_dea_score` is M365's own "disengaged-eligible answer" classifier
-score — the closest signal to "am I about to get Disengaged?". Empirically:
-clean tool calls sit at ~1 × 10⁻⁸, prose at ~1 × 10⁻⁶, jailbreak-shaped
-prompts at ~1 × 10⁻³. Disengaged itself fires at some threshold > 2 × 10⁻³
-that we haven't yet pinpointed. Clients can monitor this to back off before
-tripping the filter.
+- **`x_m365_conversation_*`**: Tracks consumption against the hard ~600 messages per conversation ceiling.
+- **`x_m365_dea_score`**: M365's internal Disengaged-Eligibility Answer classifier score. Clean tool calls register at ~1 × 10⁻⁸, regular prose at ~1 × 10⁻⁶, and jailbreak-shaped prompts escalate to ~1 × 10⁻³. Disengagement triggers above ~2 × 10⁻³.
 
-Clients that ignore unknown extension fields keep working; curious users can
-read them. See [docs/hypotheses.md §0](docs/hypotheses.md) for the full
-findings dump and [§2](docs/hypotheses.md) for what we tried and didn't find.
+---
 
-## Config files
+## 📁 Config Files
 
-All stored in `~/.config/opencode-m365/`:
+All configuration and cache files reside in `~/.config/opencode-m365/`:
 
 | File | Description |
 |---|---|
-| `secrets.json` | Login credentials (email, password, mfaSecret) |
-| `msal-cache.json` | MSAL token cache (auto-managed) |
-| `agent-id.json` | Cached Copilot Studio agent ID |
-| `debug.log` | Debug log (when `M365_DEBUG=1`) |
+| `secrets.json` | Account credentials (`email`, `password`, `mfaSecret`). |
+| `msal-cache.json` | Azure MSAL OAuth token cache (managed automatically). |
+| `agent-id.json` | Cached Copilot Studio agent ID (`T_{titleId}.{botId}.gpt.default`). |
+| `proxy-state.json` | Persisted rate-limiter tokens, turn gatekeeper history, circuit breaker level, and metrics. |
+| `debug.log` | Debug log file (active when `M365_DEBUG=1` or `M365_TRACE=1`). |
 
-## Development
+---
+
+## ⚙️ Environment Variables Reference
+
+| Variable | Default | Description |
+|---|---|---|
+| **Logging & Diagnostics** | | |
+| `M365_DEBUG` | `0` | Enable truncated debug logging to `debug.log`. |
+| `M365_TRACE` | `0` | Enable full untruncated logging of all WebSocket frames, prompts, and completions (implies `M365_DEBUG`). |
+| `M365_LOG_STDOUT` | `0` | Mirror debug lines to stdout in addition to `debug.log`. |
+| `M365_DUMP_FRAMES` | `0` | Save raw WebSocket frames to `~/.config/opencode-m365/frames/<requestId>.ndjson`. |
+| **Tool Calling & Execution** | | |
+| `M365_ALLOW_MULTI_TOOL` | `0` | Allow models to emit multiple tool calls in a single turn. By default, only the first call is executed. |
+| `M365_INJECT_REPLY_TOOL` | `0` | Inject a synthetic `reply(text)` tool, enforcing tool-calling semantics even on prose turns. |
+| `M365_CONFAB_RETRIES` | `3` | Maximum retry re-prompts within the same conversation when the model confabulates an inability or unearned mutation claim. |
+| `M365_NO_CONFAB_RETRY` | `0` | Set to `1` to disable proxy-level confabulation forcing retries. |
+| `M365_DISABLE_CONFAB_DETECTION` | `0` | Set to `1` to bypass all proxy-level confabulation detection and terminal 502 errors, passing prose directly to orchestrators. |
+| **Degradation Backoff** | | |
+| `M365_NO_BACKOFF` | `0` | Set to `1` to disable pacing backoff on empty/throttled responses. |
+| `M365_BACKOFF_THRESHOLD` | `3` | Consecutive empty/throttled responses across distinct conversations before triggering backoff. |
+| `M365_BACKOFF_WINDOW_MS` | `120000` | Window (ms) for evaluating backoff threshold (2 minutes). |
+| `M365_BACKOFF_BASE_MS` | `90000` | Initial pacing delay (ms) for backoff (90 seconds). |
+| `M365_BACKOFF_MAX_MS` | `600000` | Maximum escalated backoff delay (ms) (10 minutes). |
+| **Circuit Breaker & Cooldowns** | | |
+| `M365_THROTTLE_COOLDOWN_SEC` | `1800` | Cooldown (seconds) when upstream `PerScenarioThrottled` is tripped (30 minutes). |
+| `M365_USER_THROTTLE_COOLDOWN_SEC` | `1200` | Cooldown (seconds) when upstream `PerUserThrottled` is tripped (20 minutes). |
+| `M365_MAX_RETRY_AFTER_SEC` | `60` | Maximum `Retry-After` header value (seconds) returned on HTTP 429 during circuit breaker shielding. |
+| **Dual-Horizon Rate Limiting & Pacing** | | |
+| `M365_SESSION_BUCKET_CAPACITY` | `10` | Maximum fresh-conversation (`turn === 0`) burst tokens. |
+| `M365_SESSION_REFILL_MS` | `150000` | Refill duration (ms) per conversation token (2.5 minutes). |
+| `M365_NEW_SESSION_SPACING_MS` | `15000` | Minimum spacing (ms) between fresh session starts (15 seconds, caps new threads at 4/min). |
+| `M365_MIN_TURN_SPACING_MS` | `1500` | Wire pacing minimum spacing (ms) between consecutive turns through the gatekeeper. |
+| `M365_BURST_MAX_TURNS` | `35` | Maximum turns allowed in the 10-minute burst window before enforced drain delay. |
+| `M365_BURST_SOFT_TURNS` | `30` | Turn threshold in 10-minute burst window where soft pacing resistance begins. |
+| `M365_BURST_WINDOW_MS` | `600000` | Burst window duration (ms) (10 minutes). |
+| `M365_SUSTAINED_MAX_TURNS` | `120` | Maximum turns allowed across the 60-minute macro-window before safety pauses. |
+| `M365_SUSTAINED_WARN_TURNS` | `90` | Turn threshold in 60-minute window where progressive 5s–25s pacing resistance begins. |
+| `M365_SUSTAINED_WINDOW_MS` | `3600000` | Sustained window duration (ms) (60 minutes). |
+| **SLM Turn Classifier** | | |
+| `M365_CLASSIFIER_OPENAI_URL` | unset | Remote OpenAI-compatible endpoint URL for turn classifier (e.g. `http://gpu-host:11434/v1`). If unset, uses in-process `@kessler/gemma` ONNX. |
+| `M365_CLASSIFIER_OPENAI_MODEL` | `gemma4:e2b` | Model name requested at remote classifier endpoint. |
+| `M365_CLASSIFIER_OPENAI_API_KEY` | unset | API key for remote classifier endpoint (falls back to `OPENAI_API_KEY`). |
+| `M365_CLASSIFIER_TIMEOUT_MS` | `10000` | Max milliseconds to wait for remote GPU classifier before falling back to local ONNX (10 seconds). |
+| `M365_CLASSIFIER_MAX_TOKENS` | `1000` | Token budget for classifier reasoning and tag output. |
+| **State & Context Limits** | | |
+| `M365_STATE_FILE` | unset | Custom path for `proxy-state.json`. |
+| `M365_DATA_DIR` | `~/.config/opencode-m365` | Base data directory for secrets, cache, and logs. |
+| `M365_CONTEXT_WINDOW` | `1000000` | Advertised `context_window` size returned on `GET /v1/models` (1M tokens). |
+| `M365_MAX_OUTPUT_TOKENS` | `1000000` | Advertised `max_output_tokens` returned on `GET /v1/models` (1M tokens). |
+| **Authentication & Browser Automation** | | |
+| `M365_ENABLE_INTERACTIVE_APPROVAL`| `0` | Allow visible browser window for manual SSO/MFA sign-in when automated login fails or is unavailable. |
+| `M365_NO_INTERACTIVE` | `0` | Hard-disable visible browser login; forces loud failure on headless hosts. |
+| `M365_INTERACTIVE_TIMEOUT_MS` | `600000` | Timeout (ms) for manual interactive approval sign-in (10 minutes). |
+| `M365_BROWSER_PROFILE` | unset | Custom persistent browser profile directory to retain AAD SSO cookies. |
+| `M365_LOGIN_UA` | unset | Custom User-Agent string for Playwright browser login. |
+| `M365_LOGIN_LOCALE` | `en-GB` | Browser locale presented during login fingerprinting. |
+| `M365_LOGIN_TIMEZONE` | `Europe/Copenhagen` | Browser timezone presented during login fingerprinting. |
+| `CHROMIUM_PATH` | unset | Path to external Chromium binary (recommended on NixOS). |
+| `M365_CACHE_FILE` | unset | Custom path for `msal-cache.json`. |
+| `M365_SECRETS_FILE` | unset | Custom path for `secrets.json`. |
+
+---
+
+## 💻 Development & Testing
 
 ```sh
 pnpm install
-pnpm build            # Build all packages
-pnpm run dev          # Start standalone proxy on :4141
-pnpm run test:unit    # Run vitest unit tests (no auth/network)
-pnpm run test:live    # Run live integration tests against M365
+pnpm build              # Build all packages via tsdown
+pnpm run dev            # Start standalone proxy on :4141 with live reload
+pnpm run test:unit      # Run unit test suite (vitest; pure offline mocks)
+pnpm run test:live      # Run live integration tests against real M365 (requires credentials)
 ```
 
-## Known limitations
+### End-to-End Live Verification
+Verify tool execution, multi-turn continuity, and agent mode inside the Nix development shell:
+```sh
+nix develop --command bash -c 'M365_DEBUG=1 node scripts/proxy-verify.mjs --agent --multiturn'
+```
 
-- **M365 "disengages" on large tool payloads** — heavy agent harnesses (e.g. opencode's ~15-tool prompt) get empty `Disengaged` responses. Keep the toolset lean (this is why [pi](https://pi.dev/) works well). A heavy harness can be trimmed to fit, though opencode in particular needs that done in the proxy rather than through its own config, and its tool count has since dropped — see [docs/m365-copilot-api.md](docs/m365-copilot-api.md#the-disengaged-filter).
-- Tool calling is emulated (prompt injection + a Copilot Studio agent), not native function calling — robust with the agent, unreliable without it
-- The `think-deeper` / `*_Reasoning` models take 10-30s per response
-- Hard quota of ~600 messages **per conversation** (mitigated by session reuse + delta sends)
-- Streaming: **tool-less** responses stream incrementally (deltas forwarded as they arrive). **Tool-calling** turns are still buffered server-side — the raw text has to be parsed for tool-call fences before it can be emitted — so those arrive as a single chunk at the end (with an immediate HTTP 200 + heartbeats so the client never times out waiting). Rate limit shielding returns HTTP 429 upfront before streaming commits HTTP 200.
+---
 
-## License
+## ⚠️ Known Limitations
 
-[MIT](LICENSE). Use at your own risk — this speaks to Microsoft's API with your own
-credentials, on your own account, and that's between you and your tenant's
-acceptable-use policy.
+- **Disengaged Filter on Large Toolsets**: M365 Copilot's server-side safety filter disengages when prompted with excessive tool definitions. Keep client toolsets lean (e.g. 4–6 core tools like `read`, `list`, `edit`, `write`, `bash`).
+- **Emulated Tool Calling**: Function calling is prompt-emulated via fenced blocks and a Copilot Studio bot rather than native engine tool calling.
+- **Reasoning Latency**: Thinking models (`gpt-5.5-think-deeper`, `gpt-5.6-think-deeper`) require 10–30 seconds per turn for deep reasoning traces.
+- **Per-Conversation Quota**: Hard limit of ~600 messages per conversation (mitigated by session reuse and delta message sending).
+- **Tool-Call Streaming Buffering**: Responses without tools stream tokens in real-time. Turns with tool calls are buffered server-side to parse and validate markdown fence syntax before emitting OpenAI-compliant tool-call chunks. Heartbeats are sent to keep client connections active.
+
+---
+
+## 📄 License
+
+[MIT](LICENSE). Use at your own risk. This project communicates with Microsoft's undocumented APIs using your own credentials and account. You are responsible for compliance with your tenant's terms of service and acceptable use policies.

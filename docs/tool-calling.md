@@ -36,14 +36,21 @@ what turns 0/5 into real multi-turn loops. See [hypotheses §9 F12](./hypotheses
 
 The contract is enforced at three layers:
 
-### 1. System Prompt (packages/core/src/tools.ts)
+### 1. System Prompt (packages/core/src/fenced.ts)
 
-`formatFencedToolDefinitions()` injects the contract into every tool-enabled request:
-- "Performing the task with tools is your **PRIMARY JOB**. Answering the user in prose is, and always will be, SECONDARY."
-- A fenced block is an **ACTION the runtime executes**, not an example/illustration.
-- **Shell-first framing** when a shell tool is present: "do the whole step by writing ONE ` ```bash ` block" (heredocs to create, `sed` to edit, `cat`/`ls`/`grep` to inspect), plus **anti-confabulation** ("you've run nothing yet — never claim commands return no output; your FIRST output is a ` ```bash ` block"). This framing is what made it work through real pi (hypotheses §9 F14).
-- "**Never claim success** (`✅`/`SUCCESS`/`Done`) unless a `<tool_response>` proving it already appears above" — M365 loves to declare victory before the build runs.
-- "When you do give the final answer, **no preamble/sign-off**".
+`formatFencedToolDefinitions()` injects the **Universal Advisor Framing** prompt into every tool-enabled request:
+
+```text
+You write the shell commands; I run them and paste the real output back to you. Do not make any tool calls and do not try to run anything yourself.
+
+To carry out a step, reply with a single fenced code block opened with the word bash or shell, containing the commands — create or overwrite files with `cat > name <<'EOF' … EOF` heredocs, edit files in place with `sed -i`, inspect with `cat`/`ls`/`grep`, run code with the available interpreters. Put all commands you want to run for this step into that single block — do not split them across multiple code fences. Put nothing before the fence. I run that block and paste its output back; read it, think, then write the next script. Work one block at a time until the task is complete.
+
+You have not run anything yet and have no results. Never invent or assume a command's output, never say the files are missing or that you cannot access them, and never ask me to paste them. Never reply that you cannot run commands, that the shell is unavailable, or that you cannot read the files — you are not being asked to run anything; you only write the commands. Emit exactly one fenced block per reply — never multiple fences — then stop and wait for my output.
+
+When the task is complete and no further command is needed, reply in plain language with the final answer only — no code fence, no preamble.
+```
+
+Followed by the rendered `<tools>` definitions block and the platform-specific note:
 - **Host-platform note** (`hostPlatformNote`, Windows only): every framing variant above
   teaches POSIX idioms *by name* — heredocs, `sed -i`, `ls`/`grep` — so on Windows the
   prompt instructs the model, on every turn, to emit commands the host cannot run. The note
@@ -91,18 +98,24 @@ prompt is tuned. The layers, in handler order:
   canned responses), the proxy fast-fails immediately with **HTTP 400 `content_policy_refusal`**
   and resets the session context (`session.reset()`). Unlike confabulations, safety refusals are
   never retried.
+- **Disabling Proxy Confabulation Detection (`M365_DISABLE_CONFAB_DETECTION=1`):** With Universal Advisor
+  Framing, models confabulate on only ~0.3% of turns (4/1,306 in production) while keyword regexes cause an
+  85.9% false positive rate (55/64 flagged turns) on legitimate technical completion prose (e.g. `### Task Complete`
+  reports, audit verdicts, and test failure diagnostics). Setting `M365_DISABLE_CONFAB_DETECTION=1` bypasses
+  proxy-level confabulation forcing retries and terminal 502 fails, returning deliverable prose immediately with
+  HTTP 200 and delegating retry decisions to client orchestrators (Pi, OpenCode).
 - **Structural Clause NLP Confabulation & Refusal Detection** (`hasClauseRefusal`): replaces
   brittle linear regexes with clause-boundary segmentation (`[Tool Anchor] + [Negation] + [Availability State]`).
   Catches transitive provision verbs (`this interface does not expose tools`), tool existence claims
   (`no apply_patch binary exists`), truncation surrenders, and shell diagnosis deferrals (`status is
   a read-only variable; next execution must replace with rc`) without splitting on `.py` filenames.
-- **Forced Confabulation & Hallucination Retries:** Stochastic turn-1 claims that tools or files
-  cannot be accessed trigger automated in-conversation re-prompting (up to `M365_CONFAB_RETRIES`,
-  default 3).
-- **Fail-Closed Unresolved Tool Refusal:** If tool confabulation persists after all forcing retries
-  are exhausted without any tool calls emitted, the proxy fails closed with **HTTP 502
-  `unresolved_tool_refusal`** (and flushes session context), rather than passing unearned prose
-  claims through to the agent.
+- **Forced Confabulation & Hallucination Retries:** When confabulation detection is active, stochastic
+  turn-1 claims that tools or files cannot be accessed trigger automated in-conversation re-prompting
+  (up to `M365_CONFAB_RETRIES`, default 3).
+- **Fail-Closed Unresolved Tool Refusal (Terminal HTTP 502):** If tool confabulation persists after all
+  forcing retries are exhausted without any tool calls emitted (when confabulation detection is active), the
+  proxy fails closed with **HTTP 502 `unresolved_tool_refusal`** (and flushes session context), rather than
+  passing unearned prose claims through to the agent.
 - **Hallucinated-completion retry** (`hasClauseHallucination`): if the model CLAIMS a file mutation
   ("I've replaced the README") with **no tool call all conversation**, force a real write. Gated on
   `!everActed`, so it won't misfire on a genuine post-write summary.
@@ -126,11 +139,11 @@ prompt is tuned. The layers, in handler order:
   starts at 4 per minute to avoid burst thread-rate throttling across parallel workers or subagents,
   while follow-up turns (`turn > 0`) proceed unthrottled without delay.
 - **Circuit Breaker Local Shielding & HTTP 429 Rate Limiting:** When upstream throttling
-  (`PerScenarioThrottled`) or repeated empties across **distinct conversations** are detected, the proxy
-  arms a 30-minute (1800s) default cooldown (`M365_THROTTLE_COOLDOWN_SEC = 1800`). While active, the
-  proxy returns **`HTTP 429 Too Many Requests`** with a client header capped at **`Retry-After: 60`**
-  (`M365_MAX_RETRY_AFTER_SEC = 60`), sending **zero traffic to Microsoft** so the upstream token bucket
-  recharges. Standard OpenAI clients (OpenCode, Pi) auto-pause and loop their retry timers cleanly
+  (`PerScenarioThrottled` or `PerUserThrottled`) or repeated empties across **distinct conversations** are detected,
+  the proxy arms a cooldown (1800s default for scenario throttling, 1200s for user throttling). While active,
+  the proxy intercepts requests locally and returns **`HTTP 429 Too Many Requests`** with a client header capped
+  at **`Retry-After: 60`** (`M365_MAX_RETRY_AFTER_SEC = 60`), sending **zero traffic to Microsoft** so the upstream
+  token bucket recharges. Standard OpenAI clients (OpenCode, Pi) auto-pause and loop their retry timers cleanly
   without aborting the turn.
 
 > The JSON tool format and the few-shot block were **removed** this cycle (0/5 on real

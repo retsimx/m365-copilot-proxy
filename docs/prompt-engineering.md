@@ -101,38 +101,34 @@ These are what actually move compliance. In rough order of importance:
 - **Bench ≠ pi.** The bench's short prompt is more compliant than pi's polished one; a
   bench win can still confab turn-1 under real pi. Confirm winners live. ([hyp F14].)
 
-## The framing-variant registry (how to A/B strategies)
+## The framing-variant registry & consolidation to Universal Advisor Framing
 
-The per-request `<tools>` framing is the **live, no-reprovision lever**. Strategies are
-registered in `packages/core/src/fenced.ts` (`FRAMING_VARIANTS`) and selected per-request:
+### Research evaluation phase (June–September 2026)
 
-- `M365_FRAMING_VARIANT=<name>` (env), or
-- `M365_FRAMING_FILE=<path>` → first line of the file names the active variant, so **one
-  long-lived proxy switches strategy per request** without a restart (used by the sweep).
+During the research evaluation phase, the per-request `<tools>` framing was treated as a live, no-reprovision lever. A 10-variant registry was maintained in `packages/core/src/fenced.ts` (`FRAMING_VARIANTS`) to compare strategies on the bench:
+- Strategies evaluated: `baseline`, `minimal`, `recency`, `fewshot`, `proof_demand`, `persona`, `react`, `negative`, `terse`, and `reply_tool` (synthetic `reply()` tool).
+- Selected per-request via `M365_FRAMING_VARIANT=<name>` or `M365_FRAMING_FILE=<path>` for no-restart A/B bench sweeps (`scripts/bench/sweep2.sh`).
 
-Current strategies: `baseline` (shipped default, unchanged), `minimal`, `recency`,
-`fewshot`, `proof_demand`, `persona`, `react`, `negative`, `terse`, and `reply_tool`
-(synthetic `reply()` tool; also `M365_INJECT_REPLY_TOOL=1`).
+### Consolidation to Universal Advisor Framing (`fenced.ts`)
 
-**Run a sweep** (persistent proxy + control file; sequential, generously spaced):
+Following empirical benchmarks and live coding agent evaluations, the codebase has since **consolidated onto Universal Advisor Framing** (`formatAdvisorPrompt` in `packages/core/src/fenced.ts`, where `isAdvisorTone() === true` unconditionally across all model tones).
 
-```sh
-# 1. one persistent proxy pointed at the control file
-M365_FRAMING_FILE=/tmp/m365-framing M365_DEBUG=1 node packages/proxy/bin/m365-proxy.mjs 4141 &
-# 2. sweep all strategies × discriminating tasks, rotated order, big cooldowns
-COOLDOWN=45 BLOCK_COOLDOWN=60 bash scripts/bench/sweep2.sh
-# 3. aggregate into a strategy × task matrix + leaderboard
-node scripts/bench/analyze-sweep.mjs s2
-```
+Advisor framing inverts the prompting contract from autonomous agency to an advisory role:
+> *"You write the shell commands; I run them and paste the real output back to you. Do not make any tool calls and do not try to run anything yourself..."*
+
+By directing the model to emit a single ```bash or ```shell block per turn while the proxy executes the block and feeds the real output back, advisor framing matches the chat model's pretraining and completely eliminates JSON string-escaping overhead and agentic hesitation.
+
+### Production findings & confabulation bypass (`docs/hypotheses.md` §21)
+
+As documented in [`docs/hypotheses.md` §21](./hypotheses.md#21-october-8-2026--production-analysis-advisor-framing-renders-proxy-confabulation-machinery-obsolete-m365_disable_confab_detection-), long-term production telemetry across 1,306 production turns under universal advisor framing revealed:
+1. **Confabulations dropped to 0.3% (4/1,306 turns):** The model emitted real tool calls on 84.9% of turns (1,109 turns) and clean prose deliverables on 15.1% (197 turns). Genuine operational refusals / container confabulations were virtually extinct.
+2. **Regex false positives reached 85.9% (55/64 flagged turns):** Because confabulations became negligible, the proxy's internal keyword regex heuristics (`hasClauseRefusal` in `packages/core/src/tools.ts`) misidentified normal technical words in engineering deliverables (`binary`, `execution`, `available`, `run`) as refusals (e.g. in test diagnostics, review verdicts, and `### Task Complete` reports).
+3. **Counterproductive retry loops:** Flagged turns were forced into 3–10 turn retry loops, discarding valid deliverable prose, burning conversational turn quota, and tripping upstream pacing limits.
+
+**Resolution:** Shipped **`M365_DISABLE_CONFAB_DETECTION=1`**, allowing prose deliverables through untouched to client orchestrators (such as Pi or OpenCode) which natively handle model retries, while preserving safety refusal fast-fails (HTTP 400 `content_policy_refusal`).
 
 ## Results
 
-### June 24 2026 — 10-strategy framing sweep — ⏳ IN PROGRESS
+### Framing sweep outcome & production consolidation
 
-First head-to-head of all 10 strategies on the unfakeable tasks (`fix-bug`,
-`find-needle`, `edit-config`), n=1, sequential with 45s/60s cooldowns. Scorecard
-(strategy × task matrix + leaderboard) to be filled in from
-`scripts/bench/analyze-sweep.mjs s2` once the run completes, then the winner
-confirmed with `--repeat` and validated through real pi.
-
-_Update this section with the matrix, the conclusion, and the chosen direction._
+The framing sweeps demonstrated that prompt wordsmithing and synthetic reply tools were inferior to shell-routing combined with Universal Advisor Framing (`formatAdvisorPrompt`). Across multi-turn coding benchmarks and production sessions, advisor framing eliminated the turn-1 hesitation reflex and sustained long agentic loops. See [`docs/hypotheses.md` §21](./hypotheses.md#21-october-8-2026--production-analysis-advisor-framing-renders-proxy-confabulation-machinery-obsolete-m365_disable_confab_detection-) for comprehensive empirical metrics and breakdown.
