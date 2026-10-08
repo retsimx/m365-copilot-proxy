@@ -2820,3 +2820,46 @@ Updated in `MODEL_TONES` and `getToneForModel` (`packages/core/src/copilot.ts`):
 - `claude-sonnet-5.5`, `sonnet-5.5`, `claude-5.5-sonnet`, `claude-sonnet`, and `claude` map to `Claude_Sonnet`.
 - `claude-opus-5.5`, `opus-5.5`, `claude-5.5-opus`, and `claude-opus` map to `Claude_Opus`.
 
+---
+
+## 21. October 8 2026 — Production Analysis: Advisor Framing Renders Proxy Confabulation Machinery Obsolete (`M365_DISABLE_CONFAB_DETECTION`) 🟢
+
+**Headline.** Across 1,306 production turns logged on `10.0.1.15` under universal `advisor` framing, models confabulated or refused on only **0.3% of turns (4/1,306)**. However, the proxy's internal confabulation/refusal machinery generated **55 false positives (an 85.9% error rate)** on legitimate prose deliverables (task completion reports, audit findings, test diagnostics), because keyword regexes in `hasClauseRefusal` matched common engineering words like `binary`, `available`, and `run`, short-circuiting the SLM classifier. Discarding the prose and injecting force prompts triggered 3–10 turn retry loops that wasted conversational quota and pacing capacity. Shipped `M365_DISABLE_CONFAB_DETECTION=1` to allow prose deliverables through untouched to the client orchestrator.
+
+### Empirical Breakdown (1,306 Production Turns, Oct 7–8 2026)
+
+- **Total Turn Requests:** 1,306
+- **Tool-Calling Turns (`hasToolCalls=true`):** 1,109 (84.9%)
+- **Prose / No-Tool Turns (`hasToolCalls=false`):** 197 (15.1%)
+  - Clean deliverables passed on 1st attempt: 133 (67.5% of prose turns)
+  - Flagged by proxy and forced to retry: 64 (32.5% of prose turns)
+
+### Analysis of the 64 Flagged Turns
+
+1. **False Positives (55 turns, 85.9%):**
+   - 38 Task Complete summaries (`### Task Complete: ...`, `Status: SUCCESS`, files created on disk).
+   - 9 Review / Audit verdicts (`STATUS: BLOCKED`, `VERDICTS: ...`).
+   - 5 Multi-fence tool intents downgraded by `isProseDocument`.
+   - 3 Brainstorm architecture write-ups.
+2. **Harness-Induced External Permission Surrenders (5 turns, 7.8%):**
+   - Model reacted to client-side `cp`/`cat` permission denials on external directories.
+3. **Genuine Spontaneous Model Confabulations (4 turns, 0.3% of all traffic):**
+   - Model claimed to be in an isolated container without `/home/lewis` and asked user to paste contents.
+
+### Root Cause: Keyword Regex Short-Circuiting
+
+In `handler.ts`:
+```typescript
+(truncationSurrender || looksLikeConfabulation(parsed.textContent) || (await classifyTurnResponse(parsed.textContent)) === "REFUSAL")
+```
+The clause-based regex in `tools.ts` (`hasClauseRefusal`) checked co-occurrence of `toolWords` (`binary`, `execution`, `filesystem`), `negWords` (`no`, `not`), and `availWords`/`accessActionWords` (`available`, `run`). In technical completion summaries (e.g. `"...; no binary prefix fixture available for live run"`), this evaluated to `true`, short-circuiting before the Gemma 4 SLM on `10.0.1.16` was ever queried (which in live verification classified the text as `DELIVERABLE`).
+
+### Shipped Resolution
+
+Added `M365_DISABLE_CONFAB_DETECTION=1`:
+- Bypasses confabulation forcing retries and terminal 502 `unresolved_tool_refusal` fails.
+- Bypasses session context resets on deliverable prose.
+- Preserves upstream safety refusals (`looksLikeSafetyRefusal` fast-fails HTTP 400), simulation stripping (`<tool_response>` tags), and remote artifact protections.
+- Client-side agent orchestrators (Pi, OpenCode) natively inspect and resume on model errors without proxy interference.
+
+

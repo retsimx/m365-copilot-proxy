@@ -1087,9 +1087,11 @@ export async function handleChatCompletion(
     const everActed = (body.messages ?? []).some(
       (m) => m.role === "assistant" && Array.isArray(m.tool_calls) && m.tool_calls.length > 0,
     );
+    const disableConfabDetection = process.env.M365_DISABLE_CONFAB_DETECTION === "1";
     for (let attempt = 0; attempt < maxConfabRetries && !parsed.hasToolCalls; attempt++) {
-      const truncationSurrender = looksLikeTruncationSurrender(parsed.textContent);
+      const truncationSurrender = !disableConfabDetection && looksLikeTruncationSurrender(parsed.textContent);
       const isRefusal =
+        !disableConfabDetection &&
         hasTools &&
         !parsed.hasToolCalls &&
         Boolean(parsed.textContent) &&
@@ -1150,6 +1152,7 @@ export async function handleChatCompletion(
     }
 
     if (
+      !disableConfabDetection &&
       !parsed.hasToolCalls &&
       hasTools &&
       (looksLikeConfabulation(parsed.textContent) || (await classifyTurnResponse(parsed.textContent)) === "REFUSAL")
@@ -1220,7 +1223,7 @@ export async function handleChatCompletion(
     // of continuing from a dirty delta state.
     if (
       /<tool_response\b/i.test(fullText) ||
-      (hasTools && !parsed.hasToolCalls && (looksLikeConfabulation(fullText) || (await classifyTurnResponse(fullText)) === "REFUSAL"))
+      (!disableConfabDetection && hasTools && !parsed.hasToolCalls && (looksLikeConfabulation(fullText) || (await classifyTurnResponse(fullText)) === "REFUSAL"))
     ) {
       log.info("Contaminated simulation or confabulation detected — resetting session state to force clean full history on next turn");
       conv.session.reset();

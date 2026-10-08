@@ -249,6 +249,48 @@ describe("Handler Degradation Circuit Breaker & 429 Retry-After Shielding", () =
     expect(runSpy).toHaveBeenCalledTimes(4);
   }, 15000);
 
+  it("bypasses confabulation retries and 502 error when M365_DISABLE_CONFAB_DETECTION is 1", async () => {
+    process.env.M365_DISABLE_CONFAB_DETECTION = "1";
+    try {
+      vi.spyOn(core, "isDegradationBackoff").mockReturnValue(false);
+      vi.spyOn(core, "classifyTurnResponse").mockResolvedValue("REFUSAL");
+
+      const refusalText = "I can't generate or verify the requested file because file-generation capabilities are disabled in this session.";
+      const runSpy = vi.spyOn(core.ModelSession.prototype, "run").mockResolvedValue({
+        [Symbol.asyncIterator]: async function* () {},
+        fullText: refusalText,
+        hasContent: true,
+        throttle: { current: 1, max: 600 },
+        scores: null,
+        turnCount: 1,
+      } as any);
+
+      const pool = new SessionPool();
+      const body = {
+        model: "gpt-5.5-think-deeper",
+        messages: [{ role: "user" as const, content: "Run the tests" }],
+        tools: [
+          {
+            type: "function" as const,
+            function: { name: "bash", parameters: { type: "object", properties: { command: { type: "string" } } } },
+          },
+        ],
+        stream: false,
+      };
+
+      const response = await handleChatCompletion(body, pool);
+
+      expect(response.status).toBe(200);
+      const json = await response.json() as any;
+      expect(json.choices[0].message.content).toBe(refusalText);
+      expect(json.choices[0].message.tool_calls).toBeUndefined();
+      // Only 1 run, no retries
+      expect(runSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      delete process.env.M365_DISABLE_CONFAB_DETECTION;
+    }
+  });
+
   it("fails fast with HTTP 429 when copilotStream.isThrottled is true, arming degradation backoff and performing no retries", async () => {
     vi.spyOn(core, "isDegradationBackoff").mockReturnValue(false);
     const triggerSpy = vi.spyOn(core, "triggerDegradationBackoff").mockImplementation(() => {});

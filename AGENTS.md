@@ -229,6 +229,12 @@ pnpm test:live      # M365_LIVE=1; live tests that hit real M365 (uses quota)
   (`M365_CLASSIFIER_TIMEOUT_MS`); otherwise seamlessly falls back to in-process `@kessler/gemma`
   ONNX execution. Bypasses completely for tool-calling turns (~95% of traffic has 0ms overhead). Deliverables
   immediately return HTTP 200 without retrying, protecting conversational turn quotas.
+- **Disabling Proxy Confabulation Detection (`M365_DISABLE_CONFAB_DETECTION=1`):** With modern advisor
+  framing, models confabulate on only ~0.3% of turns (4/1306 in prod) while keyword regexes cause ~86% false
+  positives on legitimate completion prose, triggering expensive retry loops. Setting `M365_DISABLE_CONFAB_DETECTION=1`
+  bypasses proxy-level confabulation forcing retries and 502 fails, allowing all prose deliverables through cleanly
+  to client orchestrators (which handle retries natively). Content policy refusals (`looksLikeSafetyRefusal`) still
+  fast-fail 400.
 
 
 ## Verifying changes end-to-end
