@@ -62,8 +62,21 @@ describe("generateOpenClawConfig", () => {
 
     const models = config.models.providers.m365.models;
     expect(models.find((m) => m.id === "gpt-5.6-think-deeper")?.reasoning).toBe(true);
+    expect(models.find((m) => m.id === "gpt-5.5-think-deeper")?.reasoning).toBe(true);
+    expect(models.find((m) => m.id === "claude-sonnet-think-deeper")?.reasoning).toBe(true);
     expect(models.find((m) => m.id === "think-deeper")?.reasoning).toBe(true);
     expect(models.find((m) => m.id === "quick")?.reasoning).toBe(false);
+    expect(models.find((m) => m.id === "gpt-5.5")?.reasoning).toBe(false);
+
+    expect(models.find((m) => m.id === "gpt-5.5-think-deeper")?.name).toBe(
+      "GPT-5.5 Think Deeper (DeepLeo reasoning)",
+    );
+    expect(models.find((m) => m.id === "gpt-5.5")?.name).toBe("GPT-5.5 (DeepLeo chat)");
+    expect(models.find((m) => m.id === "gpt-6-astra")?.name).toBe("GPT-6 Astra (DeepLeo chat)");
+    expect(models.find((m) => m.id === "claude-opus-5.5")?.name).toBe("Claude Opus 5.5 (DeepLeo)");
+    expect(models.find((m) => m.id === "claude-sonnet-think-deeper")?.name).toBe(
+      "Claude Sonnet Think Deeper (DeepLeo reasoning)",
+    );
   });
 });
 

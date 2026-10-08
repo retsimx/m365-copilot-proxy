@@ -45,6 +45,11 @@ const MODEL_DISPLAY_NAMES: Record<string, string> = {
   "auto": "M365 Auto",
   "quick": "GPT Quick",
   "think-deeper": "GPT Think Deeper",
+  "gpt-5.5-think-deeper": "GPT-5.5 Think Deeper (DeepLeo reasoning)",
+  "gpt-5.5": "GPT-5.5 (DeepLeo chat)",
+  "gpt-6-astra": "GPT-6 Astra (DeepLeo chat)",
+  "claude-opus-5.5": "Claude Opus 5.5 (DeepLeo)",
+  "claude-sonnet-think-deeper": "Claude Sonnet Think Deeper (DeepLeo reasoning)",
   "gpt-5.4": "GPT-5.4 Think Deeper",
   "gpt-5.4-quick": "GPT-5.4 Quick",
   "gpt-5.4-think-deeper": "GPT-5.4 Think Deeper",
@@ -57,7 +62,12 @@ const MODEL_DISPLAY_NAMES: Record<string, string> = {
 };
 
 const REASONING_MODELS = new Set([
+  "gpt-5.6",
   "gpt-5.6-think-deeper",
+  "gpt-5.6-reasoning",
+  "5.6",
+  "gpt-5.5-think-deeper",
+  "claude-sonnet-think-deeper",
   "think-deeper",
   "gpt-5.4", "gpt-5.4-think-deeper",
   "gpt-5.3-think-deeper",

@@ -13,12 +13,24 @@ This skill configures OpenClaw to use Microsoft 365 Copilot as the LLM backend t
 
 The M365 Copilot proxy translates OpenAI-format chat completion requests into M365 Copilot WebSocket calls. It supports:
 
-- **All M365 Copilot models**: m365-copilot, quick, think-deeper, gpt-5.4, gpt-5.3, gpt-5.2 (with quick/reasoning variants)
+- **All M365 Copilot models**: GPT-5.6, GPT-5.5, GPT-6 Astra, Claude Sonnet 5.5, Claude Opus 5.5, legacy GPT-5.4/5.3/5.2 (with quick/reasoning variants), and generic modes (`m365-copilot`, `quick`, `think-deeper`)
 - **Tool calling**: Automatic translation of OpenAI tool_call format through prompt injection + fenced code block parsing
 - **Agent mode**: Uses a Copilot Studio agent for server-side system prompt control
 - **Streaming**: Full SSE streaming support
 - **Session reuse**: Conversations share a single M365 session, saving quota (600 msg limit per conversation)
 - **Delta messages**: Follow-up turns only send new messages, not the full history
+
+## Supported Models
+
+OpenClaw can select any configured M365 Copilot model alias (`m365/<model-id>`):
+
+- **GPT-5.5**: `m365/gpt-5.5-think-deeper` (recommended for coding/tool calling with DeepLeo reasoning), `m365/gpt-5.5` (chat)
+- **GPT-5.6**: `m365/gpt-5.6-think-deeper` / `m365/gpt-5.6` (reasoning), `m365/gpt-5.6-quick` (chat)
+- **GPT-6 Astra**: `m365/gpt-6-astra` (DeepLeo chat)
+- **Claude Sonnet 5.5**: `m365/claude-sonnet-5.5`, `m365/claude-sonnet-think-deeper` (reasoning)
+- **Claude Opus 5.5**: `m365/claude-opus-5.5`
+- **Default & Generic**: `m365/m365-copilot` (Auto), `m365/quick`, `m365/think-deeper`
+- **Legacy Models**: `gpt-5.4`, `gpt-5.3`, `gpt-5.2` (with quick and think-deeper variants)
 
 ## Setup
 
