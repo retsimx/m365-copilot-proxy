@@ -150,6 +150,69 @@ describe("parseFencedToolCalls", () => {
     expect(leftover).toContain("inventory and size all required inputs");
   });
 
+  // Regression: exact live shape from a verification turn — prose with the opening fence
+  // glued straight on (`…contracts.```bash`) and no blank line.
+  it("parses the glued opener on a verification turn (prose.```bash)", () => {
+    const text = [
+      "I'll verify structural conformance and inspect the live model/migration conventions behind the highest-risk contracts.```bash",
+      "cd /home/lewis/Projects/cbc/cbcflow-portal",
+      "printf '%s\\n' '=== REQUIRED SECTION AUDIT ==='",
+      "```",
+    ].join("\n");
+    const { calls, leftover } = parseFencedToolCalls(text, specs);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].function.name).toBe("bash");
+    expect(leftover).toContain("verify structural conformance");
+  });
+
+  // Same glued opener, but the block is never closed (no closing fence at all).
+  it("parses a glued opener whose block is unterminated (EOF)", () => {
+    const text = [
+      "I'll verify structural conformance and inspect the live conventions.```bash",
+      "cd /home/lewis/Projects/cbc/cbcflow-portal",
+      "grep -RnsE 'class Analysis' src/apps/registry/models",
+    ].join("\n");
+    const { calls } = parseFencedToolCalls(text, specs);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].function.name).toBe("bash");
+    expect(JSON.parse(calls[0].function.arguments).command).toContain("grep -RnsE");
+  });
+
+  // Regression: M365 escapes `]:` as `\]：`... i.e. injects a backslash before `]` when it
+  // looks like a Markdown link reference (`…]:`). The harness ran it literally — bash
+  // "bad substitution", Python "unexpected character after line continuation character".
+  // Live shapes from the remediation consistency-check turns.
+  it("unescapes M365's link-ref escape `\\]:` -> `]:` in a bash body", () => {
+    const text = [
+      "```bash",
+      'for f in "${files[@\\]:1}"; do test -s "$f"; done',
+      "```",
+    ].join("\n");
+    const { calls } = parseFencedToolCalls(text, specs);
+    expect(calls).toHaveLength(1);
+    expect(JSON.parse(calls[0].function.arguments).command).toBe(
+      'for f in "${files[@]:1}"; do test -s "$f"; done',
+    );
+  });
+
+  it("unescapes `\\]:` in a Python dict body", () => {
+    const text = [
+      "```bash",
+      'python3 -c "ids={f["key"\\]:f"CF-{i}" for i,f in enumerate(F,1)}"',
+      "```",
+    ].join("\n");
+    const { calls } = parseFencedToolCalls(text, specs);
+    expect(JSON.parse(calls[0].function.arguments).command).toBe(
+      'python3 -c "ids={f["key"]:f"CF-{i}" for i,f in enumerate(F,1)}"',
+    );
+  });
+
+  it("leaves a legitimate `\\]` (no colon) untouched, e.g. a regex class", () => {
+    const text = ["```bash", "grep -E '[\\]]' file.txt", "```"].join("\n");
+    const { calls } = parseFencedToolCalls(text, specs);
+    expect(JSON.parse(calls[0].function.arguments).command).toBe("grep -E '[\\]]' file.txt");
+  });
+
   // Regression (same class): the CLOSING fence glued to the last command with trailing
   // text after it — `wc -l …DECISIONS.md```STATUS: blocked | …`. Observed live. Without
   // this the fence never closes and the trailing STATUS text is swallowed into the command.

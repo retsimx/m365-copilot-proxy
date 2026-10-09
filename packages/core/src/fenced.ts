@@ -348,15 +348,28 @@ function hasClosingFenceAfter(lines: string[], i: number): boolean {
 }
 
 export function restoreM365Fences(text: string, specs: Map<string, FencedToolSpec>): string {
+  // Pass 0: M365 escapes `]` as `\]` when it looks like a Markdown link reference
+  // (`…]:`), leaking a backslash into code the harness then runs — bash "bad
+  // substitution: no closing } in ${files[@\]:1}", Python "SyntaxError: unexpected
+  // character after line continuation character". `\]:` is essentially never intended
+  // in real code, and a `]` preceded by a real backslash or inside a regex class
+  // (`[\]]`, sed `\]`) has no `:` after it, so it's left untouched.
+  text = text.replace(/\\\]:/g, "]:");
+
   // Pass 1: M365 sometimes glues the opening fence to the end of the prose line
   // (`…output limit.```bash`) with no newline, so the opener isn't at line start
   // and OPEN_FENCE_REGEX misses it. Split it onto its own line.
-  const GLUED_OPEN_REGEX = /^(.*\S)(`{3,})([A-Za-z0-9_.-]+)[ \t]*$/;
+  // Prefix must end in a real (non-backtick, non-space) char, so a fence's own
+  // backticks (` ````write_file `) aren't mistaken for prose.
+  const GLUED_OPEN_REGEX = /^(.*[^\s`])(`{3,})([A-Za-z0-9_.-]+)[ \t]*$/;
   const src = text.split(/\r?\n/);
   const lines: string[] = [];
   for (let i = 0; i < src.length; i++) {
     const g = src[i].match(GLUED_OPEN_REGEX);
-    if (g && isLabelToken(g[3], specs) && hasClosingFenceAfter(src, i)) {
+    if (g && isLabelToken(g[3], specs)) {
+      // A prose line that ends in a tool-token fence opener is a fence attempt — split
+      // it. Don't require a closing fence: the block can be unterminated and is then
+      // parsed by the EOF flush (previously this guard dropped such openers).
       lines.push(g[1].replace(/[ \t]+$/, ""));
       lines.push(g[2] + g[3]);
     } else {
