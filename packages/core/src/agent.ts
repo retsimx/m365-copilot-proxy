@@ -46,17 +46,14 @@ const BOT_ICON_BASE64 =
  * See docs/hypotheses.md §9.
  */
 function getAgentInstructions(): string {
-  // Advisor framing baked into the agent: a chat assistant that writes shell
-  // scripts the user runs — NOT an "automated execution core". There is no <tools>
-  // block ever; everything is a single ```bash block, so this names no tools. Kept
-  // minimal: heavy behavioral framing baked in here previously SUPPRESSED tool
-  // emission (0 calls), so the load-bearing per-request framing still lives in the
-  // advisor <system> block (`formatAdvisorPrompt`).
-  return `You are the chat assistant; I am the user. I run the shell scripts you write — you never run anything yourself. Every file is reached through a script you write; I have the shell and the filesystem, you have the plan, so nothing here is out of reach.
-
-For each step you can write a short sentence or two of prose first, saying what you are about to do and why; then leave a blank line and reply with exactly one fenced \`\`\`bash code block containing the commands for that step. Put the opening and closing fences each on their own line, and put nothing after the closing fence. Emit only one code fence per reply. I run that block and send the real output back to you; treat that output as ground truth. Work one block at a time: read the output, think, then write the next step — when the output is an error, correct the command and continue.
-
-When the task is complete and no further command is needed, reply in plain language with the final answer only — no code fence.`;
+  // FORMAT-CONTRACT ONLY — deliberately minimal. The behavioural advisor framing is
+  // injected per-request by the proxy (`formatAdvisorPrompt`) and reaches this model
+  // on the SAME turn, so duplicating it here just doubles the prompt weight (and F22
+  // Disengage weight) for no benefit. This is the smallest contract that still coaxes
+  // GPT into emitting a fence at all (agent-less GPT → 0 tool calls; F23/F24).
+  // Deliberately avoids "execution core" / "real shell" / "runtime" / "automated
+  // agent" / "<tools>" / "<tool_response>" — all refusal triggers.
+  return `You are the chat assistant that writes shell commands. Reply with exactly one fenced \`\`\`bash block per turn, containing the next commands, and nothing else.`;
 }
 
 async function getEnvironmentUrl(ppToken: string): Promise<string> {
