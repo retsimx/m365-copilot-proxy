@@ -229,29 +229,32 @@ function simpleHash(str: string): string {
 
 // --- Delta message formatting ---
 
-function formatDeltaMessages(messages: ParsedMessage[], tools?: ChatBody["tools"]): string {
+function formatDeltaMessages(messages: ParsedMessage[]): string {
   const parts: string[] = [];
 
-  // Proactively re-attach the advisor framing on EVERY delta turn so the model never
-  // drifts from it over a long session. Shell-only included — shell tools are elided
-  // inside formatToolDefinitions, so this is just the framing + the inline example.
-  if (tools && tools.length > 0) {
-    parts.push(formatToolDefinitions(tools));
-  }
-
+  // No framing re-injection on delta turns. The advisor framing is sent on turn 0; the
+  // model is stateful and mid-loop. Re-stating "you never touch files directly — you
+  // only write the commands" every turn was (a) per-turn Disengage weight and (b)
+  // priming the "I can't create/modify files" refusal. The tool result itself is the
+  // strongest signal that the loop is working.
   for (const m of messages) {
     if (m.role === "assistant") {
       // Skip assistant messages — M365 already has them server-side.
       // Echoing them back as a user message confuses M365.
       continue;
     } else if (m.role === "tool") {
-      const name = m.name || "unknown";
-      const callId = m.tool_call_id || "?";
-      parts.push(`<tool_response name="${name}" call_id="${callId}">\n${getMessageContent(m)}\n</tool_response>`);
+      // Package the result in the advisor/user voice: the output bounded by dividers,
+      // then a one-line turn-taking directive. Keeps the loop on rails (send the next
+      // script, or the final response) without re-injecting the whole framing every
+      // turn. Untagged — the old <tool_response name="unknown" …> tags were referenced
+      // nowhere and read as mystery XML.
+      parts.push(
+        `Here is the output of the block you wrote:\n---\n${getMessageContent(m)}\n---\nPlease send the next script to run — correcting anything that looked off — or, if the task is done, your final response.`,
+      );
     } else if (m.role === "system") {
       // Skip system messages on follow-up turns
     } else {
-      parts.push(`<${m.role}>\n${getMessageContent(m)}\n</${m.role}>`);
+      parts.push(`<user>\n${getMessageContent(m)}\n</user>`);
     }
   }
   return parts.join("\n\n");
@@ -809,7 +812,7 @@ export async function handleChatCompletion(
     log.info(`Chat completion: model=${model}, stream=${body.stream}, messages=${body.messages.length}, turn=${session.turnCount}, mode=full, cid=${convId}`);
   } else {
     const newMessages = body.messages.slice(conv.sentMessageCount);
-    const delta = newMessages.length > 0 ? formatDeltaMessages(newMessages, hasTools ? body.tools : undefined) : "";
+    const delta = newMessages.length > 0 ? formatDeltaMessages(newMessages) : "";
     if (delta.length > 0) {
       text = delta;
       log.info(`Chat completion: model=${model}, stream=${body.stream}, messages=${body.messages.length}, new=${newMessages.length}, turn=${session.turnCount}, mode=delta, cid=${convId}`);

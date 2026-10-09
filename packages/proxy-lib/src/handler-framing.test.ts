@@ -339,21 +339,24 @@ describe("delta tool re-injection (shell elision)", () => {
     return captured[captured.length - 1];
   }
 
-  it("re-injects the advisor framing on a shell-only delta turn (no <tools>, shell elided)", async () => {
+  it("sends NO advisor framing on a delta turn — plain untagged output + <user>", async () => {
     const prompt = await deltaPromptFor([bashTool]);
     expect(prompt).not.toContain("do a thing"); // proves the delta path, not a full replay
-    expect(prompt).not.toContain("<tools>");     // shell tool still elided
-    expect(prompt).toContain("You are a chat assistant helping with shell tasks");
-    expect(prompt).toContain('<tool_response name="bash"');
+    expect(prompt).not.toContain("You are a chat assistant helping with shell tasks");
+    expect(prompt).not.toContain("<tools>");
+    expect(prompt).not.toContain("<tool_response"); // output is untagged now
+    expect(prompt).toContain("Here is the output of the block you wrote");
+    expect(prompt).toContain("Please send the next script to run");
   });
 
-  it("still re-injects the advisor block on a mixed delta turn", async () => {
+  it("sends NO framing on a mixed delta turn either", async () => {
     const prompt = await deltaPromptFor([bashTool, readFileTool]);
     expect(prompt).not.toContain("do a thing"); // proves the delta path, not a full replay
-    expect(prompt).toContain("You are a chat assistant helping with shell tasks");
-    expect(prompt).toContain("<tools>");
-    expect(prompt).toContain("```read_file");
-    expect(prompt).toContain('<tool_response name="bash"');
+    expect(prompt).not.toContain("You are a chat assistant helping with shell tasks");
+    expect(prompt).not.toContain("<tools>");
+    expect(prompt).not.toContain("<tool_response");
+    expect(prompt).toContain("Here is the output of the block you wrote");
+    expect(prompt).toContain("Please send the next script to run");
   });
 });
 
