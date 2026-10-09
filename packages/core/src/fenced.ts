@@ -85,6 +85,15 @@ export function findShellTool(tools: ToolDef[]): ToolDef | undefined {
     });
 }
 
+/** Shell tools are covered entirely by the advisor prompt's built-in shell
+ *  example. Strip them from the <tools> block to eliminate token bloat and
+ *  contradictory harness descriptions that tell the model not to use cat/sed/grep. */
+export function nonShellTools(tools: ToolDef[]): ToolDef[] {
+  return tools.filter(
+    (t) => !SHELL_LANGS.has(t.function.name) && !SHELL_TOOL_NAME.test(t.function.name),
+  );
+}
+
 export interface FencedToolSpec {
   name: string;
   description?: string;
@@ -230,15 +239,24 @@ function toolsBlock(tools: ToolDef[]): string {
 }
 
 export function formatAdvisorPrompt(tools: ToolDef[]): string {
-  return `You write the shell commands; I run them and paste the real output back to you. Do not make any tool calls and do not try to run anything yourself.
+  const shellTool = findShellTool(tools);
+  const shellName = shellTool?.function.name ?? "bash";
 
-To carry out a step, reply with a single fenced code block opened with the word bash or shell, containing the commands — create or overwrite files with \`cat > name <<'EOF' … EOF\` heredocs, edit files in place with \`sed -i\`, inspect with \`cat\`/\`ls\`/\`grep\`, run code with the available interpreters. Put all commands you want to run for this step into that single block — do not split them across multiple code fences. Put nothing before the fence. I run that block and paste its output back; read it, think, then write the next script. Work one block at a time until the task is complete.
+  // Workshop attempt 1: always include the single fence example with header params.
+  const shellExample = `\n\nThe block may start with optional header lines before the commands:\n\`\`\`${shellName}\ntimeout: 30000\nworkdir: /path/to/dir\n<commands>\n\`\`\``;
 
-You have not run anything yet and have no results. Never invent or assume a command's output, never say the files are missing or that you cannot access them, and never ask me to paste them. Never reply that you cannot run commands, that the shell is unavailable, or that you cannot read the files — you are not being asked to run anything; you only write the commands. Emit exactly one fenced block per reply — never multiple fences — then stop and wait for my output.
+  // Non-shell tools (ask_question, write_file, …) stay declared so the model
+  // knows their fenced format. Shell tools are elided (see nonShellTools).
+  const extra = nonShellTools(tools);
+  const extraBlock = extra.length > 0 ? `\n\n${toolsBlock(extra)}` : "";
 
-When the task is complete and no further command is needed, reply in plain language with the final answer only — no code fence, no preamble.
+  return `You are a chat assistant helping with shell tasks.
 
-${toolsBlock(tools)}`;
+For each step you can write a short line of prose first, saying what you are about to do and why; then leave a blank line and reply with exactly one fenced code block opened with the word bash or shell, containing all the commands for that step, and nothing after it. Emit only one code fence per reply. I run that block and paste its output back; read it, think, then write the next step. Work one block at a time until the task is complete.
+
+You have not run anything yet and have no results. My next message contains the real output of the block you wrote; the files are already present on disk and readable. You only write the commands — running them is my job. Every file is reached through a command you write: to read a file, write the command that reads it; to create or change one, write the command that creates it. I have the shell and the filesystem; you have the plan, so you never lack file access — nothing here is out of reach or impossible to produce.
+
+When the task is complete and no further command is needed, reply in plain language with the final answer only.${shellExample}${extraBlock}`;
 }
 
 export function formatFencedToolDefinitions(tools: ToolDef[], _variantOverride?: string): string {
@@ -295,10 +313,77 @@ export const FRAMING_VARIANT_NAMES = ["advisor"];
 // Dots and hyphens are allowed so namespaced runtime tool names (```container.exec)
 // can be recognised and routed.
 const OPEN_FENCE_REGEX = /^( {0,3})(`{3,})([A-Za-z0-9_.-]+)[ \t]*$/;
+/** Closing fence: 3+ backticks, optionally followed by inline prose. */
+const CLOSE_FENCE_REGEX = /^ {0,3}`{3,}([ \t].*)?$/;
+/** A line that is exactly a fenced tool label — M365's broken-opener shape. */
+function isLabelToken(label: string, specs: Map<string, FencedToolSpec>): boolean {
+  return specs.has(label) || SHELL_LANGS.has(label);
+}
 const HEREDOC_OPEN_REGEX = /(?:^|[^<])<<-?\s*['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?/;
 
 const SEARCH_REPLACE_REGEX =
   /<{5,}\s*SEARCH\s*\r?\n([\s\S]*?)\r?\n={5,}\s*\r?\n([\s\S]*?)\r?\n>{5,}\s*REPLACE/;
+
+/** Restore M365's missing opening fence.
+ *
+ *  M365 renders the OPENING ``` of a code block as a bare info-string line — it
+ *  emits the language label (`bash`) *without* the backticks — while emitting the
+ *  CLOSING ``` literally. So the streamed/reconstructed text is
+ *  `…prose\nbash\n<commands>\n``` ` (no opener), which the fence parser can't
+ *  recognise, and the turn silently degrades to prose even though the model
+ *  fenced its command.
+ *
+ *  This rewrites a line that is *exactly* a known tool / shell-language token and
+ *  is followed (before any other fence) by a closing ```, into a proper
+ *  ```` ```<label> ```` opener. Idempotent, and a no-op on well-formed text.
+ *
+ *  Regression: live 61sol run 2026-10-09 06:39:47 (FINAL-REPORT.md collation). */
+/** True if a closing fence appears after index i before any other opening fence. */
+function hasClosingFenceAfter(lines: string[], i: number): boolean {
+  for (let j = i + 1; j < lines.length; j++) {
+    if (CLOSE_FENCE_REGEX.test(lines[j])) return true;
+    if (OPEN_FENCE_REGEX.test(lines[j])) return false;
+  }
+  return false;
+}
+
+export function restoreM365Fences(text: string, specs: Map<string, FencedToolSpec>): string {
+  // Pass 1: M365 sometimes glues the opening fence to the end of the prose line
+  // (`…output limit.```bash`) with no newline, so the opener isn't at line start
+  // and OPEN_FENCE_REGEX misses it. Split it onto its own line.
+  const GLUED_OPEN_REGEX = /^(.*\S)(`{3,})([A-Za-z0-9_.-]+)[ \t]*$/;
+  const src = text.split(/\r?\n/);
+  const lines: string[] = [];
+  for (let i = 0; i < src.length; i++) {
+    const g = src[i].match(GLUED_OPEN_REGEX);
+    if (g && isLabelToken(g[3], specs) && hasClosingFenceAfter(src, i)) {
+      lines.push(g[1].replace(/[ \t]+$/, ""));
+      lines.push(g[2] + g[3]);
+    } else {
+      lines.push(src[i]);
+    }
+  }
+
+  // Pass 2: M365 can drop the opening fence entirely, leaving a bare language
+  // label line (`bash\n<code>\n``` `). Restore the ``` before the label.
+  let inBlock = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (inBlock) {
+      if (CLOSE_FENCE_REGEX.test(line)) inBlock = false;
+      continue;
+    }
+    if (OPEN_FENCE_REGEX.test(line)) { inBlock = true; continue; }
+    const label = line.trim();
+    if (!label || !isLabelToken(label, specs)) continue;
+    if (hasClosingFenceAfter(lines, i)) {
+      const indent = line.slice(0, line.length - line.trimStart().length);
+      lines[i] = `${indent}\`\`\`${label}`;
+      inBlock = true;
+    }
+  }
+  return lines.join("\n");
+}
 
 function makeCall(name: string, args: Record<string, unknown>): ParsedToolCall {
   return {
@@ -456,7 +541,7 @@ export function parseFencedToolCalls(
   specs: Map<string, FencedToolSpec>,
 ): FencedParseResult {
   const calls: ParsedToolCall[] = [];
-  const lines = text.split(/\r?\n/);
+  const lines = restoreM365Fences(text, specs).split(/\r?\n/);
 
   let inBlock = false;
   let fenceLen = 3;

@@ -6,6 +6,8 @@ import {
   getToneForModel,
   formatMessages,
   formatToolDefinitions,
+  nonShellTools,
+  restoreM365Fences,
   parseToolCalls,
   looksLikeConfabulation,
   looksLikeSafetyRefusal,
@@ -232,7 +234,8 @@ function formatDeltaMessages(messages: ParsedMessage[], tools?: ChatBody["tools"
 
   // Proactively attach tool definitions on delta turns so reasoning models (DeepLeo / GPT-5.5)
   // always see active tools and never claim "no tools are available in this message".
-  if (tools && tools.length > 0) {
+  // Shell tools are elided from <tools>, so skip the block entirely on shell-only sessions.
+  if (tools && nonShellTools(tools).length > 0) {
     parts.push(formatToolDefinitions(tools));
   }
 
@@ -812,7 +815,7 @@ export async function handleChatCompletion(
       log.info(`Chat completion: model=${model}, stream=${body.stream}, messages=${body.messages.length}, new=${newMessages.length}, turn=${session.turnCount}, mode=delta, cid=${convId}`);
     } else {
       // No meaningful new content to send — nudge M365 to continue.
-      const toolsBlock = hasTools ? `${formatToolDefinitions(body.tools)}\n\n` : "";
+      const toolsBlock = hasTools && nonShellTools(body.tools ?? []).length > 0 ? `${formatToolDefinitions(body.tools!)}\n\n` : "";
       text = `${toolsBlock}<user>\nPlease continue from where you left off.\n</user>`;
       log.info(`Chat completion: model=${model}, stream=${body.stream}, messages=${body.messages.length}, new=0 (nudge), turn=${session.turnCount}, mode=delta, cid=${convId}`);
     }
@@ -1039,7 +1042,7 @@ export async function handleChatCompletion(
   type Produced =
     | { kind: "error"; resp: Response }
     | { kind: "text"; text: string }
-    | { kind: "tools"; toolCalls: ReturnType<typeof parseToolCalls>["toolCalls"] };
+    | { kind: "tools"; toolCalls: ReturnType<typeof parseToolCalls>["toolCalls"]; text: string };
 
   // `onDelta` streams text to the client live. Non-tool path: raw passthrough.
   // Tool path: the SSE caller passes a fence-aware gated delta (§3.3); the JSON
@@ -1060,7 +1063,10 @@ export async function handleChatCompletion(
     const result = await runBuffered(onDelta, onReasoning);
     if ("error" in result) return { kind: "error", resp: result.error };
     conv.sentMessageCount = body.messages.length;
-    let fullText = result.fullText;
+    // M365 can strip the OPENING fence of a code block from the streamed text
+    // (leaving a bare `bash` label). Restore it so both the tool-call parse and the
+    // forwarded prose see the model's real fenced output. See fenced.ts regression.
+    let fullText = restoreM365Fences(result.fullText, specs ?? new Map());
 
     log.debug("Raw response (tool mode):", trunc(fullText, 1000));
     let parsed = parseToolCalls(fullText, body.tools);
@@ -1138,12 +1144,12 @@ export async function handleChatCompletion(
             ? CONFAB_FORCE_PROMPT
             : HALLUCINATION_FORCE_PROMPT;
       const basePrompt = forcePrompt;
-      const toolsBlock = hasTools ? `${formatToolDefinitions(body.tools)}\n\n` : "";
+      const toolsBlock = hasTools && nonShellTools(body.tools ?? []).length > 0 ? `${formatToolDefinitions(body.tools!)}\n\n` : "";
       text = `${toolsBlock}${basePrompt}`;
       const retry = await runBuffered(onDelta, onReasoning);
       if ("error" in retry) return { kind: "error", resp: retry.error };
       conv.sentMessageCount = body.messages.length;
-      fullText = retry.fullText;
+      fullText = restoreM365Fences(retry.fullText, specs ?? new Map());
       parsed = parseToolCalls(fullText, body.tools);
       if (isProseDocument(parsed)) {
         log.info(`Response is a prose document (${parsed.toolCalls.length} embedded fences), returning as text instead of executing`);
@@ -1193,24 +1199,12 @@ export async function handleChatCompletion(
       };
     }
 
-    // Fail-closed: if model mixed text with tool calls, strip text and re-prompt once.
-    // This enforces the "output ONLY a tool call" contract.
+    // Prose alongside tool calls is DESIRED now: both framings invite a short line
+    // of prose before the fence, so keep it and forward it as the assistant
+    // `content` next to the tool_calls. (Previously stripped to enforce an
+    // "output ONLY a tool call" contract that no longer applies.)
     if (parsed.hasToolCalls && parsed.textContent) {
-      const extraText = parsed.textContent.trim();
-      if (extraText.length > 0) {
-        if (streamedProse) {
-          // Commit-on-stream (§3.3): the pre-fence prose was already sent live; do
-          // not rewrite the parse result. The reply/one-call handling below is
-          // unaffected (it keys off toolCalls, not textContent).
-          log.info("Prose already streamed live (commit-on-stream) — leaving mixed text intact");
-        } else {
-          log.info(`Mixed output detected (${extraText.length} chars of text alongside ${parsed.toolCalls.length} tool calls), stripping text`);
-          // Strip the text — the tool calls are what the client needs.
-          // Log the stripped text for debugging but don't send it downstream.
-          log.debug("Stripped text:", trunc(extraText, 500));
-          parsed = { ...parsed, textContent: null };
-        }
-      }
+      log.info(`Forwarding ${parsed.textContent.trim().length} chars of prose alongside ${parsed.toolCalls.length} tool call(s)`);
     }
 
     // Handle "reply" tool calls — convert to plain text
@@ -1260,7 +1254,7 @@ export async function handleChatCompletion(
     }
 
     if (parsed.hasToolCalls && parsed.toolCalls.length > 0) {
-      return { kind: "tools", toolCalls: parsed.toolCalls };
+      return { kind: "tools", toolCalls: parsed.toolCalls, text: parsed.textContent ?? "" };
     }
     return { kind: "text", text: fullText };
   } else {
@@ -1329,8 +1323,8 @@ export async function handleChatCompletion(
       const toolChars = p.toolCalls.reduce((acc, tc) => acc + tc.function.name.length + tc.function.arguments.length, 0);
       return jsonResponse(200, {
         id: completionId, object: "chat.completion", created, model,
-        choices: [{ index: 0, message: { role: "assistant", content: null, tool_calls: p.toolCalls }, finish_reason: "tool_calls" }],
-        usage: usage(toolChars),
+        choices: [{ index: 0, message: { role: "assistant", content: p.text || null, tool_calls: p.toolCalls }, finish_reason: "tool_calls" }],
+        usage: usage(toolChars + p.text.length),
       });
     }
     return jsonResponse(200, {
@@ -1411,10 +1405,21 @@ export async function handleChatCompletion(
           // HTTP 200 is already committed, so surface the failure as an in-stream error chunk.
           send({ ...base, error: { message, type: "upstream_error" } });
         } else if (p.kind === "tools") {
+          // Forward prose that preceded the fence if the gated stream didn't already
+          // send it (fully-buffered / non-gated turns), then emit the tool calls.
+          const held = p.text ?? "";
+          if (held) {
+            if (held.startsWith(sent)) {
+              const remainder = held.slice(sent.length);
+              if (remainder) send({ ...base, choices: [{ index: 0, delta: { content: remainder }, finish_reason: null }] });
+            } else if (!streamedProse) {
+              send({ ...base, choices: [{ index: 0, delta: { content: held }, finish_reason: null }] });
+            }
+          }
           const toolChars = p.toolCalls.reduce((acc, tc) => acc + tc.function.name.length + tc.function.arguments.length, 0);
           p.toolCalls.forEach((tc, i) =>
             send({ ...base, choices: [{ index: 0, delta: { tool_calls: [{ index: i, id: tc.id, type: "function", function: { name: tc.function.name, arguments: tc.function.arguments } }] }, finish_reason: null }] }));
-          send({ ...base, choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }], ...(includeUsage ? { usage: usage(toolChars) } : {}) });
+          send({ ...base, choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }], ...(includeUsage ? { usage: usage(toolChars + held.length) } : {}) });
         } else {
           // Emit only what wasn't already streamed live: the whole text if nothing was
           // (tool-mode prose fallback, or a fully-buffered turn), or just the tail when

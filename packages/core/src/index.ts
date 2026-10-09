@@ -92,6 +92,8 @@ export {
   currentFramingVariant,
   framingVariantForTone,
   isAdvisorTone,
+  nonShellTools,
+  restoreM365Fences,
   FRAMING_VARIANT_NAMES,
   buildSpecMap,
   createProseStreamGate,

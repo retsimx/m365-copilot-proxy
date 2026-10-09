@@ -46,23 +46,17 @@ const BOT_ICON_BASE64 =
  * See docs/hypotheses.md §9.
  */
 function getAgentInstructions(): string {
-  // FORMAT-CONTRACT ONLY. Behavioral framing (anti-advise, anti-confabulation,
-  // first-move forcing, etc.) is deliberately NOT here — it's swept per-request as
-  // the harness system message so prompt hypotheses can be A/B'd without rebuilding
-  // (and thus re-provisioning) the agent each time. An earlier version that baked
-  // heavy anti-advise framing into the agent SUPPRESSED tool emission (0 calls),
-  // so this stays minimal and the behavioral lever lives where it's cheap to vary.
-  return `You are the execution core of an automated agent. Your output is parsed by a program.
+  // Advisor framing baked into the agent: a chat assistant that writes shell
+  // scripts the user runs — NOT an "automated execution core". There is no <tools>
+  // block ever; everything is a single ```bash block, so this names no tools. Kept
+  // minimal: heavy behavioral framing baked in here previously SUPPRESSED tool
+  // emission (0 calls), so the load-bearing per-request framing still lives in the
+  // advisor <system> block (`formatAdvisorPrompt`).
+  return `You are the chat assistant; I am the user. I run the shell scripts you write — you never run anything yourself. Every file is reached through a script you write; I have the shell and the filesystem, you have the plan, so nothing here is out of reach.
 
-When the incoming message contains a <tools> block, you are in execution mode. To act, output ONLY a single Markdown code fence whose info-string is the tool name — nothing before or after. A fenced block is an ACTION the runtime executes immediately against a live system; it is never an example or illustration:
-\`\`\`<tool_name>
-<one "key: value" header line per scalar argument>
+For each step you can write a short sentence or two of prose first, saying what you are about to do and why; then leave a blank line and reply with exactly one fenced \`\`\`bash code block containing the commands for that step, and nothing after it. Emit only one code fence per reply. I run that block and send the real output back to you; treat that output as ground truth. Work one block at a time: read the output, think, then write the next step.
 
-<the body argument, if the tool defines one>
-\`\`\`
-The runtime returns the real result in a <tool_response> block — treat it as ground truth. Emit exactly one fenced tool call per turn, then stop and wait for the <tool_response>. The info-string and header keys must match the provided tool definitions exactly.
-
-When the message has no <tools> block, respond normally as a helpful assistant in natural language.`;
+When the task is complete and no further command is needed, reply in plain language with the final answer only — no code fence.`;
 }
 
 async function getEnvironmentUrl(ppToken: string): Promise<string> {

@@ -271,15 +271,16 @@ describe("reasoning SSE (Track B, design §4.3)", () => {
 });
 
 describe("kill switches (design §2 / §6)", () => {
-  it("M365_NO_TOOL_STREAM=1 restores the fully-buffered tool path (no prose streamed)", async () => {
+  it("M365_NO_TOOL_STREAM=1 restores the fully-buffered tool path (prose only at end)", async () => {
     process.env.M365_NO_TOOL_STREAM = "1";
     const deltas = ["Let me check.\n", "```bash\n", "ls -la\n", "```"];
     const chunks = await streamChunks(deltas, deltas.join(""), { tools: TOOLS });
 
-    const contents = nonEmpty(chunks, "content");
+    const contents = nonEmpty(chunks, "content").map(c => c.content).join("");
     const toolChunks = chunks.filter(c => c.tool_calls);
-    // Pre-change behaviour: nothing streamed, tool_calls still emitted exactly once.
-    expect(contents).toHaveLength(0);
+    // Fully buffered: the prose isn't streamed live, but it *is* forwarded (before
+    // the tool_calls) so a client still sees the model's line before the fence.
+    expect(contents).toBe("Let me check.");
     expect(toolChunks).toHaveLength(1);
     expect(toolChunks[0].tool_calls![0].function.name).toBe("bash");
   });
