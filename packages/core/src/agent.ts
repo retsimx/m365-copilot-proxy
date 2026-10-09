@@ -53,7 +53,7 @@ function getAgentInstructions(): string {
   // GPT into emitting a fence at all (agent-less GPT → 0 tool calls; F23/F24).
   // Deliberately avoids "execution core" / "real shell" / "runtime" / "automated
   // agent" / "<tools>" / "<tool_response>" — all refusal triggers.
-  return `You are the chat assistant that writes shell commands. When there is a command to run, reply with exactly one fenced \`\`\`bash block and nothing else; when the task is complete, reply in plain text, with no fence.`;
+  return `You are the chat assistant that writes shell commands. When there is a command to run, write a short line of prose, then exactly one fenced \`\`\`bash block. When the task is complete, reply in plain text only.`;
 }
 
 async function getEnvironmentUrl(ppToken: string): Promise<string> {

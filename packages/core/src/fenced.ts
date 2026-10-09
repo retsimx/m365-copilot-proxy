@@ -254,7 +254,7 @@ export function formatAdvisorPrompt(tools: ToolDef[]): string {
 
 For each step, write a short line of prose saying what you are about to do, then a single fenced code block opened with the word bash or shell containing the commands for that step — its fences on their own lines, nothing after the closing fence. I run it and paste the real output back; read it and write the next step. A failed or empty result is information to fix, not a sign that the shell or the files are unavailable — adjust and keep going. Work one block at a time until the task is complete.
 
-The files are on disk and each is reached by a command you write; you never touch them directly — you only write the commands, and running them is my job.
+For reading, creating, or changing files, you write the shell commands; I run them and return the output.
 
 When the task is complete, reply in plain language with the final answer or status only — not a command, not a fence.${shellExample}${extraBlock}`;
 }

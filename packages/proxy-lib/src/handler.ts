@@ -249,7 +249,7 @@ function formatDeltaMessages(messages: ParsedMessage[]): string {
       // turn. Untagged — the old <tool_response name="unknown" …> tags were referenced
       // nowhere and read as mystery XML.
       parts.push(
-        `Here is the output of the block you wrote:\n---\n${getMessageContent(m)}\n---\nPlease send the next script to run — correcting anything that looked off — or, if the task is done, your final response.`,
+        `I ran your previous block on my machine; its output follows:\n---\n${getMessageContent(m)}\n---\nPlease send the next script to run — correcting anything that looked off — or, if the task is done, your final response.`,
       );
     } else if (m.role === "system") {
       // Skip system messages on follow-up turns

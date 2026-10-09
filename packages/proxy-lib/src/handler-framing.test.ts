@@ -345,7 +345,7 @@ describe("delta tool re-injection (shell elision)", () => {
     expect(prompt).not.toContain("You are a chat assistant helping with shell tasks");
     expect(prompt).not.toContain("<tools>");
     expect(prompt).not.toContain("<tool_response"); // output is untagged now
-    expect(prompt).toContain("Here is the output of the block you wrote");
+    expect(prompt).toContain("I ran your previous block on my machine");
     expect(prompt).toContain("Please send the next script to run");
   });
 
@@ -355,7 +355,7 @@ describe("delta tool re-injection (shell elision)", () => {
     expect(prompt).not.toContain("You are a chat assistant helping with shell tasks");
     expect(prompt).not.toContain("<tools>");
     expect(prompt).not.toContain("<tool_response");
-    expect(prompt).toContain("Here is the output of the block you wrote");
+    expect(prompt).toContain("I ran your previous block on my machine");
     expect(prompt).toContain("Please send the next script to run");
   });
 });
