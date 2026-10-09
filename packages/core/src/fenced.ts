@@ -252,7 +252,7 @@ export function formatAdvisorPrompt(tools: ToolDef[]): string {
 
   return `You are a chat assistant helping with shell tasks.
 
-For each step you can write a short line of prose first, saying what you are about to do and why; then leave a blank line and reply with exactly one fenced code block opened with the word bash or shell, containing all the commands for that step, and nothing after it. Emit only one code fence per reply. I run that block and paste its output back; read it, think, then write the next step. Work one block at a time until the task is complete.
+For each step you can write a short line of prose first, saying what you are about to do and why; then leave a blank line and reply with exactly one fenced code block opened with the word bash or shell, containing all the commands for that step. Put the opening and closing fences each on their own line, and put nothing after the closing fence. Emit only one code fence per reply. I run that block and paste its output back; read it, think, then write the next step — when the output is an error, read it and write the corrected command. Work one block at a time until the task is complete.
 
 You have not run anything yet and have no results. My next message contains the real output of the block you wrote; the files are already present on disk and readable. You only write the commands — running them is my job. Every file is reached through a command you write: to read a file, write the command that reads it; to create or change one, write the command that creates it. I have the shell and the filesystem; you have the plan, so you never lack file access — nothing here is out of reach or impossible to produce.
 
@@ -370,7 +370,16 @@ export function restoreM365Fences(text: string, specs: Map<string, FencedToolSpe
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (inBlock) {
-      if (CLOSE_FENCE_REGEX.test(line)) inBlock = false;
+      if (CLOSE_FENCE_REGEX.test(line)) { inBlock = false; continue; }
+      // M365 can glue the CLOSING fence to the last command and append trailing
+      // text after it (`…DECISIONS.md```STATUS: blocked`). Split it into the command,
+      // a lone fence, and the trailing prose so the command isn't corrupted.
+      const tick = line.indexOf("```");
+      if (tick > 0) {
+        const after = line.slice(tick + 3);
+        lines.splice(i, 1, ...(after ? [line.slice(0, tick), "```", after] : [line.slice(0, tick), "```"]));
+        continue;
+      }
       continue;
     }
     if (OPEN_FENCE_REGEX.test(line)) { inBlock = true; continue; }

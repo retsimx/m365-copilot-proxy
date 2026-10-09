@@ -150,6 +150,20 @@ describe("parseFencedToolCalls", () => {
     expect(leftover).toContain("inventory and size all required inputs");
   });
 
+  // Regression (same class): the CLOSING fence glued to the last command with trailing
+  // text after it — `wc -l …DECISIONS.md```STATUS: blocked | …`. Observed live. Without
+  // this the fence never closes and the trailing STATUS text is swallowed into the command.
+  it("parses M365's glued closing fence (``` mid-line with trailing status text)", () => {
+    const text = [
+      "```bash",
+      "wc -l /tmp/opencode/review/remediation/DECISIONS.md```STATUS: blocked | workflow interrupted",
+    ].join("\n");
+    const { calls, leftover } = parseFencedToolCalls(text, specs);
+    expect(calls).toHaveLength(1);
+    expect(JSON.parse(calls[0].function.arguments).command).toBe("wc -l /tmp/opencode/review/remediation/DECISIONS.md");
+    expect(leftover).toContain("STATUS: blocked");
+  });
+
   it("round-trips a write_file with a multi-line body", () => {
     const content = "def f():\n    return 1\n\nprint(f())";
     const rendered = renderFencedCall(deriveFencedSpec(writeFile), { path: "f.py", content });

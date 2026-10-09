@@ -404,4 +404,27 @@ describe("M365 label-only opener regression (opening fence stripped from the str
     expect(msg.tool_calls?.[0]?.function.name).toBe("bash");
     expect(JSON.parse(msg.tool_calls[0].function.arguments).command).toContain("cat CONTEXT.md");
   });
+
+  it("emits a bash tool_call when M365 glued the opening fence to the prose line", async () => {
+    // Live shape from 2026-10-09 07:42 — the opener is appended to the prose line
+    // with no newline: `…output limit.```bash`.
+    const streamed = [
+      "I'll first read the remediation brief in full, then inventory and size all required inputs so subsequent reads stay complete and within the output limit.```bash",
+      "timeout: 30000",
+      "cat /tmp/opencode/review/REMEDIATION-BRIEF.md",
+      "```",
+    ].join("\n");
+    vi.spyOn(core.ModelSession.prototype, "run").mockImplementation(async () => streamOf(streamed));
+
+    const pool = new SessionPool();
+    const res = await handleChatCompletion(
+      { model: "gpt-5.6-think-deeper", messages: [{ role: "user", content: "remediation" }], stream: false, tools: [bashTool] } as any,
+      pool,
+    );
+    expect(res.status).toBe(200);
+    const json: any = await res.json();
+    const msg = json.choices[0].message;
+    expect(msg.tool_calls?.[0]?.function.name).toBe("bash");
+    expect(JSON.parse(msg.tool_calls[0].function.arguments).command).toContain("cat /tmp/opencode/review/REMEDIATION-BRIEF.md");
+  });
 });

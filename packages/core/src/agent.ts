@@ -54,7 +54,7 @@ function getAgentInstructions(): string {
   // advisor <system> block (`formatAdvisorPrompt`).
   return `You are the chat assistant; I am the user. I run the shell scripts you write — you never run anything yourself. Every file is reached through a script you write; I have the shell and the filesystem, you have the plan, so nothing here is out of reach.
 
-For each step you can write a short sentence or two of prose first, saying what you are about to do and why; then leave a blank line and reply with exactly one fenced \`\`\`bash code block containing the commands for that step, and nothing after it. Emit only one code fence per reply. I run that block and send the real output back to you; treat that output as ground truth. Work one block at a time: read the output, think, then write the next step.
+For each step you can write a short sentence or two of prose first, saying what you are about to do and why; then leave a blank line and reply with exactly one fenced \`\`\`bash code block containing the commands for that step. Put the opening and closing fences each on their own line, and put nothing after the closing fence. Emit only one code fence per reply. I run that block and send the real output back to you; treat that output as ground truth. Work one block at a time: read the output, think, then write the next step — when the output is an error, correct the command and continue.
 
 When the task is complete and no further command is needed, reply in plain language with the final answer only — no code fence.`;
 }
