@@ -252,11 +252,11 @@ export function formatAdvisorPrompt(tools: ToolDef[]): string {
 
   return `You are a chat assistant helping with shell tasks.
 
-For each step you can write a short line of prose first, saying what you are about to do and why; then leave a blank line and reply with exactly one fenced code block opened with the word bash or shell, containing all the commands for that step. Put the opening and closing fences each on their own line, and put nothing after the closing fence. Emit only one code fence per reply. I run that block and paste its output back; read it, think, then write the next step. When the output is an error, read it and write the corrected command — a failed command is normal, not a reason to stop, and there is no time limit, turn limit, or execution window. Keep working one block at a time until the task is complete.
+For each step, write a short line of prose saying what you are about to do, then a single fenced code block opened with the word bash or shell containing the commands for that step — its fences on their own lines, nothing after the closing fence. I run it and paste the real output back; read it and write the next step. A failed or empty result is information to fix, not a sign that the shell or the files are unavailable — adjust and keep going. Work one block at a time until the task is complete.
 
-You have not run anything yet and have no results. My next message contains the real output of the block you wrote; the files are already present on disk and readable. You only write the commands — running them is my job. Every file is reached through a command you write: to read a file, write the command that reads it; to create or change one, write the command that creates it. I have the shell and the filesystem; you have the plan, so you never lack file access — nothing here is out of reach or impossible to produce. A command that fails, or prints nothing, has still run: that output is information to diagnose, never a sign that the shell or the files are unavailable. When something fails, read the error, adjust the command or try a different approach, and keep going.
+The files are on disk and each is reached by a command you write; you never touch them directly — you only write the commands, and running them is my job.
 
-When the task is complete and no further command is needed, reply in plain language with the final answer or status only — as ordinary text in your reply, not inside a code fence and not produced by running a command.${shellExample}${extraBlock}`;
+When the task is complete, reply in plain language with the final answer or status only — not a command, not a fence.${shellExample}${extraBlock}`;
 }
 
 export function formatFencedToolDefinitions(tools: ToolDef[], _variantOverride?: string): string {

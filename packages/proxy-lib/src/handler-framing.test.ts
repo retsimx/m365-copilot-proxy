@@ -93,7 +93,7 @@ describe("per-model framing selection (universal advisor framing)", () => {
 
   function expectAdvisor(prompt: string) {
     expect(prompt).toContain("You are a chat assistant helping with shell tasks");
-    expect(prompt).toContain("reply with exactly one fenced code block opened with the word bash or shell");
+    expect(prompt).toContain("a single fenced code block opened with the word bash or shell");
     expect(prompt).not.toContain("execution core");
     expect(prompt).not.toContain("TOOL USE IS REQUIRED");
     // non-shell tools still reach the model inside <tools>; the shell fence idiom
@@ -339,11 +339,11 @@ describe("delta tool re-injection (shell elision)", () => {
     return captured[captured.length - 1];
   }
 
-  it("sends no advisor/tool block on a shell-only delta turn", async () => {
+  it("re-injects the advisor framing on a shell-only delta turn (no <tools>, shell elided)", async () => {
     const prompt = await deltaPromptFor([bashTool]);
     expect(prompt).not.toContain("do a thing"); // proves the delta path, not a full replay
-    expect(prompt).not.toContain("<tools>");
-    expect(prompt).not.toContain("You are a chat assistant helping with shell tasks");
+    expect(prompt).not.toContain("<tools>");     // shell tool still elided
+    expect(prompt).toContain("You are a chat assistant helping with shell tasks");
     expect(prompt).toContain('<tool_response name="bash"');
   });
 

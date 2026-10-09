@@ -496,7 +496,7 @@ describe("formatFencedToolDefinitions", () => {
     expect(out).toContain("```write_file");
     expect(out).toContain("<<<<<<< SEARCH");
     expect(out).toContain("You are a chat assistant helping with shell tasks");
-    expect(out).toContain("reply with exactly one fenced code block opened with the word bash or shell");
+    expect(out).toContain("a single fenced code block opened with the word bash or shell");
     expect(out).not.toContain("execution core");
     expect(out).not.toContain("TOOL USE IS REQUIRED");
   });
@@ -753,8 +753,8 @@ describe("advisor framing", () => {
   it("frames the model as a chat assistant that writes commands, not an executor", () => {
     const out = formatFencedToolDefinitions(TOOLS);
     expect(out).toContain("You are a chat assistant helping with shell tasks");
-    expect(out).toContain("reply with exactly one fenced code block opened with the word bash or shell");
-    expect(out).toContain("I run that block and paste its output back");
+    expect(out).toContain("a single fenced code block opened with the word bash or shell");
+    expect(out).toContain("I run it and paste the real output back");
     // still presents the non-shell tools + shell idiom so the fences route
     expect(out).toContain("<tools>");
     expect(out).toContain("```bash");
