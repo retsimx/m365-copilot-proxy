@@ -252,9 +252,9 @@ export function formatAdvisorPrompt(tools: ToolDef[]): string {
 
   return `You are a chat assistant helping with shell tasks.
 
-For each step you can write a short line of prose first, saying what you are about to do and why; then leave a blank line and reply with exactly one fenced code block opened with the word bash or shell, containing all the commands for that step. Put the opening and closing fences each on their own line, and put nothing after the closing fence. Emit only one code fence per reply. I run that block and paste its output back; read it, think, then write the next step — when the output is an error, read it and write the corrected command. Work one block at a time until the task is complete.
+For each step you can write a short line of prose first, saying what you are about to do and why; then leave a blank line and reply with exactly one fenced code block opened with the word bash or shell, containing all the commands for that step. Put the opening and closing fences each on their own line, and put nothing after the closing fence. Emit only one code fence per reply. I run that block and paste its output back; read it, think, then write the next step. When the output is an error, read it and write the corrected command — a failed command is normal, not a reason to stop, and there is no time limit, turn limit, or execution window. Keep working one block at a time until the task is complete.
 
-You have not run anything yet and have no results. My next message contains the real output of the block you wrote; the files are already present on disk and readable. You only write the commands — running them is my job. Every file is reached through a command you write: to read a file, write the command that reads it; to create or change one, write the command that creates it. I have the shell and the filesystem; you have the plan, so you never lack file access — nothing here is out of reach or impossible to produce.
+You have not run anything yet and have no results. My next message contains the real output of the block you wrote; the files are already present on disk and readable. You only write the commands — running them is my job. Every file is reached through a command you write: to read a file, write the command that reads it; to create or change one, write the command that creates it. I have the shell and the filesystem; you have the plan, so you never lack file access — nothing here is out of reach or impossible to produce. A command that fails, or prints nothing, has still run: that output is information to diagnose, never a sign that the shell or the files are unavailable. When something fails, read the error, adjust the command or try a different approach, and keep going.
 
 When the task is complete and no further command is needed, reply in plain language with the final answer or status only — as ordinary text in your reply, not inside a code fence and not produced by running a command.${shellExample}${extraBlock}`;
 }
@@ -371,14 +371,19 @@ export function restoreM365Fences(text: string, specs: Map<string, FencedToolSpe
     const line = lines[i];
     if (inBlock) {
       if (CLOSE_FENCE_REGEX.test(line)) { inBlock = false; continue; }
-      // M365 can glue the CLOSING fence to the last command and append trailing
-      // text after it (`…DECISIONS.md```STATUS: blocked`). Split it into the command,
-      // a lone fence, and the trailing prose so the command isn't corrupted.
-      const tick = line.indexOf("```");
-      if (tick > 0) {
-        const after = line.slice(tick + 3);
-        lines.splice(i, 1, ...(after ? [line.slice(0, tick), "```", after] : [line.slice(0, tick), "```"]));
-        continue;
+      // M365 glues the CLOSING fence to adjacent text — mid-line
+      // (`head -n 500```STATUS: …`) OR at line start with no space (` ```STATUS: …`).
+      // Split the fence onto its own line and keep any trailing text as prose, so the
+      // command isn't corrupted and the block actually closes.
+      if (!OPEN_FENCE_REGEX.test(line)) {
+        const tick = line.indexOf("```");
+        if (tick >= 0) {
+          const before = line.slice(0, tick);
+          const after = line.slice(tick + 3);
+          const repl = [...(before ? [before] : []), "```", ...(after ? [after] : [])];
+          lines.splice(i, 1, ...repl);
+          continue;
+        }
       }
       continue;
     }

@@ -164,6 +164,21 @@ describe("parseFencedToolCalls", () => {
     expect(leftover).toContain("STATUS: blocked");
   });
 
+  // Regression: the closing fence at LINE START with trailing text glued on (no space
+  // after the backticks) — `head -n 500\n```STATUS: no files written …`. The earlier
+  // mid-line guard (`indexOf > 0`) missed this because the fence is at index 0.
+  it("parses M365's closing fence glued at line start (```STATUS: …)", () => {
+    const text = [
+      "```bash",
+      "grep -RInE 'x' src tests 2>/dev/null | head -n 500",
+      "```STATUS: no files written | Blocked before deliverable creation | shell execution unavailable",
+    ].join("\n");
+    const { calls, leftover } = parseFencedToolCalls(text, specs);
+    expect(calls).toHaveLength(1);
+    expect(JSON.parse(calls[0].function.arguments).command).toBe("grep -RInE 'x' src tests 2>/dev/null | head -n 500");
+    expect(leftover).toContain("STATUS: no files written");
+  });
+
   it("round-trips a write_file with a multi-line body", () => {
     const content = "def f():\n    return 1\n\nprint(f())";
     const rendered = renderFencedCall(deriveFencedSpec(writeFile), { path: "f.py", content });
