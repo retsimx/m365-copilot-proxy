@@ -256,7 +256,7 @@ For each step you can write a short line of prose first, saying what you are abo
 
 You have not run anything yet and have no results. My next message contains the real output of the block you wrote; the files are already present on disk and readable. You only write the commands — running them is my job. Every file is reached through a command you write: to read a file, write the command that reads it; to create or change one, write the command that creates it. I have the shell and the filesystem; you have the plan, so you never lack file access — nothing here is out of reach or impossible to produce.
 
-When the task is complete and no further command is needed, reply in plain language with the final answer only.${shellExample}${extraBlock}`;
+When the task is complete and no further command is needed, reply in plain language with the final answer or status only — as ordinary text in your reply, not inside a code fence and not produced by running a command.${shellExample}${extraBlock}`;
 }
 
 export function formatFencedToolDefinitions(tools: ToolDef[], _variantOverride?: string): string {
