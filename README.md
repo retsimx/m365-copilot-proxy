@@ -147,16 +147,18 @@ On first request with tools, the proxy provisions a dedicated **Copilot Studio a
 6. Caches the resolved agent ID in `~/.config/opencode-m365/agent-id.json`.
 
 ### 3. Dual-Horizon Rate Limiting & Resilience
-M365 Copilot enforces two separate rate-limiting horizons on paid tenant accounts:
+M365 Copilot exposes two rate-limiting horizons. The numbers below are the proxy's **conservative
+local protections**, informed by observation but **not confirmed universal Microsoft thresholds**
+(see `docs/hypotheses.md` F35 for the 2026-10 campaign evidence):
 
 - **Thread-Rate Protection (`PerScenarioThrottled`)**:
   - Microsoft throttles *conversations created per unit time*, not message volume.
   - Exceeding the rate trips an upstream `PerScenarioThrottled` completion frame and arms a 30-minute cooldown (`M365_THROTTLE_COOLDOWN_SEC = 1800`).
   - **Protection**: A local token bucket (`M365_SESSION_BUCKET_CAPACITY = 10`, refilling every 150s) combined with a 15-second stagger queue (`M365_NEW_SESSION_SPACING_MS = 15000`) restricts fresh conversation starts (`turn === 0`) to 4/minute. Follow-up turns (`turn > 0`) bypass this queue entirely.
 - **Hourly Turn Volume Protection (`PerUserThrottled`)**:
-  - Microsoft enforces an account ceiling of ~120 turns in a 60-minute rolling window (`M365_SUSTAINED_MAX_TURNS = 120`).
+  - Microsoft enforces an account-wide turn-volume ceiling shared across models. The exact value is not pinned; a 2026-10 campaign completed **151 turns (~120/hr) per model for 75 min with no throttle**, while a separate smoke tripped `PerUserThrottled` at **~140 account turns/60m** (blocking both models). The local cap `M365_SUSTAINED_MAX_TURNS = 120` is therefore **conservative policy**, not a confirmed upstream ceiling.
   - Tripping this limit arms a 20-minute cooldown (`M365_USER_THROTTLE_COOLDOWN_SEC = 1200`).
-  - **Protection**: A serialized Priority FIFO Turn Gatekeeper (`paceTurnVelocity`) enforces a minimum 1500ms wire pacing (`M365_MIN_TURN_SPACING_MS = 1500`) to eliminate thundering herd bursts. Short-term bursts are bounded to 35 turns per 10 minutes (`M365_BURST_MAX_TURNS = 35`, soft warning at 30). Forcing retries (`attempt > 0`) queue with priority to jump ahead of normal turns while preserving FIFO order among retries.
+  - **Protection**: A serialized Priority FIFO Turn Gatekeeper (`paceTurnVelocity`) enforces a minimum 1500ms wire pacing (`M365_MIN_TURN_SPACING_MS = 1500`) to eliminate thundering herd bursts. A local burst cap of 35 turns per 10 minutes (`M365_BURST_MAX_TURNS = 35`, soft warning at 30) is likewise conservative policy. Forcing retries (`attempt > 0`) queue with priority to jump ahead of normal turns while preserving FIFO order among retries.
 - **Local Circuit Breaker Shield**:
   - When upstream throttling (`PerScenarioThrottled` or `PerUserThrottled`) is detected, the proxy enters local cooldown (1800s or 1200s).
   - During this window, requests are intercepted locally and return **`HTTP 429 Too Many Requests`** with a client header capped at **`Retry-After: 60`** (`M365_MAX_RETRY_AFTER_SEC = 60`).
@@ -387,10 +389,10 @@ All configuration and cache files reside in `~/.config/opencode-m365/`:
 | `M365_SESSION_REFILL_MS` | `150000` | Refill duration (ms) per conversation token (2.5 minutes). |
 | `M365_NEW_SESSION_SPACING_MS` | `15000` | Minimum spacing (ms) between fresh session starts (15 seconds, caps new threads at 4/min). |
 | `M365_MIN_TURN_SPACING_MS` | `1500` | Wire pacing minimum spacing (ms) between consecutive turns through the gatekeeper. |
-| `M365_BURST_MAX_TURNS` | `35` | Maximum turns allowed in the 10-minute burst window before enforced drain delay. |
+| `M365_BURST_MAX_TURNS` | `35` | Local conservative cap for the 10-minute burst window (policy, not a confirmed upstream threshold). |
 | `M365_BURST_SOFT_TURNS` | `30` | Turn threshold in 10-minute burst window where soft pacing resistance begins. |
 | `M365_BURST_WINDOW_MS` | `600000` | Burst window duration (ms) (10 minutes). |
-| `M365_SUSTAINED_MAX_TURNS` | `120` | Maximum turns allowed across the 60-minute macro-window before safety pauses. |
+| `M365_SUSTAINED_MAX_TURNS` | `120` | Local conservative cap for the 60-minute macro-window (policy, not a confirmed upstream threshold; see F35). |
 | `M365_SUSTAINED_WARN_TURNS` | `90` | Turn threshold in 60-minute window where progressive 5s–25s pacing resistance begins. |
 | `M365_SUSTAINED_WINDOW_MS` | `3600000` | Sustained window duration (ms) (60 minutes). |
 | **SLM Turn Classifier** | | |

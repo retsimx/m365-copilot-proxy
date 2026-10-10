@@ -2707,6 +2707,12 @@ surfacing as empty handshakes (`answer length: 0`) rather than `Disengaged`.
 
 ### F34 — Empirical Confirmation of 120 Turns/60m Account Ceiling, Thundering Herd Race & Priority FIFO Gatekeeper 🟢
 
+> **Qualified 2026-10-10 (see F35).** The "120 turns/60m" figure below is the **proxy's local
+> conservative policy**, not a confirmed upstream threshold: a later campaign completed 151 turns
+> (~120/hr) per model for 75 min with no throttle, while a separate smoke tripped `PerUserThrottled` at
+> **~140 account turns/60m** and blocked **both** models. Read F31/F33/F34 as the origin of the
+> conservative settings, not as an exact Microsoft ceiling.
+
 - **Empirical Confirmation of the 120 Turns / 60m Account Ceiling:**
   - Sustained load testing across parallel subagents confirmed the hard volume limit: Microsoft throttles user accounts with `PerUserThrottled` when turn velocity exceeds 120 turns in a rolling 60-minute window.
   - Cooldown probing demonstrates that a 20-minute (1200s) quiet window allows the leaky bucket to drain sufficiently for safe resumption. Consequently, the default `M365_USER_THROTTLE_COOLDOWN_SEC` has been calibrated down from 3900s (65m) to **1200s (20m)**.
@@ -2958,3 +2964,47 @@ edit). Commits `197926e..8ada30f`. Framings in `packages/core/src/fenced.ts`; st
 `packages/core/src/tools.ts` + `packages/proxy-lib/src/handler.ts`.
 
 
+
+---
+
+### F35 — Sonnet and GPT-5.6 reasoning share one account turn-volume bucket; ~120/hr supported, ~140/hr tripped 🟡→🟢 (2026-10-10)
+
+**Claim.** Claude Sonnet and GPT-5.6 reasoning do **not** have independent per-model turn-throughput
+allowances at saturation: the account enforces an **account-wide** turn-volume ceiling
+(`PerUserThrottled`), and driving one model to it blocks the other — both on an already-open
+conversation and on a freshly created one.
+
+**Evidence.** Campaign `mt-20261010T0719Z` (tool-less, agent-less, gated experiment mode, build
+`4cf66d5`; see `scripts/bench/throughput-out/mt-20261010T0719Z/`):
+
+- Four-run campaign — **100% HTTP 200**, stable upstream conversation per experiment, no throttle:
+  - `exp1` Sonnet burst: **60** back-to-back turns (15.3 turns/min, avg 4114 ms).
+  - `exp2` GPT-5.6 burst: **60** back-to-back turns (17.7 turns/min, avg 3606 ms).
+  - `exp3` Sonnet sustained: **151** turns over ~75 min (2.02/min, avg 3756 ms) at the duration cap.
+  - `exp4` GPT-5.6 sustained: **151** turns over ~75 min (2.02/min, avg 3844 ms) at the duration cap.
+  - Account-wide rolling-60m peaked ~61 (bursts) and ~121 (sustained) — no throttle.
+- A **separate pre-campaign smoke** drove Sonnet to an explicit upstream `PerUserThrottled` at
+  **~140 account turns/60m** (of which ~113 were the smoke's own requests and ~27 were unrelated
+  account activity; the Sonnet conversation itself reached seq 104). Two GPT-5.6 diagnostic attempts
+  then reached upstream and returned the **same `PerUserThrottled`** — the **existing** conversation
+  (`turn=10`) and a **fresh** conversation (`turn=0`); breaker `throttleCount` advanced 19→20→21
+  (each is a real upstream throttle frame, not a reused breaker reason). A no-token control was
+  shielded **locally in 4 ms** (no upstream attempt).
+
+**Confidence.** Medium-high for a *shared* account bucket at saturation (one saturation event, but the
+existing-vs-fresh contrast + the local control discriminate it cleanly). **Does not** establish exact
+maxima, identical per-model costs, or the absence of additional model-specific limits.
+
+**Scope.** One account; short-output, tool-less, agent-less turns; one cross-model saturation event.
+Do not generalize to tool-enabled coding workloads.
+
+**Unresolved questions.** (i) Is there *any* independent per-model allowance above the shared bucket?
+(ii) The exact clean-window ceiling (the sustained rate sat at/below it). (iii) Do reasoning/tool
+tokens (DeepLeo CoT, tool payloads) count differently in the hidden budget?
+
+**Falsification.** From a rested account, throttle model A to `PerUserThrottled`, then show model B
+succeeds upstream on **both** an existing and a fresh conversation within the cooldown window.
+
+**Evidence paths.** `scripts/bench/throughput-out/mt-20261010T0719Z/FINAL_REPORT.md`, `report.md`,
+`attempts.ndjson`, `EVIDENCE_VALIDATION.md`, `smoke/smoke2.json`; runner `scripts/bench/throughput_bench.py`;
+tested proxy patch `proxy-experiment-mode.patch` (applies to `e09b2a0`).

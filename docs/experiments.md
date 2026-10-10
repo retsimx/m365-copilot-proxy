@@ -213,6 +213,45 @@ See `hypotheses.md` §23.
 
 ---
 
+### E-T4 — Model-throughput campaign: Sonnet vs GPT-5.6 (gated experiment mode) (2026-10-10)
+
+- **Hypothesis (F35):** do Claude Sonnet and GPT-5.6 reasoning have different turn-throughput
+  restrictions, and does throttling one affect the other? Result on 2026-10-10: 60/60 bursts and
+  151-turn sustained runs for **both** models with no throttle, and a separate smoke showing a
+  **shared** account `PerUserThrottled`. Falsification: from a rested account, throttle model A, then
+  show model B succeeds upstream on both an existing and a fresh conversation.
+- **Prerequisites:**
+  - Experiment build = `e09b2a0` + `proxy-experiment-mode.patch` (in
+    `scripts/bench/throughput-out/mt-20261010T0719Z/`; the branch that was deployed is deleted, so this
+    patch is the reproduction source).
+  - Drop-in `/etc/systemd/system/m365-copilot-proxy.service.d/experiment.conf` with
+    `M365_EXPERIMENT_MODE=1`, `M365_EXPERIMENT_TOKEN=<secret>`, `M365_EXPERIMENT_DIAG_MAX=2`
+    (template: `…/runtime-config/experiment.conf.template`). Default-off; production never sets these.
+  - `pnpm build && systemctl restart m365-copilot-proxy`.
+- **Exact configuration:** `…/runtime-config/tb-config.json` — models `claude-sonnet-5.5` /
+  `gpt-5.6-think-deeper`; burst `{maxAttempts:60, maxSeconds:600, spacingMs:0}`; sustained
+  `{maxAttempts:200, maxSeconds:4500, spacingMinMs:20000, spacingMaxMs:90000, defaultBoundaryTurns60m:120}`;
+  `quietSeconds:3600`, `smokeTurns:3`.
+- **Session handling:** one fresh primary client session per experiment, reused exactly; one prepared
+  opposite-model session before primary load; verify `/api/metrics` `activeSessions[].conversationId`
+  stays constant (abort on replacement).
+- **Pacing:** manual monotonic spacing, never concurrent, no catch-up bursts; burst = back-to-back;
+  sustained interval selected by the rule
+  `spacingMs = clamp(3_600_000 / clamp(boundary_or_120, 30, 180), 20_000, 90_000)` (30 s here, since
+  neither burst identified a boundary).
+- **Diagnostics:** only after a primary `PerUserThrottled` — one turn on the prepared existing opposite
+  conversation, then one fresh opposite conversation, both role `diagnostic` (server-side budget 2; the
+  breaker is never cleared). Classify each 429 via `/api/metrics` `circuitBreaker.reason`, and confirm
+  each diagnostic's own upstream attempt via the breaker `throttleCount` increment / the debug-log
+  `Upstream M365 rate limit detected` line.
+- **Run:** `python3 scripts/bench/throughput_bench.py run --campaign <id> --config <cfg>` (detached,
+  resumable, enforces quiet hours); `status` / `stop` subcommands.
+- **Read:** `scripts/bench/throughput-out/<id>/report.md` + `FINAL_REPORT.md` + `EVIDENCE_VALIDATION.md`.
+- **Restore:** `bash /root/tb-restore.sh` (removes the drop-in, checks out `e09b2a0`, rebuilds, restarts).
+- **Cost:** ~426 turns over ~7 h (incl. 3 quiet hours); mind the account budget.
+
+---
+
 ## Adding an experiment
 
 1. State the hypothesis + falsification criterion in `hypotheses.md`.

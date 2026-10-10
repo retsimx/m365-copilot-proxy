@@ -835,7 +835,7 @@ export function getDashboardHtml(): string {
             Thread Creation (10m)
             <span class="tooltip-container">
               <button class="tooltip-btn" aria-label="Info">ⓘ</button>
-              <span class="tooltip-text">Tracks fresh session (turn 0) creation over a rolling 10-minute horizon. Microsoft enforces a thread-creation rate limit (~15-20 threads/10m). Exceeding danger threshold triggers proactive pacing.</span>
+              <span class="tooltip-text">Tracks fresh session (turn 0) creation over a rolling 10-minute horizon. Observed upstream thread-creation throttling around ~15-20 threads/10m; the proxy's pacing here is conservative local policy. Exceeding the danger threshold triggers proactive pacing.</span>
             </span>
           </span>
           <span id="threadStatusBadge" class="badge badge-emerald">Safe</span>
@@ -965,7 +965,7 @@ export function getDashboardHtml(): string {
             <span>Historical Timeline &amp; Risk Zones · Cumulative Rolling 10-Minute Velocity (Upstream Sliding Window)</span>
           </div>
           <div style="font-size: 0.775rem; color: var(--text-dim); margin-top: 2px;">
-            Displays the rolling 10m load evaluated by Microsoft's leaky bucket limiters at each point in time.
+            Displays the rolling 10m load tracked against the proxy's conservative leaky-bucket limiters at each point in time.
           </div>
         </div>
         <div class="chart-controls">
@@ -1121,7 +1121,7 @@ export function getDashboardHtml(): string {
           <div class="accordion-content">
             <p>Empirical reverse engineering reveals that Microsoft enforces rate limits across two distinct operational horizons rather than raw prompt tokens:</p>
             <p>1. <strong>Thread Creation Rate Limit (<span class="highlight-param">PerScenarioThrottled</span>):</strong> Tracks <em>conversations started per unit time</em>. Tripping it signals explicit <span class="highlight-param">PerScenarioThrottled</span> completion frames when fresh thread creation exceeds roughly 15–20 conversations per 10 minutes. A single persistent session running dozens of tool turns rarely trips this limit, but rapid subagent spawning burns it immediately.</p>
-            <p>2. <strong>Hourly Turn Volume Ceiling (<span class="highlight-param">PerUserThrottled</span>):</strong> Enforces a hard account ceiling of ~120 turns in a 60-minute rolling window across all active threads. Exceeding this ceiling arms account-wide throttling (<span class="highlight-param">PerUserThrottled</span>) regardless of how many distinct sessions are open.</p>
+            <p>2. <strong>Turn Volume Limit (<span class="highlight-param">PerUserThrottled</span>):</strong> An <em>account-wide</em> turn-volume ceiling shared across all models. Its exact value is not pinned: a 2026-10 campaign completed 151 turns (~120/hr) per model for 75 min with no throttle, while a separate smoke tripped <span class="highlight-param">PerUserThrottled</span> at ~140 account turns/60m and blocked both Sonnet and GPT-5.6 (existing and fresh conversations). The local <span class="highlight-param cfg-sustained-max">—</span>-turn/60m cap below is therefore <strong>conservative local policy</strong>, not a confirmed Microsoft threshold (see hypotheses F35).</p>
           </div>
         </div>
 
@@ -1136,7 +1136,7 @@ export function getDashboardHtml(): string {
           <div class="accordion-content">
             <p>The Dual-Horizon Velocity Governor evaluates telemetry across two rolling horizons simultaneously: a 10-minute burst window (capped at <span class="highlight-param cfg-burst-max">—</span> turns with elastic braking starting at <span class="highlight-param cfg-burst-soft">—</span> turns) and a 60-minute sustained window (capped at <span class="highlight-param cfg-sustained-max">—</span> turns with warning at <span class="highlight-param cfg-sustained-warn">—</span> turns).</p>
             <p>Requests pass through the <strong>Priority FIFO Turn Gatekeeper</strong>, which enforces strict single-file serialization with a minimum 1500ms wire pacing (<span class="highlight-param">M365_MIN_TURN_SPACING_MS = 1500</span>) to eliminate thundering-herd bursts. The gatekeeper re-evaluates live dual-horizon sliding window limits before dispatching each turn. Forcing retries (<span class="highlight-param">attempt &gt; 0</span>) receive head-of-queue priority so recovering turns execute without waiting behind newer requests.</p>
-            <p>When turn velocity enters the guarded zone, the proxy injects progressive micro-delays (elastic braking) into completion requests. This smoothly paces client agents, keeping request rates just below Microsoft's threshold without failing the task.</p>
+            <p>When turn velocity enters the guarded zone, the proxy injects progressive micro-delays (elastic braking) into completion requests. This smoothly paces client agents, keeping request rates just below the proxy's conservative thresholds without failing the task.</p>
           </div>
         </div>
 

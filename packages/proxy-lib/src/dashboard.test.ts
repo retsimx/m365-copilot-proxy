@@ -180,7 +180,7 @@ describe("Web Dashboard & Telemetry API", () => {
       const html = getDashboardHtml();
       // Timeline header with cumulative rolling velocity
       expect(html).toContain("Cumulative Rolling 10-Minute Velocity (Upstream Sliding Window)");
-      expect(html).toContain("Displays the rolling 10m load evaluated by Microsoft's leaky bucket limiters at each point in time.");
+      expect(html).toContain("Displays the rolling 10m load tracked against the proxy's conservative leaky-bucket limiters at each point in time.");
 
       // Legend with dual-axis ranges
       expect(html).toContain("Turns Filled Area (Left Axis: 0-40)");

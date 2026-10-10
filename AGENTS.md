@@ -40,12 +40,15 @@ Hard-won defaults for working on this proxy. Internalize these before touching a
      not messages (F13). Tripping it returns explicit `PerScenarioThrottled` completion frames and arms
      a 30-minute (1800s) cooldown. The proxy enforces a continuous token bucket + 15s stagger queue for
      fresh conversations (`turn === 0`) to cap thread creation at 4/min.
-   - **Hourly turn volume (`PerUserThrottled`):** Tracks total turns dispatched across the account,
-     enforcing a hard ceiling of ~120 turns in a 60-minute rolling window. Tripping it arms a 20-minute
-     (1200s) cooldown (`M365_USER_THROTTLE_COOLDOWN_SEC`). The proxy protects this with a Dual-Horizon
-     Progressive Leaky Bucket and a serialized Priority FIFO Turn Gatekeeper (`paceTurnVelocity`) with
-     1500ms minimum turn spacing (`M365_MIN_TURN_SPACING_MS = 1500`), where forcing retries jump to the
-     head of the queue.
+   - **Hourly turn volume (`PerUserThrottled`):** Tracks total turns dispatched across the account.
+     The proxy's local ~120 turns / 60-minute rolling cap is **conservative local policy, not a
+     confirmed Microsoft threshold** (see hypotheses F35): a 2026-10 campaign ran 151 turns
+     (~120/hr) per model for 75 min with no throttle, while a separate smoke tripped `PerUserThrottled`
+     at ~140 account turns/60m and blocked **both** models (existing and fresh conversations). Tripping
+     it arms a 20-minute (1200s) cooldown (`M365_USER_THROTTLE_COOLDOWN_SEC`). The proxy protects this
+     with a Dual-Horizon Progressive Leaky Bucket and a serialized Priority FIFO Turn Gatekeeper
+     (`paceTurnVelocity`) with 1500ms minimum turn spacing (`M365_MIN_TURN_SPACING_MS = 1500`), where
+     forcing retries jump to the head of the queue.
    Never fire concurrent requests, and never loop fresh conversations back-to-back. Space experiment
    runs out (generous cooldowns between threads). A real pi/openclaw session — one long thread, many
    messages — is cheap; it's our *experiments* (a new thread per task) or unthrottled subagents that
@@ -190,8 +193,10 @@ pnpm test:live      # M365_LIVE=1; live tests that hit real M365 (uses quota)
     Upstream throttling returns explicit `PerScenarioThrottled` completion frames. A bench or harness
     that opens fresh conversations/subagents in rapid succession burns the thread budget fast (~15–20
     threads / 10 min); a single long thread (hundreds of messages) is fine.
-  - **Hourly turn volume (`PerUserThrottled`, docs/hypotheses.md §17 F31/F34):** Microsoft caps total
-    account turns at ~120 turns per 60-minute rolling window.
+  - **Hourly turn volume (`PerUserThrottled`, docs/hypotheses.md §17 F31/F34; F35):** Microsoft
+    enforces an **account-wide** turn-volume ceiling shared by all models (observed 2026-10: throttling
+    Sonnet blocked GPT-5.6 on both existing and fresh conversations). The exact ceiling is **not pinned**;
+    the proxy's ~120 turns / 60-minute cap is **conservative local policy**, not a confirmed upstream number.
 - **The proxy features a Local Circuit Breaker Shield.** When upstream throttling (`PerScenarioThrottled`
   or `PerUserThrottled`) or repeated empty responses across conversations are detected, the proxy arms
   a cooldown (1800s for `PerScenarioThrottled`, 1200s for `PerUserThrottled`). The proxy intercepts
