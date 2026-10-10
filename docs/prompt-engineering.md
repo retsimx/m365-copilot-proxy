@@ -160,15 +160,19 @@ order of importance:
    *information*; a truncated result is a size cap — fetch the remainder with a narrower read.
    Reinforced by the delta-envelope annotation (below).
 
-**The internal sandbox — the agent-less trap** ([api §5](m365-copilot-api.md)). On the
-agent-less (Claude) path M365 silently supplies **its own server-side code-interpreter
-sandbox** (`/mnt/data`, user `oai`). The model reports that *wrong-machine* transcript as
-truth — answering `whoami` → `"oai"`, and after a failed path declaring *"this is a sandboxed
-environment that doesn't have your files."* Attaching the agent would route Claude to GPT-5,
-and dropping the code-interpreter `optionsSets` did not stop M365 defaulting it on — so the fix
-is prompt-level: the agent framing **denies any self sandbox** (*"you have no shell, code
-interpreter, sandbox, canvas, or filesystem of your own — never invoke execution outside the
-harness"*) and makes a harness `<tool_output>` the only valid evidence.
+**Two competing tool surfaces — the agent-less trap** ([api §5](m365-copilot-api.md)). On the
+agent-less (Claude) path M365 gives the model **its own tool set** — `bash_tool` (a *container*
+shell), `create_file`, `view`, `str_replace`, plus web/Office helpers — invoked via a native
+**Anthropic XML function-call block**
+(`<anthropic_function_calls>…<tool_name>bash_tool</tool_name>…`). **Microsoft's runtime intercepts
+that XML** and runs it in its **remote sandbox as user `oai`** (`/mnt/data`), so the model reports
+a *wrong-machine* result (`whoami` → `"oai"`, *"this is a sandboxed environment that doesn't have
+your files"*). **Only the fenced ```` ```bash ```` block reaches the harness** (the user's real
+machine) — a non-registered XML name (`bash`) just returns `NO CONTENT AVAILABLE`. Attaching the
+agent would route Claude to GPT-5, and dropping the code-interpreter `optionsSets` did not stop it —
+so the fix is prompt-level: the framing **names Microsoft's tools *and* the XML format** and directs
+the model to the fenced calls only (Claude: imperative *"ignore them"*; GPT/advisor: the same fact
+stated **descriptively**, since that framing is shape-frozen).
 
 **Self-authored `<tool_output>` simulation — rejected.** A Claude run fabricated git output: it
 emitted a real `git log` fence, then wrote its **own** `<tool_output>` blocks with invented

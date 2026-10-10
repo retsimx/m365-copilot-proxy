@@ -234,6 +234,19 @@ code_interpreter_interactive_charts, code_interpreter_matplotlib_patching
 
 > **Agent-less default (Oct 2026).** Dropping the flags is not sufficient: M365 appears to default the sandbox **ON whenever no agent is attached** — i.e. on the Claude (agent-less) path. There, the model reports the sandbox as the user's machine: `whoami` → `"oai"`, and after a failed path *"this is a sandboxed environment that doesn't have your files / no git repository found."* Because attaching the agent would route Claude to GPT-5, the mitigation is prompt-level — the Claude agent framing **denies any self sandbox** and makes a harness `<tool_output>` the only valid evidence. See [`prompt-engineering.md`](prompt-engineering.md) and `hypotheses.md` §23 F23a.
 
+> **The native Claude tool surface — the real mechanism (Oct 2026).** The "sandbox" behaviour is not a confabulation: on the agent-less path M365 gives Claude **its own tool set**, separate from the harness's. Observed live (the model reported its own system-prompt tools): `bash_tool` (a **container** shell), `create_file`, `view`, `str_replace`, plus `image_gen`, `search_web`, `click`, the `office365_*` helpers, an Outlook compose tool, `present_files`, `record_memory`, and product-help. These run in Microsoft's remote sandbox as user **`oai`** (paths like `/mnt/data`) — none of the caller's files. The model invokes them with a native **Anthropic XML function-call block**:
+>
+> ```
+> <anthropic_function_calls>
+>   <invoke>
+>     <tool_name>bash_tool</tool_name>
+>     <parameters><command>whoami</command></parameters>
+>   </invoke>
+> </anthropic_function_calls>
+> ```
+>
+> Microsoft's runtime intercepts that XML and dispatches to the named sandbox tool (`bash_tool` → `whoami` → `oai`). A non-registered name (e.g. `bash`) returns `NO CONTENT AVAILABLE` — it is *not* routed to the harness. **Only the proxy's fenced ```` ```bash ```` block reaches the harness** (the user's real machine). So the model faces **two competing tool surfaces** — Microsoft's XML/sandbox tools and the proxy's fenced calls — and the fix is prompt-level: the framing **names** Microsoft's tools *and* the XML format and directs the model to the fenced calls only. See [`prompt-engineering.md`](prompt-engineering.md), `hypotheses.md` §23 F23a.
+
 ---
 
 ## 6. Receiving a response

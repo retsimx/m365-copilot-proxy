@@ -2912,14 +2912,20 @@ framing** than GPT can take, so `formatAdvisorPrompt` is no longer universal:
 `read`/`write`/`edit`/`bash`), everything else → the bash-only advisor. Verified live: Claude
 sonnet reads/writes/edits/executes; `read`/`write`/`edit`/`bash` all dispatch.
 
-**F23a — the agent-less sandbox trap.** On the agent-less (Claude) path M365 silently supplies
-its own server-side code-interpreter sandbox (`/mnt/data`, user `oai`). The model reports that
-**wrong-machine** transcript as truth: `whoami` → `"oai"`, and after a failed path *"this is a
-sandboxed environment that doesn't have your files / no git repository found."* Attaching the
-agent would route Claude to GPT-5; dropping the code-interpreter `optionsSets` did not stop M365
-defaulting it on. **Fix (prompt-level):** the agent framing *denies any self sandbox* and makes a
-harness `<tool_output>` the only valid evidence. Verified: after the fix `whoami` returns the real
-host account, and a read→edit→write task completes.
+**F23a — the agent-less sandbox trap is NATIVE-TOOL INVOCATION, not a confabulation.** On the
+agent-less (Claude) path M365 gives the model its **OWN tool set** — `bash_tool` (a *container*
+shell), `create_file`, `view`, `str_replace`, plus web/Office tools — which run in Microsoft's
+remote sandbox as user **`oai`** (`/mnt/data`), holding none of the caller's files. The model calls
+them via a native **Anthropic XML function-call block**
+(`<anthropic_function_calls><invoke><tool_name>bash_tool</tool_name><parameters><command>…`),
+which **Microsoft's runtime intercepts** and dispatches to its sandbox (`bash_tool` → `whoami` →
+`oai`); a non-registered name (`bash`) returns `NO CONTENT AVAILABLE` — it is *not* routed to the
+harness. So the model faces **two competing tool surfaces** (Microsoft's XML/sandbox vs the proxy's
+fenced calls), and **only the fenced ```` ```bash ```` block reaches the user's machine**. Attaching
+the agent would route Claude to GPT-5, and dropping the code-interpreter `optionsSets` did not stop
+it. **Fix (prompt-level):** the agent framing *names* Microsoft's tools + the XML format and forbids
+them, denies any self sandbox, and makes a harness `<tool_output>` the only valid evidence. Verified:
+after the fix `whoami` → the real host account, and read→edit→write tasks complete.
 
 **F23b — write-past-the-fence / self-authored `<tool_output>`.** A chat completion doesn't
 natively stop after a tool call — it keeps writing, and (once two-sided examples were added)
