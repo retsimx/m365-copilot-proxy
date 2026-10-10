@@ -149,3 +149,31 @@ prompt is tuned. The layers, in handler order:
 > The JSON tool format and the few-shot block were **removed** this cycle (0/5 on real
 > agentic tasks). Tool calling is fenced-only; behavioural framing lives in the per-request
 > `<tools>` block, not a baked-in few-shot.
+
+## Fenced-parsing hardening (Oct 2026)
+
+Real Claude tool-shapes exposed four parser gaps, all fixed in `packages/core/src/fenced.ts`:
+
+- **Glued / mid-line fence openers.** M365 emits `prose```read` (the opener glued to the end of
+  a prose line). The streaming prose-gate matched only *own-line* fences, so the fence — and
+  everything after it (a trailing `UNABLE` / `STATUS: blocked`) — leaked into the content
+  channel. The gate now recognises a fence at any position (line-start, ≤3 spaces, or glued to
+  prose) and seals at the backticks; only the prose before the call is emitted.
+- **Prose after a closing fence.** A fence between two prose runs parsed as a tool call, but the
+  scan's closing-fence regex swallowed the trailing prose. It is now collected and appended to
+  the leftover, so the response is *(leading prose) + tool_call + (trailing prose)*.
+- **Edits whose body contains a fence.** The block scanner terminated at the first ```` ``` ````
+  line, so an `edit` whose `oldString`/`newString` contained a fenced block was dropped
+  (`hasToolCalls=false`) — the "edit tool never works" symptom (`bash`/`read` were fine; their
+  bodies rarely contain fences). The scanner now tracks the `<<<<<<< SEARCH` / `>>>>>>> REPLACE`
+  region and does not close inside it.
+- **`isProseDocument` over-eager.** It downgraded a real tool call to prose when the surrounding
+  prose was long (`prose.length >= 350`), so a legit "prose + ```` ```bash ```` + prose" reply was
+  returned as text. The length heuristic was removed; only document-level signals (≥4 fences, or
+  tutorial headings) downgrade now.
+
+Also: **self-authored result simulation** is rejected — the stripper matches `<tool_output>` as
+well as the legacy `<tool_response>` (salvage the real call, drop the fabricated suffix, reset
+the session). And **`(no output)` / truncation notices** in the harness tool result are annotated
+inline (`empty="true"` / `truncated="true"` + an actionable "continue / fetch the remainder"
+line) so the model paginates instead of surrendering.

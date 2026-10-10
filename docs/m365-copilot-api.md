@@ -232,6 +232,8 @@ code_interpreter_interactive_charts, code_interpreter_matplotlib_patching
 
 > The `optionsSets` array was previously sent **empty**. Live reference implementations (`kuchris/m365-copilot-openai-proxy`, Microsoft's own `PyRIT`) populate it richly — code interpreter, memory, custom-instructions, image input. See `docs/hypotheses.md` §8 for the full catalogue of flags still on the table.
 
+> **Agent-less default (Oct 2026).** Dropping the flags is not sufficient: M365 appears to default the sandbox **ON whenever no agent is attached** — i.e. on the Claude (agent-less) path. There, the model reports the sandbox as the user's machine: `whoami` → `"oai"`, and after a failed path *"this is a sandboxed environment that doesn't have your files / no git repository found."* Because attaching the agent would route Claude to GPT-5, the mitigation is prompt-level — the Claude agent framing **denies any self sandbox** and makes a harness `<tool_output>` the only valid evidence. See [`prompt-engineering.md`](prompt-engineering.md) and `hypotheses.md` §23 F23a.
+
 ---
 
 ## 6. Receiving a response

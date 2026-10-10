@@ -128,6 +128,55 @@ A proposed rewrite of the advisor framing into a terser "chat assistant" voice �
 
 **Rule — the advisor framing is shape-frozen: describe the session, never command it.** Do not "lean-ify" it with imperatives/prohibitions; each added clause is disengage weight (F22). "Leaner" ≠ "softer." Safe simplifications (verified live): elide the shell tool from `<tools>`; always include the single bash header example with params; drop the bash-usage idioms (routing is regex-based, so the model needn't be taught bash); drop the format prescriptions (`Put nothing before the fence`, `never multiple fences`, `do not split them across multiple code fences`, `no code fence / no preamble`); and recast anti-confab from `Never…` prohibitions to **descriptive facts**. The resulting de-shaped framing tool-calls on `magic`, `gpt-5.5-think-deeper`, `gpt-5.6-think-deeper`, and **`gpt-6-astra`** (the restrictive tone), including delta turns. Implementation: `packages/core/src/fenced.ts` (`formatAdvisorPrompt`).
 
+### Two framings now: advisor (GPT) vs agent (Claude) — Oct 2026
+
+Framing is **no longer universal**. Claude tones (`Claude_*`) are **agent-less** (no
+declarative agent attached — see [`m365-copilot-api.md` §5](m365-copilot-api.md)), which
+makes them structurally immune to the F17/F22 Disengage class. That immunity buys a
+**stricter** framing GPT cannot take: the **agent variant** (`formatAgentPrompt`, chosen by
+`framingVariantForTone`). GPT tones keep the bash-only advisor framing, unchanged.
+
+**Agent framing (Claude) — the levers.** The model is declared the tools directly — `read`,
+`write`, `edit`, `bash` — each with a fenced template and a worked **call** example. In
+order of importance:
+
+1. **Positive execution contract, not prohibition.** *"You propose tool calls; the external
+   harness alone executes them … emitting a call does not execute it and provides no evidence
+   of its result."* Prohibition-heavy rewrites **made it worse** — the model reasoned about
+   the rules instead of acting.
+2. **Terminal tool-call boundary.** *"End your message immediately after the closing fence —
+   no expected result, no simulated exchange, no conclusion."* A chat completion otherwise
+   keeps writing past the fence.
+3. **No return-side examples.** Showing *"the harness then returns: `<tool_output>`…"* taught
+   the model to **author `<tool_output>` blocks itself** (fabricated results). Examples now
+   end at the call and state the result arrives in a separate message.
+4. **Grounding-first rule.** The first action MUST be a grounding command (`pwd && ls -la .`)
+   before describing the environment. This is what killed the "`/home/claude` / sandboxed
+   container / project doesn't exist" confabulation — the model no longer establishes an
+   environment before touching reality.
+5. **`workdir:` in the bash example** (generic placeholder) so commands run in the project
+   directory, not the harness default.
+6. **Persistence / truncation framing.** A failed, empty, or truncated result is
+   *information*; a truncated result is a size cap — fetch the remainder with a narrower read.
+   Reinforced by the delta-envelope annotation (below).
+
+**The internal sandbox — the agent-less trap** ([api §5](m365-copilot-api.md)). On the
+agent-less (Claude) path M365 silently supplies **its own server-side code-interpreter
+sandbox** (`/mnt/data`, user `oai`). The model reports that *wrong-machine* transcript as
+truth — answering `whoami` → `"oai"`, and after a failed path declaring *"this is a sandboxed
+environment that doesn't have your files."* Attaching the agent would route Claude to GPT-5,
+and dropping the code-interpreter `optionsSets` did not stop M365 defaulting it on — so the fix
+is prompt-level: the agent framing **denies any self sandbox** (*"you have no shell, code
+interpreter, sandbox, canvas, or filesystem of your own — never invoke execution outside the
+harness"*) and makes a harness `<tool_output>` the only valid evidence.
+
+**Self-authored `<tool_output>` simulation — rejected.** A Claude run fabricated git output: it
+emitted a real `git log` fence, then wrote its **own** `<tool_output>` blocks with invented
+SHAs/subjects (lifted from this repo's `AGENTS.md` feature names). The proxy's self-simulation
+stripper matched only the legacy `<tool_response>` tag; it now matches `<tool_output>` too —
+salvage the real call, drop the fabricated suffix, reset the session
+([`tool-calling.md`](tool-calling.md)).
+
 ### Production findings & confabulation bypass (`docs/hypotheses.md` §21)
 
 As documented in [`docs/hypotheses.md` §21](./hypotheses.md#21-october-8-2026--production-analysis-advisor-framing-renders-proxy-confabulation-machinery-obsolete-m365_disable_confab_detection-), long-term production telemetry across 1,306 production turns under universal advisor framing revealed:

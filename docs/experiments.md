@@ -190,6 +190,29 @@ All run with `scripts/_probe-chat.mjs` overrides; no license needed.
 
 ---
 
+### E-C9 — Claude agent-path probes (read → think → update; grounding; edit) ✅ RESOLVED
+
+**Hypothesis:** on the agent-less Claude path, does the agent framing drive a full
+read→think→update loop (not just turn-1 tool calls), and does it ground itself and use `edit`?
+
+**Run:** drive a small multi-turn loop through the proxy (SSE, `tools:[read,write,edit,bash]`):
+
+1. **read → think → update** — "read `<file>`, multiply its integer by 3, write it back" →
+   expect `read` then `write`; verify the file on disk.
+2. **grounding** — "run the shell command `whoami` and report its output" → expect a `bash`
+   call and the *real* host account (not `oai` / a sandbox path).
+3. **edit** — "use the edit tool to change `alpha`→`omega` in `<file>`" → expect `edit` +
+   verify the file changed.
+
+**Readout:** the tool name per turn + the on-disk file. **Cost:** ~3 msgs/run, one session each.
+
+**Result (2026-10-10, `10.0.1.15`):** all three pass under the Claude agent framing (sonnet).
+Pre-fix: `edit` returned `hasToolCalls=false` (a parser gap — the block closed on a ```` ``` ````
+inside `oldString`), and the grounding probe confabulated a sandbox (`whoami` → `"oai"`).
+See `hypotheses.md` §23.
+
+---
+
 ## Adding an experiment
 
 1. State the hypothesis + falsification criterion in `hypotheses.md`.

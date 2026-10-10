@@ -252,8 +252,9 @@ trade-offs: **GPT ≈2× more efficient** (2.4 vs 5.3 tool calls — matters for
 **Claude is agent-less → structurally IMMUNE to the F17/F22 Disengage class** (the thing we fought all
 day). **Other tones (agent-less, n=3):** `Claude_Sonnet` 3/3 tool-fence, `Claude_Sonnet_Reasoning`
 **3/3** (reasoning-Claude tool-calls too — contradicts the old "reasoning tones meta-analyze" claim,
-which was the agent/GPT path), `Claude_Opus` **0/3** (`origin=BotConnection`, apology — not routable
-agent-less on this tenant; dead end).
+which was the agent/GPT path). ~~`Claude_Opus` **0/3** (not routable agent-less; dead end)~~ —
+**SUPERSEDED (corrected later): `Claude_Opus` (opus 5.5) is a working, functional agent-less tone;
+the old 0/3 (`origin=BotConnection`, apology) reading was stale/wrong, NOT a dead end.**
 **Decision:** keep GPT+agent as DEFAULT (efficient, proven); ship `claude-sonnet` as a first-class
 alternative (agent-less, 100% on fix-bug, disengage-immune). NOT a slam-dunk to flip the default —
 it's a genuine efficiency-vs-robustness trade. **To settle it:** compare on a HARDER/multi-file task
@@ -2899,5 +2900,55 @@ Contrast: the OLD prohibition "Do not make any tool calls and do not try to run 
 **Rule.** The advisor framing is *shape-frozen*: **describe the session, never command it.** Don't "lean-ify" it with imperatives/prohibitions — every added clause is disengage weight (F22). "Leaner" ≠ "softer": the rewrite was ~40% shorter yet far more override-shaped, precisely because it traded description for commands.
 
 **Evidence.** Live proxy A/B on `10.0.1.15` (2026-10-08; one session per variant, state-controlled by re-testing the last passing variant). Implementation in `packages/core/src/fenced.ts` (`formatAdvisorPrompt`).
+
+---
+
+## 23. October 10 2026 — Claude agent framing: agent-less tool-calling, the internal-sandbox trap, and the levers that fixed it 🟢
+
+**Headline.** Claude tones (`Claude_*`) are **agent-less** (no declarative agent attached) →
+structurally immune to the F17/F22 Disengage class. That immunity allows a **stricter agent
+framing** than GPT can take, so `formatAdvisorPrompt` is no longer universal:
+`framingVariantForTone` routes Claude → the **agent** variant (`formatAgentPrompt`, declares
+`read`/`write`/`edit`/`bash`), everything else → the bash-only advisor. Verified live: Claude
+sonnet reads/writes/edits/executes; `read`/`write`/`edit`/`bash` all dispatch.
+
+**F23a — the agent-less sandbox trap.** On the agent-less (Claude) path M365 silently supplies
+its own server-side code-interpreter sandbox (`/mnt/data`, user `oai`). The model reports that
+**wrong-machine** transcript as truth: `whoami` → `"oai"`, and after a failed path *"this is a
+sandboxed environment that doesn't have your files / no git repository found."* Attaching the
+agent would route Claude to GPT-5; dropping the code-interpreter `optionsSets` did not stop M365
+defaulting it on. **Fix (prompt-level):** the agent framing *denies any self sandbox* and makes a
+harness `<tool_output>` the only valid evidence. Verified: after the fix `whoami` returns the real
+host account, and a read→edit→write task completes.
+
+**F23b — write-past-the-fence / self-authored `<tool_output>`.** A chat completion doesn't
+natively stop after a tool call — it keeps writing, and (once two-sided examples were added)
+**authored its own `<tool_output>` blocks** with fabricated results (invented git SHAs/subjects,
+lifted from this repo's `AGENTS.md` feature names). Fixes: (1) remove the return-side examples
+(they taught the imitation); (2) a terminal-boundary rule ("end your message after the closing
+fence"); (3) extend the self-simulation stripper to match `<tool_output>` as well as the legacy
+`<tool_response>` — salvage the real call, drop the fabricated suffix, reset the session.
+
+**F23c — grounding-first kills environment confabulation.** Requiring the first action to be a
+grounding command (`pwd && ls -la .`) before describing the environment eliminated the
+"`/home/claude` / sandboxed / doesn't exist" confabulation. With a real command as first contact,
+there is nothing to invent. Confirmed live: a fresh session grounded, then reported the real
+commits and an accurate commit analysis.
+
+**F23d — parser bugs surfaced by Claude's shapes.** (i) a fence glued to prose (`prose```read`)
+leaked as prose (the streaming gate only matched own-line fences); (ii) a fence between two prose
+runs parsed but dropped the trailing prose; (iii) an **edit** whose `oldString`/`newString`
+contained a ```` ``` ```` was dropped — the scanner closed the block early (the "edit tool never
+works" symptom); (iv) `isProseDocument` downgraded a real tool call to prose when the surrounding
+prose was long. All fixed. ([`tool-calling.md`](tool-calling.md).)
+
+**F23e — model routing.** Claude sonnet is the reliable default tool-caller; GPT is a bounded
+deep-reasoning consultant (one targeted resume, then hand execution to sonnet); 61sol is
+prose-only (reasoning unverified); opus 5.5 **works** — the earlier "dead end" reading was stale
+(corrected above). Router: `m365.md`.
+
+**Evidence.** Live proxy on `10.0.1.15`, 2026-10-10 (probes: read→think→update, plain grounding,
+edit). Commits `197926e..8ada30f`. Framings in `packages/core/src/fenced.ts`; stripper in
+`packages/core/src/tools.ts` + `packages/proxy-lib/src/handler.ts`.
 
 
