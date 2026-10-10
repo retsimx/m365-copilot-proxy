@@ -339,21 +339,31 @@ describe("delta tool re-injection (shell elision)", () => {
     return captured[captured.length - 1];
   }
 
-  it("sends NO framing on a delta turn — just the named <tool_output> + <user>", async () => {
+  it("re-attaches the session framing on a delta turn, with the named <tool_output>", async () => {
     const prompt = await deltaPromptFor([bashTool]);
-    expect(prompt).not.toContain("do a thing"); // proves the delta path, not a full replay
-    expect(prompt).not.toContain("You are a chat assistant helping with shell tasks, working toward the whole task stated in the user's request");
-    expect(prompt).not.toContain("<tools>");
+    expect(prompt).not.toContain("do a thing"); // delta path — not a full replay of the turn-0 user message
+    expect(prompt).toContain("You are a chat assistant helping with shell tasks, working toward the whole task stated in the user's request");
+    expect(prompt).toContain("a single fenced block opened with the word bash (or shell) containing the commands for that step");
     expect(prompt).toContain('<tool_output name="bash"');
     expect(prompt).toContain("</tool_output>");
   });
 
-  it("sends NO framing on a mixed delta turn either", async () => {
+  it("re-attaches the framing on a mixed delta turn too", async () => {
     const prompt = await deltaPromptFor([bashTool, readFileTool]);
-    expect(prompt).not.toContain("do a thing"); // proves the delta path, not a full replay
-    expect(prompt).not.toContain("You are a chat assistant helping with shell tasks, working toward the whole task stated in the user's request");
-    expect(prompt).not.toContain("<tools>");
+    expect(prompt).not.toContain("do a thing");
+    expect(prompt).toContain("You are a chat assistant helping with shell tasks, working toward the whole task stated in the user's request");
     expect(prompt).toContain('<tool_output name="bash"');
+  });
+
+  it("M365_NO_TURN_FRAMING=1 disables the per-turn framing re-attach", async () => {
+    process.env.M365_NO_TURN_FRAMING = "1";
+    try {
+      const prompt = await deltaPromptFor([bashTool]);
+      expect(prompt).not.toContain("You are a chat assistant helping with shell tasks, working toward the whole task stated in the user's request");
+      expect(prompt).toContain('<tool_output name="bash"');
+    } finally {
+      delete process.env.M365_NO_TURN_FRAMING;
+    }
   });
 
   it("annotates an empty tool result so the model keeps going", async () => {
