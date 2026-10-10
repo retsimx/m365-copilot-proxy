@@ -374,6 +374,19 @@ Microsoft enforces two distinct account-level rate limiting regimes, both keyed 
 - Keep tasks inside persistent long threads wherever possible. Spawning 10 subagents consumes 10× more thread budget than sending 100 messages in a single continuous thread.
 - If `HTTP 429` is returned with `Retry-After`, let the client sleep and auto-retry without killing the session.
 
+**Monitoring before changing throughput (policy).**
+Do **not** raise the local caps speculatively. The proxy already emits the raw signals on
+`/api/metrics`: local queue delay (`turnQueue.depth`, `governor.*.currentDelayMs`,
+`history[].maxPacingDelayMs`), achieved turn rate (`history[].turns`), retry/salvage pressure
+(`quality.*`), and explicit upstream throttles (`circuitBreaker.reason`,
+`totals.lifetimeThrottles`). Watch these — ideally separated by **model** and **agent attachment**
+(tool-enabled vs agent-less) — and only investigate higher limits if the current pacing *materially
+delays real work*. The next useful comparison uses the **actual tool-enabled production path**, not
+another short acknowledgement-message campaign. The 2026-10 campaign (F35) deliberately did **not**
+establish a maximum; do not raise the sustained cap toward the observed ~140/hr failure region on the
+strength of it. (Per-model / per-agent breakdown is not yet exposed by `/api/metrics` — an
+instrumentation gap to close before tuning.)
+
 ---
 
 ## 8. Conversations & sessions

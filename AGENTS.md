@@ -197,6 +197,10 @@ pnpm test:live      # M365_LIVE=1; live tests that hit real M365 (uses quota)
     enforces an **account-wide** turn-volume ceiling shared by all models (observed 2026-10: throttling
     Sonnet blocked GPT-5.6 on both existing and fresh conversations). The exact ceiling is **not pinned**;
     the proxy's ~120 turns / 60-minute cap is **conservative local policy**, not a confirmed upstream number.
+  - **Before raising local burst/sustained caps:** monitor queue delay, achieved turn rate, retries and
+    explicit throttles on `/api/metrics`, ideally split by model and agent attachment, and only raise
+    limits if pacing materially delays real work — validating on the tool-enabled path. See
+    `docs/m365-copilot-api.md` §7 "Monitoring before changing throughput".
 - **The proxy features a Local Circuit Breaker Shield.** When upstream throttling (`PerScenarioThrottled`
   or `PerUserThrottled`) or repeated empty responses across conversations are detected, the proxy arms
   a cooldown (1800s for `PerScenarioThrottled`, 1200s for `PerUserThrottled`). The proxy intercepts
