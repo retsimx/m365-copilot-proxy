@@ -585,6 +585,25 @@ describe("formatFencedToolDefinitions", () => {
     expect(out).toContain("workdir: /path/to/dir");
   });
 
+  it("Claude variant (agent) declares read/write/edit + bash tool templates", () => {
+    const T = (name: string, props: Record<string, unknown>, req: string[]): ToolDef => ({
+      type: "function", function: { name, description: "d", parameters: { type: "object", properties: props, required: req } },
+    });
+    const tools = [
+      T("read", { filePath: { type: "string" }, offset: { type: "number" }, limit: { type: "number" } }, ["filePath"]),
+      T("write", { filePath: { type: "string" }, content: { type: "string" } }, ["filePath", "content"]),
+      T("edit", { filePath: { type: "string" }, oldString: { type: "string" }, newString: { type: "string" } }, ["filePath", "oldString", "newString"]),
+      T("bash", { command: { type: "string" }, timeout: { type: "number" }, workdir: { type: "string" } }, ["command"]),
+    ];
+    const out = formatFencedToolDefinitions("agent", tools);
+    expect(out).toContain("capable assistant with tools");
+    expect(out).toContain("<tools>");
+    expect(out).toContain("```read");
+    expect(out).toContain("```write");
+    expect(out).toContain("```edit");
+    expect(out).toContain("```bash");
+  });
+
   it("derives task tool spec with prompt body and parses multiline prompt body correctly", () => {
     const taskTool: ToolDef = {
       type: "function",
@@ -820,18 +839,19 @@ describe("advisor framing", () => {
     }
   });
 
-  it("is registered as the universal variant", () => {
-    expect(FRAMING_VARIANT_NAMES).toEqual(["advisor"]);
+  it("registers the advisor + Claude agent variants", () => {
+    expect(FRAMING_VARIANT_NAMES).toEqual(["advisor", "agent"]);
   });
 });
 
 describe("framingVariantForTone", () => {
-  it("returns advisor for all tones universally", () => {
+  it("routes Claude tones to the execution-agent framing, everything else to advisor", () => {
     expect(framingVariantForTone("Gpt_6_Astra")).toBe("advisor");
     expect(framingVariantForTone("Gpt_5_6_Reasoning")).toBe("advisor");
     expect(framingVariantForTone("Gpt_5_5_Reasoning")).toBe("advisor");
     expect(framingVariantForTone("magic")).toBe("advisor");
-    expect(framingVariantForTone("Claude_Sonnet")).toBe("advisor");
+    expect(framingVariantForTone("Claude_Sonnet")).toBe("agent");
+    expect(framingVariantForTone("Claude_Opus")).toBe("agent");
   });
 });
 
@@ -903,14 +923,14 @@ describe("createProseStreamGate (design 002 §3.2)", () => {
 });
 
 describe("isAdvisorTone", () => {
-  it("returns true for all tones universally", () => {
+  it("is true for every non-Claude tone", () => {
     expect(isAdvisorTone("Gpt_6_Astra")).toBe(true);
     expect(isAdvisorTone("Gpt_5_6_Reasoning")).toBe(true);
     expect(isAdvisorTone("gpt_6_astra")).toBe(true);
     expect(isAdvisorTone("GPT_6_ASTRA")).toBe(true);
     expect(isAdvisorTone("Gpt_5_5_Reasoning")).toBe(true);
     expect(isAdvisorTone("magic")).toBe(true);
-    expect(isAdvisorTone("Claude_Sonnet")).toBe(true);
+    expect(isAdvisorTone("Claude_Sonnet")).toBe(false);
     expect(isAdvisorTone()).toBe(true);
   });
 });

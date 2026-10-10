@@ -257,8 +257,38 @@ For reading, creating, or changing files, you write the shell commands; I run th
 An unexpected or imperfect result — an error, an empty output, a wrong path, a truncated one — is information toward the objective, not grounds to stop; keep adjusting and going, and treat the objective as unachievable only when you are certain of it. A truncated result is a size cap — fetch the remainder with a narrower read (offset, limit; sed -n; head/tail). Keep working one block at a time until the whole objective is achieved. Only then reply with the final answer in plain language — not a command, not a fence.${shellExample}`;
 }
 
-export function formatFencedToolDefinitions(): string {
-  return formatAdvisorPrompt() + hostPlatformNote();
+/** Claude variant: a full execution agent that declares its tools (read/write/edit/bash). */
+function agentToolSpecs(tools: ToolDef[]): FencedToolSpec[] {
+  const byName = (name: string) => tools.find((t) => t.function.name === name);
+  const specs: FencedToolSpec[] = [];
+  const read = byName("read");
+  if (read) specs.push({ ...deriveFencedSpec(read), description: "reads a file and returns its contents. `filePath` is required; `offset` and `limit` are optional." });
+  const write = byName("write");
+  if (write) specs.push({ ...deriveFencedSpec(write), description: "writes content to a file, overwriting it. `filePath` is required; the body is the content." });
+  const edit = byName("edit");
+  if (edit) specs.push({ ...deriveFencedSpec(edit), description: "replaces `oldString` with `newString` in a file. Read the file first so the text matches exactly." });
+  const shell = findShellTool(tools);
+  specs.push(shell
+    ? { ...deriveFencedSpec(shell), bodyPlaceholder: null, description: "runs a command on the machine and returns its output." }
+    : { name: "bash", description: "runs a command on the machine and returns its output.", headerParams: ["timeout", "workdir"], bodyParam: "command", bodyPlaceholder: null });
+  return specs;
+}
+
+export function formatAgentPrompt(tools: ToolDef[]): string {
+  const toolsBlock = `<tools>\n${agentToolSpecs(tools).map(renderFencedTemplate).join("\n\n")}\n</tools>`;
+  return `You are a capable assistant with tools, working toward the whole task stated in the user's request. Use them to do the work.
+
+Your objective is the whole task, not any single step. An objective may take one step or many; no single step completes it — the objective is achieved only when the work of all its steps is done. Every result, whatever it shows, is one of those steps.
+
+For each step, write a short line of prose saying what you are about to do, then exactly one fenced block that calls the tool you need, filled in as its template shows — its fences on their own new lines, nothing after the closing fence. The call's output comes back to you in a <tool_output> block; read it and write the next call.
+
+An unexpected or imperfect result — an error, an empty output, a wrong path, a truncated one — is information toward the objective, not grounds to stop; keep adjusting and going, and treat the objective as unachievable only when you are certain of it. A truncated result is a size cap — fetch the remainder with a narrower read. Keep working one block at a time until the whole objective is achieved. Only then reply with the final answer in plain language — not a command, not a fence.
+
+${toolsBlock}`;
+}
+
+export function formatFencedToolDefinitions(variant: string = "advisor", tools: ToolDef[] = []): string {
+  return (variant === "agent" ? formatAgentPrompt(tools) : formatAdvisorPrompt()) + hostPlatformNote();
 }
 
 /** Per-turn correction telling the model which OS it is actually driving.
@@ -292,15 +322,16 @@ export function currentFramingVariant(): string {
   return "advisor";
 }
 
-export function isAdvisorTone(_tone?: string): boolean {
-  return true;
+/** Claude tones get the execution-agent framing; every other tone the bash-only advisor. */
+export function isAdvisorTone(tone?: string): boolean {
+  return !/^Claude_/i.test(tone ?? "");
 }
 
-export function framingVariantForTone(_tone?: string): string {
-  return "advisor";
+export function framingVariantForTone(tone?: string): string {
+  return isAdvisorTone(tone) ? "advisor" : "agent";
 }
 
-export const FRAMING_VARIANT_NAMES = ["advisor"];
+export const FRAMING_VARIANT_NAMES = ["advisor", "agent"];
 
 // --- Parsing -----------------------------------------------------------------
 

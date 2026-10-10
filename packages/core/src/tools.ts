@@ -89,8 +89,8 @@ function cleanLooseText(text: string): string | null {
 
 /** The session framing, hand-written (bash-only; no tool descriptions are ever injected).
  *  Historically named `formatToolDefinitions`; it never formats or emits tool defs. */
-export function formatSessionFraming(): string {
-  return formatFencedToolDefinitions();
+export function formatSessionFraming(variant: string = "advisor", tools: ToolDef[] = []): string {
+  return formatFencedToolDefinitions(variant, tools);
 }
 
 export function formatToolChoiceInstruction(toolChoice: ToolChoice): string {
@@ -163,7 +163,7 @@ export function formatMessages(
   tools?: ToolDef[],
   toolChoice?: ToolChoice,
   conversationId?: string,
-  _framingVariant?: string,
+  framingVariant?: string,
 ): string {
   const parts: string[] = [];
 
@@ -174,7 +174,7 @@ export function formatMessages(
   const effectiveTools = tools ? maybeInjectReplyTool(tools) : tools;
   const specMap = effectiveTools ? buildSpecMap(effectiveTools) : null;
   if (effectiveTools && effectiveTools.length > 0 && toolChoice !== "none") {
-    parts.push(`<system>\n${formatSessionFraming()}${formatToolChoiceInstruction(toolChoice)}\n</system>`);
+    parts.push(`<system>\n${formatSessionFraming(framingVariant, effectiveTools ?? [])}${formatToolChoiceInstruction(toolChoice)}\n</system>`);
   }
 
   // Correlate each tool result back to the call that produced it, so the model

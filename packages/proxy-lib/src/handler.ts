@@ -6,6 +6,7 @@ import {
   getToneForModel,
   formatMessages,
   formatSessionFraming,
+  framingVariantForTone,
   restoreM365Fences,
   parseToolCalls,
   looksLikeConfabulation,
@@ -827,7 +828,7 @@ export async function handleChatCompletion(
   const tone = getToneForModel(model);
   const isClaudeTone = /^Claude_/i.test(tone);
   const useToolAgent = !!hasTools && (process.env.M365_FORCE_AGENT === "1" || !isClaudeTone);
-  const framingVariant = "advisor";
+  const framingVariant = framingVariantForTone(tone);
 
   // Format message: full prompt on first turn, delta on follow-ups.
   // M365 is stateful — it remembers everything from prior turns,
@@ -838,7 +839,7 @@ export async function handleChatCompletion(
   const convId = session.conversationId;
   let text: string;
   if (isFirstTurn || conv.sentMessageCount === 0) {
-    text = formatMessages(body.messages, body.tools, body.tool_choice, convId);
+    text = formatMessages(body.messages, body.tools, body.tool_choice, convId, framingVariant);
     log.info(`Chat completion: model=${model}, stream=${body.stream}, messages=${body.messages.length}, turn=${session.turnCount}, mode=full, cid=${convId}`);
   } else {
     const newMessages = body.messages.slice(conv.sentMessageCount);
@@ -847,12 +848,12 @@ export async function handleChatCompletion(
       // Re-attach the session framing on every turn. M365 is stateful, but the turn-0
       // framing dilutes over a long session and the model drifts (forgets the fence
       // mechanic / how to write files). M365_NO_TURN_FRAMING=1 disables the re-attach.
-      const framing = hasTools && process.env.M365_NO_TURN_FRAMING !== "1" ? `${formatSessionFraming()}\n\n` : "";
+      const framing = hasTools && process.env.M365_NO_TURN_FRAMING !== "1" ? `${formatSessionFraming(framingVariant, body.tools ?? [])}\n\n` : "";
       text = `${framing}${delta}`;
       log.info(`Chat completion: model=${model}, stream=${body.stream}, messages=${body.messages.length}, new=${newMessages.length}, turn=${session.turnCount}, mode=delta, cid=${convId}`);
     } else {
       // No meaningful new content to send — nudge M365 to continue.
-      const toolsBlock = hasTools ? `${formatSessionFraming()}\n\n` : "";
+      const toolsBlock = hasTools ? `${formatSessionFraming(framingVariant, body.tools ?? [])}\n\n` : "";
       text = `${toolsBlock}<user>\nPlease continue from where you left off.\n</user>`;
       log.info(`Chat completion: model=${model}, stream=${body.stream}, messages=${body.messages.length}, new=0 (nudge), turn=${session.turnCount}, mode=delta, cid=${convId}`);
     }
@@ -1195,7 +1196,7 @@ export async function handleChatCompletion(
             ? CONFAB_FORCE_PROMPT
             : HALLUCINATION_FORCE_PROMPT;
       const basePrompt = forcePrompt;
-      const toolsBlock = hasTools ? `${formatSessionFraming()}\n\n` : "";
+      const toolsBlock = hasTools ? `${formatSessionFraming(framingVariant, body.tools ?? [])}\n\n` : "";
       text = `${toolsBlock}${basePrompt}`;
       const retry = await runBuffered(onDelta, onReasoning);
       if ("error" in retry) return { kind: "error", resp: retry.error };
