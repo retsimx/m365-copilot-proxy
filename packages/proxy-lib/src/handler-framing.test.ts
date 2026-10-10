@@ -92,7 +92,7 @@ describe("per-model framing selection (universal advisor framing)", () => {
   }
 
   function expectAdvisor(prompt: string) {
-    expect(prompt).toContain("You are a chat assistant. The tools you can use are listed below");
+    expect(prompt).toContain("You are a chat assistant with tools, working toward the whole task stated in the user's request");
     expect(prompt).toContain("exactly one fenced block that calls the tool you need");
     expect(prompt).not.toContain("execution core");
     expect(prompt).not.toContain("TOOL USE IS REQUIRED");
@@ -183,7 +183,7 @@ describe("forcing retry prompts for all models (unified advisor force prompt)", 
     expect(retryPrompt).toContain(CONFAB_FORCE_PROMPT);
     expect(retryPrompt).toContain("I will run the commands and paste the real output back to you");
     expect(retryPrompt).toContain("Output ONE self-contained ```bash block with the commands for me to run, nothing else.");
-    expect(retryPrompt).toContain("You are a chat assistant. The tools you can use are listed below");
+    expect(retryPrompt).toContain("You are a chat assistant with tools, working toward the whole task stated in the user's request");
     expect(retryPrompt).not.toContain("execution core");
     expect(retryPrompt).not.toContain("TOOL USE IS REQUIRED");
   });
@@ -234,7 +234,7 @@ describe("forcing retry prompts for all models (unified advisor force prompt)", 
     expect(retryPrompt).toContain(CONFAB_FORCE_PROMPT);
     expect(retryPrompt).toContain("I will run the commands and paste the real output back to you");
     expect(retryPrompt).toContain("Output ONE self-contained ```bash block with the commands for me to run, nothing else.");
-    expect(retryPrompt).toContain("You are a chat assistant. The tools you can use are listed below");
+    expect(retryPrompt).toContain("You are a chat assistant with tools, working toward the whole task stated in the user's request");
     expect(retryPrompt).not.toContain("execution core");
     expect(retryPrompt).not.toContain("TOOL USE IS REQUIRED");
   });
@@ -285,7 +285,7 @@ describe("forcing retry prompts for all models (unified advisor force prompt)", 
     expect(retryPrompt).toContain(CONFAB_FORCE_PROMPT);
     expect(retryPrompt).toContain("I will run the commands and paste the real output back to you");
     expect(retryPrompt).toContain("Output ONE self-contained ```bash block with the commands for me to run, nothing else.");
-    expect(retryPrompt).toContain("You are a chat assistant. The tools you can use are listed below");
+    expect(retryPrompt).toContain("You are a chat assistant with tools, working toward the whole task stated in the user's request");
     expect(retryPrompt).not.toContain("execution core");
     expect(retryPrompt).not.toContain("TOOL USE IS REQUIRED");
   });
@@ -342,7 +342,7 @@ describe("delta tool re-injection (shell elision)", () => {
   it("sends NO framing on a delta turn — just the named <tool_output> + <user>", async () => {
     const prompt = await deltaPromptFor([bashTool]);
     expect(prompt).not.toContain("do a thing"); // proves the delta path, not a full replay
-    expect(prompt).not.toContain("You are a chat assistant. The tools you can use are listed below");
+    expect(prompt).not.toContain("You are a chat assistant with tools, working toward the whole task stated in the user's request");
     expect(prompt).not.toContain("<tools>");
     expect(prompt).toContain('<tool_output name="bash"');
     expect(prompt).toContain("</tool_output>");
@@ -351,7 +351,7 @@ describe("delta tool re-injection (shell elision)", () => {
   it("sends NO framing on a mixed delta turn either", async () => {
     const prompt = await deltaPromptFor([bashTool, readFileTool]);
     expect(prompt).not.toContain("do a thing"); // proves the delta path, not a full replay
-    expect(prompt).not.toContain("You are a chat assistant. The tools you can use are listed below");
+    expect(prompt).not.toContain("You are a chat assistant with tools, working toward the whole task stated in the user's request");
     expect(prompt).not.toContain("<tools>");
     expect(prompt).toContain('<tool_output name="bash"');
   });

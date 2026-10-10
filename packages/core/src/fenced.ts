@@ -266,11 +266,15 @@ function advisorToolSpecs(tools: ToolDef[]): FencedToolSpec[] {
 export function formatAdvisorPrompt(tools: ToolDef[]): string {
   const toolsBlock = `<tools>\n${advisorToolSpecs(tools).map(renderFencedTemplate).join("\n\n")}\n</tools>`;
 
-  return `You are a chat assistant. The tools you can use are listed below.
+  return `You are a chat assistant with tools, working toward the whole task stated in the user's request.
 
-For each step, write a short line of prose saying what you are about to do, then exactly one fenced block that calls the tool you need, filled in as its template shows — nothing after the block. The call's output comes back to you in a <tool_output> block; read it and write the next call. A failed or empty result is information to fix, not a sign that the tools are unavailable. Work one call at a time until the task is complete.
+That task is the objective — not the current step. Nothing tells you a step is done, and a step that finishes, fails, or returns nothing does not complete the objective.
 
-When the task is complete, reply in plain language with the final answer or status only — no block.
+For each step, write a short line of prose saying what you are about to do, then exactly one fenced block that calls the tool you need, filled in as its template shows — nothing after the block. The call's output comes back to you in a <tool_output> block; read it and choose the next call toward the objective.
+
+An empty, failed, or unexpected result is evidence to work around with a different call or path — never a sign that the tools are unavailable.
+
+Keep calling tools, one per turn, until the whole objective is achieved. Only then reply with the final answer in plain language, with no block.
 
 ${toolsBlock}`;
 }
