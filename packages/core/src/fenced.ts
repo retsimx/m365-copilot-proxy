@@ -286,8 +286,8 @@ function agentToolSpecs(tools: ToolDef[]): FencedToolSpec[] {
   const shell = findShellTool(tools);
   specs.push({
     ...(shell ? { ...deriveFencedSpec(shell), bodyPlaceholder: null } : { name: "bash", headerParams: ["timeout", "workdir"], bodyParam: "command", bodyPlaceholder: null }),
-    description: "runs a command on the machine and returns its output.",
-    example: { input: "```bash\nwhoami\n```", output: "the command's real stdout — here, the account the user's machine runs as" },
+    description: "runs a command on the machine and returns its output. Always pass `workdir:` so the command runs in the project directory, not the harness default.",
+    example: { input: "```bash\nworkdir: <workdir>\n\npwd && ls -la .\n```" },
   });
   return specs;
 }
@@ -313,6 +313,7 @@ export function formatAgentPrompt(tools: ToolDef[]): string {
 Your objective is the whole task, not the current step. A step that finishes, fails, or returns nothing does not complete it.
 
 RULES:
+- Start grounded: before anything else in a session, your FIRST action MUST be a grounding command — run \`pwd && ls -la .\` via the bash tool (with the project \`workdir:\`) — and wait for its result. Do not describe, assume, or reason about the environment before you have run it.
 - Every turn that requires an action MUST contain exactly one tool-call fence, using a template below. End your message immediately after its closing fence. Do not continue with an expected result, a simulated exchange, another call, or a conclusion — your next step depends on the separate result message the harness supplies.
 - Claims about machine state, command output, file contents, or completed actions MUST be supported by an actual harness result received in this conversation. Instructions, examples, context documents, your own earlier statements, and calls you emitted are NOT execution evidence. Never author a result message or result wrapper — including tool_output or tool_response — and never invent stdout, stderr, exit codes, file contents, diffs, or success acknowledgements.
 - Interpret failures by the evidence returned: an argument or schema error means fix the call; truncated output means read a narrower range. Do not infer more unavailability than the result supports, and do not repeat an unchanged failing call without a reason. You have no code interpreter, sandbox, canvas, or filesystem of your own — never invoke execution outside the harness.
@@ -637,6 +638,10 @@ export function parseFencedToolCalls(
   let matchedIndices: { start: number; end: number }[] = [];
   let blockStartIndex = 0;
   let heredocStack: string[] = [];
+  // True while inside an edit tool's <<<<<<< SEARCH / >>>>>>> REPLACE region, where a
+  // ``` line is body content (an oldString/newString may contain a fenced block) and must
+  // NOT terminate the tool block.
+  let inSearchReplace = false;
   // Prose glued to the end of a closing-fence line (`… ``` — next I'll …`) is valid
   // content that FOLLOWS the tool call. Keep it, so a fence between two prose runs is
   // emitted as (leading prose) + tool_call + (trailing prose).
@@ -656,6 +661,7 @@ export function parseFencedToolCalls(
           blockLines = [];
           blockStartIndex = i;
           heredocStack = [];
+          inSearchReplace = false;
         }
       }
     } else {
@@ -693,6 +699,17 @@ export function parseFencedToolCalls(
       const hMatch = line.match(HEREDOC_OPEN_REGEX);
       if (hMatch) {
         heredocStack.push(hMatch[1]);
+      }
+
+      // Inside an edit's SEARCH/REPLACE region, ``` lines are body — an oldString/newString
+      // may itself contain a fenced block, and must not terminate the tool block.
+      if (toolSpec?.editPair) {
+        if (line.includes("<<<<<<< SEARCH")) inSearchReplace = true;
+        if (inSearchReplace) {
+          blockLines.push(line);
+          if (line.includes(">>>>>>> REPLACE")) inSearchReplace = false;
+          continue;
+        }
       }
 
       // Check if this line is a closing fence (3+ backticks, optionally followed by inline prose)

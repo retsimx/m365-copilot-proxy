@@ -110,6 +110,17 @@ describe("parseFencedToolCalls", () => {
     expect(args).toEqual({ command: "ls -la" });
   });
 
+  it("parses an edit whose SEARCH/REPLACE body contains a ``` fence", () => {
+    const specMap = buildSpecMap([editFile]);
+    const text = "```edit_file\npath: /x/f.ts\n<<<<<<< SEARCH\nold ```bash\ncode\n```\n=======\nnew\n>>>>>>> REPLACE\n```";
+    const { calls } = parseFencedToolCalls(text, specMap);
+    expect(calls).toHaveLength(1);
+    const args = JSON.parse(calls[0].function.arguments);
+    expect(args.path).toBe("/x/f.ts");
+    expect(args.old).toContain("old");
+    expect(args.new).toContain("new");
+  });
+
   it("parses a fence between two prose runs and keeps the prose after it", () => {
     const text = "I'll read the file first.\n\n```bash\ncat counter.txt\n``` — then I'll update it.";
     const { calls, leftover } = parseFencedToolCalls(text, specs);
