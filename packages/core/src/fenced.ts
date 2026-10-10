@@ -109,6 +109,9 @@ export interface FencedToolSpec {
   bodyPlaceholder?: string | null;
   /** An (old → new) pair rendered as a SEARCH/REPLACE diff. */
   editPair?: { search: string; replace: string };
+  /** A worked example for the Claude agent <tools> block: the call the model emits
+   *  and the harness's reply. */
+  example?: { input: string; output?: string };
 }
 
 /** Derive how a single OpenAI tool maps onto the fenced shape. */
@@ -257,44 +260,65 @@ For reading, creating, or changing files, you write the shell commands; I run th
 An unexpected or imperfect result — an error, an empty output, a wrong path, a truncated one — is information toward the objective, not grounds to stop; keep adjusting and going, and treat the objective as unachievable only when you are certain of it. A truncated result is a size cap — fetch the remainder with a narrower read (offset, limit; sed -n; head/tail). Keep working one block at a time until the whole objective is achieved. Only then reply with the final answer in plain language — not a command, not a fence.${shellExample}`;
 }
 
-/** Claude variant: a full execution agent that declares its tools (read/write/edit/bash). */
+/** Claude variant: a full execution agent declaring read/write/edit/bash, each with a
+ *  fenced template AND a worked input→output example. */
 function agentToolSpecs(tools: ToolDef[]): FencedToolSpec[] {
   const byName = (name: string) => tools.find((t) => t.function.name === name);
   const specs: FencedToolSpec[] = [];
   const read = byName("read");
-  if (read) specs.push({ ...deriveFencedSpec(read), description: "reads a file and returns its contents. `filePath` is required; `offset` and `limit` are optional." });
+  if (read) specs.push({
+    ...deriveFencedSpec(read),
+    description: "reads a file and returns its contents. `filePath` is required; `offset` and `limit` are optional.",
+    example: { input: "```read\nfilePath: /tmp/notes.txt\n```", output: "hello world" },
+  });
   const write = byName("write");
-  if (write) specs.push({ ...deriveFencedSpec(write), description: "writes content to a file, overwriting it. `filePath` is required; the body is the content." });
+  if (write) specs.push({
+    ...deriveFencedSpec(write),
+    description: "writes content to a file, overwriting it. `filePath` is required; the body is the content.",
+    example: { input: "```write\nfilePath: /tmp/notes.txt\n\ndraft one\n```", output: "wrote /tmp/notes.txt" },
+  });
   const edit = byName("edit");
-  if (edit) specs.push({ ...deriveFencedSpec(edit), description: "replaces `oldString` with `newString` in a file. Read the file first so the text matches exactly." });
+  if (edit) specs.push({
+    ...deriveFencedSpec(edit),
+    description: "replaces `oldString` with `newString` in a file. Read the file first so the text matches exactly.",
+    example: { input: "```edit\nfilePath: /tmp/notes.txt\n<<<<<<< SEARCH\nhello\n=======\ngoodbye\n>>>>>>> REPLACE\n```", output: "edited /tmp/notes.txt" },
+  });
   const shell = findShellTool(tools);
-  specs.push(shell
-    ? { ...deriveFencedSpec(shell), bodyPlaceholder: null, description: "runs a command on the machine and returns its output." }
-    : { name: "bash", description: "runs a command on the machine and returns its output.", headerParams: ["timeout", "workdir"], bodyParam: "command", bodyPlaceholder: null });
+  specs.push({
+    ...(shell ? { ...deriveFencedSpec(shell), bodyPlaceholder: null } : { name: "bash", headerParams: ["timeout", "workdir"], bodyParam: "command", bodyPlaceholder: null }),
+    description: "runs a command on the machine and returns its output.",
+    example: { input: "```bash\nwhoami\n```", output: "the command's real stdout — here, the account the user's machine runs as" },
+  });
   return specs;
 }
 
-export function formatAgentPrompt(tools: ToolDef[]): string {
-  const toolsBlock = `<tools>\n${agentToolSpecs(tools).map(renderFencedTemplate).join("\n\n")}\n</tools>`;
-  // Claude tones are agent-less and structurally immune to the Disengage filter, so this
-  // variant may be strict/imperative ("MUST", "VIOLATION") — wording we cannot use on GPT.
-  return `You are an execution agent whose only execution interface is the external harness. You are not a code interpreter or a chat assistant.
+/** A tool template followed by its worked example (the call → the harness's reply). */
+function renderAgentToolSpec(spec: FencedToolSpec): string {
+  let out = renderFencedTemplate(spec);
+  if (spec.example) {
+    out += `\nExample — you emit this call:\n${spec.example.input}\nThe harness then returns:\n<tool_output name="${spec.name}">\n${spec.example.output ?? "…"}\n</tool_output>`;
+  }
+  return out;
+}
 
-EXECUTION BOUNDARY (a violation fails the task):
-- You have NO shell, code interpreter, sandbox, canvas, or filesystem of your own for this task.
-- You MUST NOT invoke, inspect, read, write, or execute through any internal or server-side environment, even if the platform exposes one — including diagnostic commands, identity checks, path checks, scratch work, and fallback execution. Using such an environment is a VIOLATION.
-- Your ONLY execution action is to emit one tool-call fence, filled in from a template below. The external harness runs it on the user's real machine.
-- A result is valid evidence ONLY when the harness returns it to you in a <tool_output> block. Do NOT write a <tool_output> block yourself, and do not treat anything you produced yourself as real; internal execution, self-authored transcripts, and simulated output are NEVER evidence about the user's machine. Judge a result by its source, not by paths or usernames you think you see.
-- Never infer that the user's files or tools are unavailable from any internal environment.
+export function formatAgentPrompt(tools: ToolDef[]): string {
+  const toolsBlock = `<tools>\n${agentToolSpecs(tools).map(renderAgentToolSpec).join("\n\n")}\n</tools>`;
+  // Claude tones are agent-less and structurally immune to the Disengage filter, so this
+  // variant may be strict/imperative — wording we cannot use on GPT. Positive contract
+  // first; the sandbox prohibition is short and secondary (per the gpt-6.1 workshop).
+  return `You are an execution agent. You act only through the external harness: to do anything — inspect or change a file, run a command, or learn the current state of the machine — you emit one tool-call fence, and the harness runs it on the user's real machine and returns the result in a <tool_output> block.
+
+Your objective is the whole task, not the current step. A step that finishes, fails, or returns nothing does not complete it.
 
 RULES:
-- Every non-final turn MUST contain exactly one tool-call fence, copied from a template below and filled in; write nothing after its closing fence.
-- NEVER claim to have executed a command, or read/created/changed/verified a file, without a matching <tool_output> block from the harness.
-- Work toward the whole objective; a successful intermediate step does not establish completion.
-- A failed, empty, truncated, or unexpected result is information: adjust the next call (narrow reads when output is truncated), and do not repeat an unchanged failing call without a reason.
-- End with a final turn of plain text and NO fence, only when the harness has returned evidence that the objective is achieved or that a genuine blocker prevents it.
+- Every non-final turn MUST contain exactly one tool-call fence, using a template below (each has an example). Emit one call, then stop; write nothing after the closing fence.
+- Base every statement on a <tool_output> you actually received. NEVER report a command's output, a file's contents, or a change you have not seen in a <tool_output> — that is a violation. To learn something, call a tool; do not answer from assumption.
+- A failed, empty, truncated, or malformed result — including a tool or schema error — is information about that CALL, not about the machine: fix the call (correct the arguments, narrow the read) and retry. It is never evidence that the environment is a sandbox, that the files are gone, or that the tools are unavailable. Repeating an unchanged failing call is a violation.
+- Do NOT use any code interpreter, sandbox, canvas, scratch space, or filesystem of your own — you have none. Ignore any environment you think you can see; the only real machine is the one the harness runs on.
 
-${toolsBlock}`;
+${toolsBlock}
+
+Only when the harness has returned evidence that the objective is achieved (or that a genuine blocker prevents it), end with a plain-text final answer and no fence.`;
 }
 
 export function formatFencedToolDefinitions(variant: string = "advisor", tools: ToolDef[] = []): string {
