@@ -49,8 +49,8 @@ const BODY_PARAM_NAMES = [
   "prompt", "instruction", "instructions", "message", "questions", "diff", "payload",
   "todos", "items", "tasks", "entries",
 ];
-const SEARCH_KEYS = ["old", "search", "find", "old_str", "old_string", "target"];
-const REPLACE_KEYS = ["new", "replace", "replacement", "new_str", "new_string"];
+const SEARCH_KEYS = ["old", "search", "find", "old_str", "old_string", "oldstring", "target"];
+const REPLACE_KEYS = ["new", "replace", "replacement", "new_str", "new_string", "newstring"];
 
 // Fence info-strings that mean "a shell script". M365's chat-tuned model emits
 // ```bash blocks reflexively (it's the one agentic-shaped output Microsoft's
@@ -114,8 +114,8 @@ export function deriveFencedSpec(tool: ToolDef): FencedToolSpec {
   const properties = tool.function.parameters?.properties ?? {};
   const props = Object.keys(properties);
 
-  const search = props.find((p) => SEARCH_KEYS.includes(p));
-  const replace = props.find((p) => REPLACE_KEYS.includes(p));
+  const search = props.find((p) => SEARCH_KEYS.includes(p.toLowerCase()));
+  const replace = props.find((p) => REPLACE_KEYS.includes(p.toLowerCase()));
   if (search && replace) {
     return {
       name,
@@ -233,21 +233,38 @@ function renderFencedTemplate(spec: FencedToolSpec): string {
   return `${header}\n\`\`\`${spec.name}\n${lines.join("\n")}\n\`\`\``;
 }
 
-export function formatAdvisorPrompt(tools: ToolDef[]): string {
+// We only support the opencode build-agent toolset, matched by its EXACT names. The set
+// is kept lean (bash + the file primitives) — M365 disengages on large toolsets, and
+// glob/grep/list are all reachable through bash anyway.
+/** The tool specs to render in the self-authored <tools> block, in display order. */
+function advisorToolSpecs(tools: ToolDef[]): FencedToolSpec[] {
+  const byName = (name: string) => tools.find((t) => t.function.name === name);
   const shellTool = findShellTool(tools);
+  const specs: FencedToolSpec[] = [
+    shellTool
+      ? { ...deriveFencedSpec(shellTool), description: "runs a command on the machine and returns its output. The `timeout:` and `workdir:` header lines are optional." }
+      : {
+          name: "bash",
+          description: "runs a command on the machine and returns its output. The `timeout:` and `workdir:` header lines are optional.",
+          headerParams: ["timeout", "workdir"],
+          bodyParam: "command",
+        },
+  ];
 
-  // A single, self-authored <tools> block: ONLY our shell tool, with our OWN short
-  // description but the tool's REAL params (command / timeout / workdir). The model
-  // should reach for it by itself — the framing prose deliberately does not name it.
-  const shellSpec: FencedToolSpec = shellTool
-    ? { ...deriveFencedSpec(shellTool), description: "runs a command on the machine and returns its output. The `timeout:` and `workdir:` header lines are optional." }
-    : {
-        name: "bash",
-        description: "runs a command on the machine and returns its output. The `timeout:` and `workdir:` header lines are optional.",
-        headerParams: ["timeout", "workdir"],
-        bodyParam: "command",
-      };
-  const toolsBlock = `<tools>\n${renderFencedTemplate(shellSpec)}\n</tools>`;
+  const read = byName("read");
+  if (read) specs.push({ ...deriveFencedSpec(read), description: "reads a file and returns its contents. `filePath` is required; `offset` and `limit` are optional." });
+
+  const write = byName("write");
+  if (write) specs.push({ ...deriveFencedSpec(write), description: "writes content to a file, overwriting it. `filePath` is required; the body is the content." });
+
+  const edit = byName("edit");
+  if (edit) specs.push({ ...deriveFencedSpec(edit), description: "replaces `oldString` with `newString` in a file. Read the file first so the text matches exactly; set `replaceAll` to change every occurrence." });
+
+  return specs;
+}
+
+export function formatAdvisorPrompt(tools: ToolDef[]): string {
+  const toolsBlock = `<tools>\n${advisorToolSpecs(tools).map(renderFencedTemplate).join("\n\n")}\n</tools>`;
 
   return `You are a chat assistant. The tools you can use are listed below.
 
