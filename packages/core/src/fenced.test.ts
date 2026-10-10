@@ -558,8 +558,8 @@ describe("formatFencedToolDefinitions", () => {
     expect(out).not.toContain("Run a shell command.");
     expect(out).toContain("```write_file");
     expect(out).toContain("<<<<<<< SEARCH");
-    expect(out).toContain("You are a chat assistant helping with shell tasks");
-    expect(out).toContain("a single fenced code block opened with the word bash or shell");
+    expect(out).toContain("You have access to bash through the runtime");
+    expect(out).toContain("one bash-fenced block");
     expect(out).not.toContain("execution core");
     expect(out).not.toContain("TOOL USE IS REQUIRED");
   });
@@ -815,27 +815,17 @@ describe("advisor framing", () => {
 
   it("frames the model as a chat assistant that writes commands, not an executor", () => {
     const out = formatFencedToolDefinitions(TOOLS);
-    expect(out).toContain("You are a chat assistant helping with shell tasks");
-    expect(out).toContain("a single fenced code block opened with the word bash or shell");
-    expect(out).toContain("I run it and paste the real output back");
+    expect(out).toContain("You have access to bash through the runtime");
+    expect(out).toContain("one bash-fenced block");
+    expect(out).toContain("The runtime executes them on a real host");
     // still presents the non-shell tools + shell idiom so the fences route
     expect(out).toContain("<tools>");
     expect(out).toContain("```bash");
   });
 
-  it("omits every agentic pressure that makes Astra refuse", () => {
-    const out = formatFencedToolDefinitions(TOOLS);
-    for (const banned of [
-      "execution core",
-      "real shell",
-      "TOOL USE IS REQUIRED",
-      "PRIMARY JOB",
-      "automated agent",
-      "runtime",
-    ]) {
-      expect(out, `advisor must not contain "${banned}"`).not.toContain(banned);
-    }
-  });
+  // NOTE: the "omits every agentic pressure / banned words" assertion was removed when
+  // we flipped to an execution-agent framing (2026-10-10): the new framing deliberately
+  // KEEPS "runtime" / "automated execution agent" as the experiment's hypothesis.
 
   it("is registered as the universal variant", () => {
     expect(FRAMING_VARIANT_NAMES).toEqual(["advisor"]);

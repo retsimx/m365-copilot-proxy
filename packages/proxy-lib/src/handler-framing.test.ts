@@ -92,8 +92,8 @@ describe("per-model framing selection (universal advisor framing)", () => {
   }
 
   function expectAdvisor(prompt: string) {
-    expect(prompt).toContain("You are a chat assistant helping with shell tasks");
-    expect(prompt).toContain("a single fenced code block opened with the word bash or shell");
+    expect(prompt).toContain("You have access to bash through the runtime");
+    expect(prompt).toContain("one bash-fenced block");
     expect(prompt).not.toContain("execution core");
     expect(prompt).not.toContain("TOOL USE IS REQUIRED");
     // non-shell tools still reach the model inside <tools>; the shell fence idiom
@@ -183,7 +183,7 @@ describe("forcing retry prompts for all models (unified advisor force prompt)", 
     expect(retryPrompt).toContain(CONFAB_FORCE_PROMPT);
     expect(retryPrompt).toContain("I will run the commands and paste the real output back to you");
     expect(retryPrompt).toContain("Output ONE self-contained ```bash block with the commands for me to run, nothing else.");
-    expect(retryPrompt).toContain("You are a chat assistant helping with shell tasks");
+    expect(retryPrompt).toContain("You have access to bash through the runtime");
     expect(retryPrompt).not.toContain("execution core");
     expect(retryPrompt).not.toContain("TOOL USE IS REQUIRED");
   });
@@ -234,7 +234,7 @@ describe("forcing retry prompts for all models (unified advisor force prompt)", 
     expect(retryPrompt).toContain(CONFAB_FORCE_PROMPT);
     expect(retryPrompt).toContain("I will run the commands and paste the real output back to you");
     expect(retryPrompt).toContain("Output ONE self-contained ```bash block with the commands for me to run, nothing else.");
-    expect(retryPrompt).toContain("You are a chat assistant helping with shell tasks");
+    expect(retryPrompt).toContain("You have access to bash through the runtime");
     expect(retryPrompt).not.toContain("execution core");
     expect(retryPrompt).not.toContain("TOOL USE IS REQUIRED");
   });
@@ -285,7 +285,7 @@ describe("forcing retry prompts for all models (unified advisor force prompt)", 
     expect(retryPrompt).toContain(CONFAB_FORCE_PROMPT);
     expect(retryPrompt).toContain("I will run the commands and paste the real output back to you");
     expect(retryPrompt).toContain("Output ONE self-contained ```bash block with the commands for me to run, nothing else.");
-    expect(retryPrompt).toContain("You are a chat assistant helping with shell tasks");
+    expect(retryPrompt).toContain("You have access to bash through the runtime");
     expect(retryPrompt).not.toContain("execution core");
     expect(retryPrompt).not.toContain("TOOL USE IS REQUIRED");
   });
@@ -339,24 +339,21 @@ describe("delta tool re-injection (shell elision)", () => {
     return captured[captured.length - 1];
   }
 
-  it("sends NO advisor framing on a delta turn — plain untagged output + <user>", async () => {
+  it("sends NO framing on a delta turn — just the named <tool_response> + <user>", async () => {
     const prompt = await deltaPromptFor([bashTool]);
     expect(prompt).not.toContain("do a thing"); // proves the delta path, not a full replay
-    expect(prompt).not.toContain("You are a chat assistant helping with shell tasks");
-    expect(prompt).not.toContain("<tools>");
-    expect(prompt).not.toContain("<tool_response"); // output is untagged now
-    expect(prompt).toContain("I ran your previous block on my machine");
-    expect(prompt).toContain("Please send the next script to run");
+    expect(prompt).not.toContain("You have access to bash through the runtime"); // no framing re-inject
+    expect(prompt).not.toContain("<tools>");     // shell tool still elided
+    expect(prompt).toContain('<tool_response name="bash"');
+    expect(prompt).toContain("</tool_response>");
   });
 
   it("sends NO framing on a mixed delta turn either", async () => {
     const prompt = await deltaPromptFor([bashTool, readFileTool]);
     expect(prompt).not.toContain("do a thing"); // proves the delta path, not a full replay
-    expect(prompt).not.toContain("You are a chat assistant helping with shell tasks");
+    expect(prompt).not.toContain("You have access to bash through the runtime");
     expect(prompt).not.toContain("<tools>");
-    expect(prompt).not.toContain("<tool_response");
-    expect(prompt).toContain("I ran your previous block on my machine");
-    expect(prompt).toContain("Please send the next script to run");
+    expect(prompt).toContain('<tool_response name="bash"');
   });
 });
 
