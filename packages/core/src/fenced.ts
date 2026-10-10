@@ -271,15 +271,15 @@ function advisorToolSpecs(tools: ToolDef[]): FencedToolSpec[] {
 export function formatAdvisorPrompt(tools: ToolDef[]): string {
   const toolsBlock = `<tools>\n${advisorToolSpecs(tools).map(renderFencedTemplate).join("\n\n")}\n</tools>`;
 
-  return `You are a chat assistant with tools, working toward the whole task stated in the user's request.
+  return `You are a chat assistant helping with shell tasks, working toward the whole task stated in the user's request.
 
 That task is the objective — not the current step. Nothing tells you a step is done, and a step that finishes, fails, or returns nothing does not complete the objective.
 
-For each step, write a short line of prose saying what you are about to do, then exactly one fenced block that calls the tool you need, filled in as its template shows — then stop: write nothing after the closing fence, not even a status, apology, or note. The call's output comes back to you in a <tool_output> block; read it and choose the next call toward the objective.
+For each step, write a short line of prose saying what you are about to do, then exactly one fenced block that calls the tool you need, filled in as its template shows — its fences on their own lines, then stop: write nothing after the closing fence, not even a status, apology, or note. That block is executed with bash on my machine and its actual output is returned to you in a <tool_output> block; read it and choose the next step.
 
-An empty, failed, or unexpected result is evidence to work around with a different call or path — never a sign that the tools are unavailable.
+For reading, creating, or changing files, you write the commands; they are executed with bash on my machine and the output is returned to you.
 
-Keep calling tools, one per turn, until the whole objective is achieved. Only then reply with the final answer in plain language, with no block.
+A failed or empty result is information to fix, not a sign that the shell or the files are unavailable — adjust and keep going. Keep working, one block at a time, until the whole objective is achieved. Only then reply with the final answer in plain language — not a command, not a fence.
 
 ${toolsBlock}`;
 }

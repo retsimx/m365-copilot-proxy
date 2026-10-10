@@ -632,7 +632,7 @@ describe("formatToolDefinitions", () => {
   it("emits the fenced contract (delegates to formatFencedToolDefinitions)", () => {
     const output = formatToolDefinitions(tools);
 
-    expect(output).toContain("You are a chat assistant with tools, working toward the whole task stated in the user's request");
+    expect(output).toContain("You are a chat assistant helping with shell tasks, working toward the whole task stated in the user's request");
     expect(output).toContain("exactly one fenced block that calls the tool you need");
     expect(output).not.toContain("TOOL USE IS REQUIRED");
     expect(output).not.toContain("PRIMARY JOB");

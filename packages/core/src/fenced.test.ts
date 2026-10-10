@@ -556,7 +556,7 @@ describe("formatFencedToolDefinitions", () => {
     expect(out).toContain("bash — runs a command on the machine and returns its output");
     expect(out).toContain("```bash");
     expect(out).toContain("<tool_output>");
-    expect(out).toContain("You are a chat assistant with tools, working toward the whole task stated in the user's request");
+    expect(out).toContain("You are a chat assistant helping with shell tasks, working toward the whole task stated in the user's request");
     expect(out).toContain("exactly one fenced block that calls the tool you need");
     expect(out).not.toContain("Run a shell command."); // not the harness's verbose description
     expect(out).not.toContain("```write_file"); // only the shell tool is declared for now
@@ -803,7 +803,7 @@ describe("advisor framing", () => {
 
   it("frames the model as a plain chat assistant that reaches for its own tools", () => {
     const out = formatFencedToolDefinitions(TOOLS);
-    expect(out).toContain("You are a chat assistant with tools, working toward the whole task stated in the user's request");
+    expect(out).toContain("You are a chat assistant helping with shell tasks, working toward the whole task stated in the user's request");
     expect(out).toContain("exactly one fenced block that calls the tool you need");
     expect(out).toContain("<tool_output>");
     // presents our own bash <tools> block so the fence routes

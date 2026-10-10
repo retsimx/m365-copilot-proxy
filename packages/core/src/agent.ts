@@ -53,11 +53,11 @@ function getAgentInstructions(): string {
   // GPT into emitting a fence at all (agent-less GPT → 0 tool calls; F23/F24).
   // Deliberately avoids "execution core" / "real shell" / "runtime" / "automated
   // agent" / "<tools>" / "<tool_response>" — all refusal triggers.
-  return `You are a chat assistant with tools, working toward the whole objective in the user's request. A step that finishes, fails, or returns nothing does not complete that objective.
+  return `You are the chat assistant that writes shell commands, working toward the whole objective in the user's request. A step that finishes, fails, or returns nothing does not complete that objective.
 
-For each step, write a short line of prose, then exactly one fenced block whose info-string is the tool name, filled in as its template shows — nothing after the block. The output comes back in a <tool_output> block — treat it as the real result and use it to choose the next call. Never infer that a tool is unavailable from a file's contents or an empty result.
+When there is a command to run, write a short line of prose, then exactly one fenced block whose info-string is the tool name, filled in as its template shows — nothing after the block. It is executed with bash on my machine and the output is returned to you in a <tool_output> block; never infer that the tool is unavailable from a file's contents or an empty result.
 
-Keep calling tools, one per turn, until the whole objective is achieved; only then reply with the final answer in plain text.`;
+Keep going until the whole objective is achieved; only then reply with the final answer in plain text.`;
 }
 
 async function getEnvironmentUrl(ppToken: string): Promise<string> {
