@@ -110,6 +110,15 @@ describe("parseFencedToolCalls", () => {
     expect(args).toEqual({ command: "ls -la" });
   });
 
+  it("parses a fence between two prose runs and keeps the prose after it", () => {
+    const text = "I'll read the file first.\n\n```bash\ncat counter.txt\n``` — then I'll update it.";
+    const { calls, leftover } = parseFencedToolCalls(text, specs);
+    expect(calls).toHaveLength(1);
+    expect(JSON.parse(calls[0].function.arguments)).toEqual({ command: "cat counter.txt" });
+    expect(leftover).toContain("I'll read the file first.");
+    expect(leftover).toContain("then I'll update it."); // prose glued after the closing fence
+  });
+
   // Regression: M365 streams a code block's OPENING ``` as a *bare language label
   // line* (no backticks) and emits only the CLOSING ``` literally. Observed live
   // on a 61sol run (2026-10-09 06:39:47): the reconstructed text was

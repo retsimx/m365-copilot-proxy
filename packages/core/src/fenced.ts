@@ -572,6 +572,10 @@ export function parseFencedToolCalls(
   let matchedIndices: { start: number; end: number }[] = [];
   let blockStartIndex = 0;
   let heredocStack: string[] = [];
+  // Prose glued to the end of a closing-fence line (`… ``` — next I'll …`) is valid
+  // content that FOLLOWS the tool call. Keep it, so a fence between two prose runs is
+  // emitted as (leading prose) + tool_call + (trailing prose).
+  const trailingProse: string[] = [];
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -629,13 +633,15 @@ export function parseFencedToolCalls(
       // Check if this line is a closing fence (3+ backticks, optionally followed by inline prose)
       const closeMatch = line.match(/^( {0,3})(`{3,})([ \t].*)?$/);
       if (closeMatch && closeMatch[2].length >= fenceLen) {
-        // Closing fence reached
+        // Closing fence reached (possibly with prose glued after it on the same line).
         const inner = blockLines.join("\n");
         const args = parseFencedInner(toolSpec!, inner);
         if (args) {
           calls.push(makeCall(toolSpec!.name, args));
           matchedIndices.push({ start: blockStartIndex, end: i });
         }
+        const trailing = closeMatch[3]?.trim();
+        if (trailing) trailingProse.push(trailing);
         inBlock = false;
         toolSpec = null;
         blockLines = [];
@@ -656,7 +662,7 @@ export function parseFencedToolCalls(
     }
   }
 
-  // Build leftover text by excluding matched line ranges
+  // Build leftover text by excluding matched line ranges (plus prose glued after a closer).
   const leftoverLines: string[] = [];
   for (let i = 0; i < lines.length; i++) {
     const isMatched = matchedIndices.some((range) => i >= range.start && i <= range.end);
@@ -664,6 +670,7 @@ export function parseFencedToolCalls(
       leftoverLines.push(lines[i]);
     }
   }
+  leftoverLines.push(...trailingProse);
 
   return { calls, leftover: leftoverLines.join("\n") };
 }
