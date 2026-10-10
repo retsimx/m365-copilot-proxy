@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
 import {
   parseToolCalls,
-  formatToolDefinitions,
+  formatSessionFraming,
   looksLikeConfabulation,
   looksLikeSafetyRefusal,
   looksLikeTruncationSurrender,
@@ -613,7 +613,7 @@ describe("fenced tool format (the only format)", () => {
   });
 });
 
-describe("formatToolDefinitions", () => {
+describe("formatSessionFraming", () => {
   const tools = [
     {
       type: "function" as const,
@@ -630,7 +630,7 @@ describe("formatToolDefinitions", () => {
   ];
 
   it("emits the fenced contract (delegates to formatFencedToolDefinitions)", () => {
-    const output = formatToolDefinitions(tools);
+    const output = formatSessionFraming();
 
     expect(output).toContain("You are a chat assistant helping with shell tasks, working toward the whole task stated in the user's request");
     expect(output).toContain("a single fenced block opened with the word bash (or shell) containing the commands for that step");
@@ -639,7 +639,7 @@ describe("formatToolDefinitions", () => {
   });
 
   it("emits the bash fence and no read/write tool templates", () => {
-    const output = formatToolDefinitions(tools);
+    const output = formatSessionFraming();
 
     expect(output).toContain("```bash");
     expect(output).not.toContain("<tools>");

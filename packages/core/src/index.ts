@@ -70,7 +70,7 @@ export {
 
 export {
   formatMessages,
-  formatToolDefinitions,
+  formatSessionFraming,
   formatToolChoiceInstruction,
   getMessageContent,
   parseToolCalls,

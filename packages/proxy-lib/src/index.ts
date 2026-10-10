@@ -67,7 +67,7 @@ export { ChatCompletionRequest, ChatMessage, ToolCall, ToolDefinition } from "./
 // Re-export tool utilities from core
 export {
   formatMessages,
-  formatToolDefinitions,
+  formatSessionFraming,
   parseToolCalls,
   getMessageContent,
   isAdvisorTone,

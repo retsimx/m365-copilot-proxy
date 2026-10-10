@@ -240,8 +240,8 @@ function renderFencedTemplate(spec: FencedToolSpec): string {
 // Bash-only advisor framing: the model writes shell commands in a ```bash / ```shell fence;
 // the harness runs them and returns the output. We deliberately do NOT declare opencode's
 // read/write/edit tools — the model reliably writes shell, and a lean toolset avoids Disengage.
-export function formatAdvisorPrompt(tools: ToolDef[]): string {
-  const shellName = findShellTool(tools)?.function.name ?? "bash";
+export function formatAdvisorPrompt(): string {
+  const shellName = "bash";
 
   // Optional-header example so the model knows the `timeout:`/`workdir:` fence prefix.
   const shellExample = `\n\nThe block may start with optional header lines before the commands:\n\`\`\`${shellName}\ntimeout: 30000\nworkdir: /path/to/dir\n<commands>\n\`\`\``;
@@ -257,8 +257,8 @@ For reading, creating, or changing files, you write the shell commands; I run th
 An unexpected or imperfect result — an error, an empty output, a wrong path, a truncated one — is information toward the objective, not grounds to stop; keep adjusting and going, and treat the objective as unachievable only when you are certain of it. A truncated result is a size cap — fetch the remainder with a narrower read (offset, limit; sed -n; head/tail). Keep working one block at a time until the whole objective is achieved. Only then reply with the final answer in plain language — not a command, not a fence.${shellExample}`;
 }
 
-export function formatFencedToolDefinitions(tools: ToolDef[], _variantOverride?: string): string {
-  return formatAdvisorPrompt(tools) + hostPlatformNote(findShellTool(tools));
+export function formatFencedToolDefinitions(): string {
+  return formatAdvisorPrompt() + hostPlatformNote();
 }
 
 /** Per-turn correction telling the model which OS it is actually driving.
@@ -274,14 +274,11 @@ export function formatFencedToolDefinitions(tools: ToolDef[], _variantOverride?:
  *  `platform` is injectable so the Windows branch is testable from a POSIX box —
  *  the whole point, since this repo had no Windows host to verify against.
  *  Returns "" off Windows, leaving the bench-tuned variants byte-for-byte unchanged. */
-export function hostPlatformNote(
-  shell: ToolDef | undefined,
-  platform: NodeJS.Platform = process.platform,
-): string {
-  if (platform !== "win32" || !shell) return "";
+export function hostPlatformNote(platform: NodeJS.Platform = process.platform): string {
+  if (platform !== "win32") return "";
   return `
 
-HOST PLATFORM: Windows. The \`${shell.function.name}\` tool runs PowerShell on a real Windows machine — not Linux, and not a container. Any POSIX idiom named above is wrong here and will fail: there are no \`<<'EOF'\` heredocs, no \`sed -i\`, no \`ls\`/\`grep\`. Emit \`\`\`powershell blocks instead of \`\`\`bash, and use the Windows equivalents:
+HOST PLATFORM: Windows. The \`bash\` tool runs PowerShell on a real Windows machine — not Linux, and not a container. Any POSIX idiom named above is wrong here and will fail: there are no \`<<'EOF'\` heredocs, no \`sed -i\`, no \`ls\`/\`grep\`. Emit \`\`\`powershell blocks instead of \`\`\`bash, and use the Windows equivalents:
 
 - create/overwrite a file: \`Set-Content -Path name -Value @'\n…\n'@\`
 - edit in place: \`(Get-Content f) -replace 'old','new' | Set-Content f\`

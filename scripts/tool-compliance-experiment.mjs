@@ -18,7 +18,7 @@
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { ModelSession, parseToolCalls, formatToolDefinitions } from "../packages/core/dist/index.mjs";
+import { ModelSession, parseToolCalls, formatSessionFraming } from "../packages/core/dist/index.mjs";
 
 const args = process.argv.slice(2);
 const arg = (k, def = null) => {
@@ -58,7 +58,7 @@ function formatVariant(variant, messages) {
 
   if (variant === "baseline") {
     const tools = TOOLS;
-    return formatToolDefinitions(tools) + `\n\n<user>\n${userMsg}\n</user>`;
+    return formatSessionFraming() + `\n\n<user>\n${userMsg}\n</user>`;
   }
 
   if (variant === "no_caps") {
@@ -81,15 +81,15 @@ ${userMsg}
   }
 
   if (variant === "no_fewshot") {
-    // formatToolDefinitions doesn't include a few-shot directly — but our
+    // formatSessionFraming doesn't include a few-shot directly — but our
     // production proxy adds one via tools.ts's formatMessages. This variant
     // uses ONLY the definitions, no example.
-    return formatToolDefinitions(TOOLS) + `\n\n<user>\n${userMsg}\n</user>`;
+    return formatSessionFraming() + `\n\n<user>\n${userMsg}\n</user>`;
   }
 
   if (variant === "with_reply") {
     const tools = [REPLY_TOOL, ...TOOLS];
-    const body = formatToolDefinitions(tools);
+    const body = formatSessionFraming();
     return body + `
 
 EVERY turn MUST be a tool call. If your answer would otherwise be plain prose, call reply(text="...") with the prose as the text argument. Never emit bare text.
@@ -106,7 +106,7 @@ ${userMsg}
   }
 
   if (variant === "tool_choice_req") {
-    return formatToolDefinitions(TOOLS) + `\nYou MUST call at least one tool.\n\n<user>\n${userMsg}\n</user>`;
+    return formatSessionFraming() + `\nYou MUST call at least one tool.\n\n<user>\n${userMsg}\n</user>`;
   }
 
   throw new Error(`unknown variant: ${variant}`);

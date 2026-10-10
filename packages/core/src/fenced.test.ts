@@ -512,17 +512,13 @@ describe("nonShellTools", () => {
 
 describe("hostPlatformNote", () => {
   it("is empty off Windows, so POSIX framing stays byte-for-byte", () => {
-    expect(hostPlatformNote(bash, "linux")).toBe("");
-    expect(hostPlatformNote(bash, "darwin")).toBe("");
-    expect(formatFencedToolDefinitions([bash, readFile])).not.toContain("HOST PLATFORM");
-  });
-
-  it("is empty on Windows when the harness gave no shell tool", () => {
-    expect(hostPlatformNote(undefined, "win32")).toBe("");
+    expect(hostPlatformNote("linux")).toBe("");
+    expect(hostPlatformNote("darwin")).toBe("");
+    expect(formatFencedToolDefinitions()).not.toContain("HOST PLATFORM");
   });
 
   it("names the platform and overrides every POSIX idiom the framing teaches", () => {
-    const note = hostPlatformNote(bash, "win32");
+    const note = hostPlatformNote("win32");
     expect(note).toContain("HOST PLATFORM: Windows");
     expect(note).toContain("```powershell");
     // The specific idioms baseline framing teaches by name must be countermanded.
@@ -536,22 +532,14 @@ describe("hostPlatformNote", () => {
     expect(note).toContain("/mnt/data");
   });
 
-  it("names the harness's own shell tool rather than assuming `bash`", () => {
-    const shell: ToolDef = {
-      type: "function",
-      function: {
-        name: "run_terminal_cmd",
-        description: "Run a command.",
-        parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] },
-      },
-    };
-    expect(hostPlatformNote(shell, "win32")).toContain("`run_terminal_cmd`");
+  it("names `bash` (our only tool)", () => {
+    expect(hostPlatformNote("win32")).toContain("`bash`");
   });
 });
 
 describe("formatFencedToolDefinitions", () => {
   it("emits the bash fence + shell example + <tool_output> schema (bash-only, no <tools> block)", () => {
-    const out = formatFencedToolDefinitions(ALL);
+    const out = formatFencedToolDefinitions();
     expect(out).toContain("You are a chat assistant helping with shell tasks, working toward the whole task stated in the user's request");
     expect(out).toContain("a single fenced block opened with the word bash (or shell) containing the commands for that step");
     expect(out).toContain("<tool_output>");
@@ -582,7 +570,7 @@ describe("formatFencedToolDefinitions", () => {
       },
     };
 
-    const out = formatFencedToolDefinitions([bashWithHeaders]);
+    const out = formatFencedToolDefinitions();
     expect(out).toContain("optional header lines");
     expect(out).toContain("timeout: 30000");
     expect(out).toContain("workdir: /path/to/dir");
@@ -802,7 +790,7 @@ describe("advisor framing", () => {
   const TOOLS = [bash, readFile];
 
   it("frames the model as a chat assistant that writes a bash fence", () => {
-    const out = formatFencedToolDefinitions(TOOLS);
+    const out = formatFencedToolDefinitions();
     expect(out).toContain("You are a chat assistant helping with shell tasks, working toward the whole task stated in the user's request");
     expect(out).toContain("a single fenced block opened with the word bash (or shell) containing the commands for that step");
     expect(out).toContain("<tool_output>");
@@ -810,7 +798,7 @@ describe("advisor framing", () => {
   });
 
   it("omits every agentic pressure that makes Astra refuse", () => {
-    const out = formatFencedToolDefinitions(TOOLS);
+    const out = formatFencedToolDefinitions();
     for (const banned of [
       "execution core",
       "real shell",
