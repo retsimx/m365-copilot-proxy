@@ -848,7 +848,12 @@ export async function handleChatCompletion(
       // Re-attach the session framing on every turn. M365 is stateful, but the turn-0
       // framing dilutes over a long session and the model drifts (forgets the fence
       // mechanic / how to write files). M365_NO_TURN_FRAMING=1 disables the re-attach.
-      const framing = hasTools && process.env.M365_NO_TURN_FRAMING !== "1" ? `${formatSessionFraming(framingVariant, body.tools ?? [])}\n\n` : "";
+      // Re-attach the framing each turn only for the advisor (GPT) variant, which drifts
+      // over a long session. Claude is agent-less and stateful — re-sending its (imperative)
+      // framing every turn is unnecessary and can reinforce a "chat assistant" read.
+      const framing = hasTools && framingVariant === "advisor" && process.env.M365_NO_TURN_FRAMING !== "1"
+        ? `${formatSessionFraming(framingVariant, body.tools ?? [])}\n\n`
+        : "";
       text = `${framing}${delta}`;
       log.info(`Chat completion: model=${model}, stream=${body.stream}, messages=${body.messages.length}, new=${newMessages.length}, turn=${session.turnCount}, mode=delta, cid=${convId}`);
     } else {
