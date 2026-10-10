@@ -633,17 +633,16 @@ describe("formatToolDefinitions", () => {
     const output = formatToolDefinitions(tools);
 
     expect(output).toContain("You are a chat assistant helping with shell tasks, working toward the whole task stated in the user's request");
-    expect(output).toContain("exactly one fenced block that calls the tool you need");
+    expect(output).toContain("a single fenced block opened with the word bash (or shell) containing the commands for that step");
     expect(output).not.toContain("TOOL USE IS REQUIRED");
     expect(output).not.toContain("PRIMARY JOB");
   });
 
-  it("emits our bash-only <tools> block, ignoring non-shell tools", () => {
+  it("emits the bash fence and no read/write tool templates", () => {
     const output = formatToolDefinitions(tools);
 
-    expect(output).toContain("<tools>");
     expect(output).toContain("```bash");
-    expect(output).not.toContain("```read_file"); // only the shell tool is declared for now
-    expect(output).toContain("</tools>");
+    expect(output).not.toContain("<tools>");
+    expect(output).not.toContain("```read_file");
   });
 });

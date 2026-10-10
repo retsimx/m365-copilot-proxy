@@ -550,21 +550,21 @@ describe("hostPlatformNote", () => {
 });
 
 describe("formatFencedToolDefinitions", () => {
-  it("emits our own bash-only <tools> block (short description) + the <tool_output> schema", () => {
+  it("emits the bash fence + shell example + <tool_output> schema (bash-only, no <tools> block)", () => {
     const out = formatFencedToolDefinitions(ALL);
-    expect(out).toContain("<tools>");
-    expect(out).toContain("bash — runs a command on the machine and returns its output");
-    expect(out).toContain("```bash");
-    expect(out).toContain("<tool_output>");
     expect(out).toContain("You are a chat assistant helping with shell tasks, working toward the whole task stated in the user's request");
-    expect(out).toContain("exactly one fenced block that calls the tool you need");
-    expect(out).not.toContain("Run a shell command."); // not the harness's verbose description
-    expect(out).not.toContain("```write_file"); // only the shell tool is declared for now
+    expect(out).toContain("a single fenced block opened with the word bash (or shell) containing the commands for that step");
+    expect(out).toContain("<tool_output>");
+    expect(out).toContain("```bash");
+    expect(out).toContain("The block may start with optional header lines before the commands");
+    expect(out).not.toContain("<tools>"); // bash-only: no tool-template block
+    expect(out).not.toContain("```read_file");
+    expect(out).not.toContain("Run a shell command.");
     expect(out).not.toContain("execution core");
     expect(out).not.toContain("TOOL USE IS REQUIRED");
   });
 
-  it("includes the tool's real params (timeout/workdir) as optional headers in the <tools> block", () => {
+  it("shows the optional timeout/workdir header example", () => {
     const bashWithHeaders: ToolDef = {
       type: "function",
       function: {
@@ -583,9 +583,9 @@ describe("formatFencedToolDefinitions", () => {
     };
 
     const out = formatFencedToolDefinitions([bashWithHeaders]);
-    expect(out).toContain("timeout: <timeout>");
-    expect(out).toContain("workdir: <workdir>");
-    expect(out).toContain("header lines are optional");
+    expect(out).toContain("optional header lines");
+    expect(out).toContain("timeout: 30000");
+    expect(out).toContain("workdir: /path/to/dir");
   });
 
   it("derives task tool spec with prompt body and parses multiline prompt body correctly", () => {
@@ -801,13 +801,11 @@ EOF
 describe("advisor framing", () => {
   const TOOLS = [bash, readFile];
 
-  it("frames the model as a plain chat assistant that reaches for its own tools", () => {
+  it("frames the model as a chat assistant that writes a bash fence", () => {
     const out = formatFencedToolDefinitions(TOOLS);
     expect(out).toContain("You are a chat assistant helping with shell tasks, working toward the whole task stated in the user's request");
-    expect(out).toContain("exactly one fenced block that calls the tool you need");
+    expect(out).toContain("a single fenced block opened with the word bash (or shell) containing the commands for that step");
     expect(out).toContain("<tool_output>");
-    // presents our own bash <tools> block so the fence routes
-    expect(out).toContain("<tools>");
     expect(out).toContain("```bash");
   });
 

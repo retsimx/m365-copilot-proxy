@@ -93,13 +93,13 @@ describe("per-model framing selection (universal advisor framing)", () => {
 
   function expectAdvisor(prompt: string) {
     expect(prompt).toContain("You are a chat assistant helping with shell tasks, working toward the whole task stated in the user's request");
-    expect(prompt).toContain("exactly one fenced block that calls the tool you need");
+    expect(prompt).toContain("a single fenced block opened with the word bash (or shell) containing the commands for that step");
     expect(prompt).not.toContain("execution core");
     expect(prompt).not.toContain("TOOL USE IS REQUIRED");
-    // non-shell tools still reach the model inside <tools>; the shell fence idiom
-    // lives in the advisor prose
-    expect(prompt).toContain("<tools>");
+    // bash-only: the fence + shell example live in the advisor prose (no <tools> block)
     expect(prompt).toContain("```bash");
+    expect(prompt).toContain("The block may start with optional header lines before the commands");
+    expect(prompt).not.toContain("<tools>");
   }
 
   it("gpt-6-astra → advisor framing", async () => {

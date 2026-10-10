@@ -237,51 +237,24 @@ function renderFencedTemplate(spec: FencedToolSpec): string {
   return `${header}\n\`\`\`${spec.name}\n${lines.join("\n")}\n\`\`\``;
 }
 
-// We only support the opencode build-agent toolset, matched by its EXACT names. The set
-// is kept lean (bash + the file primitives) — M365 disengages on large toolsets, and
-// glob/grep/list are all reachable through bash anyway.
-/** The tool specs to render in the self-authored <tools> block, in display order. */
-function advisorToolSpecs(tools: ToolDef[]): FencedToolSpec[] {
-  const byName = (name: string) => tools.find((t) => t.function.name === name);
-  const shellTool = findShellTool(tools);
-  const specs: FencedToolSpec[] = [
-    shellTool
-      ? { ...deriveFencedSpec(shellTool), bodyPlaceholder: null, description: "runs a command on the machine and returns its output. The `timeout:`/`workdir:` header lines are optional; put the shell command(s) in the body." }
-      : {
-          name: "bash",
-          description: "runs a command on the machine and returns its output. The `timeout:`/`workdir:` header lines are optional; put the shell command(s) in the body.",
-          headerParams: ["timeout", "workdir"],
-          bodyParam: "command",
-          bodyPlaceholder: null,
-        },
-  ];
-
-  const read = byName("read");
-  if (read) specs.push({ ...deriveFencedSpec(read), description: "reads a file and returns its contents. `filePath` is required; `offset` and `limit` are optional." });
-
-  const write = byName("write");
-  if (write) specs.push({ ...deriveFencedSpec(write), description: "writes content to a file, overwriting it. `filePath` is required; the body is the content." });
-
-  const edit = byName("edit");
-  if (edit) specs.push({ ...deriveFencedSpec(edit), description: "replaces `oldString` with `newString` in a file. Read the file first so the text matches exactly; set `replaceAll` to change every occurrence." });
-
-  return specs;
-}
-
+// Bash-only advisor framing: the model writes shell commands in a ```bash / ```shell fence;
+// the harness runs them and returns the output. We deliberately do NOT declare opencode's
+// read/write/edit tools — the model reliably writes shell, and a lean toolset avoids Disengage.
 export function formatAdvisorPrompt(tools: ToolDef[]): string {
-  const toolsBlock = `<tools>\n${advisorToolSpecs(tools).map(renderFencedTemplate).join("\n\n")}\n</tools>`;
+  const shellName = findShellTool(tools)?.function.name ?? "bash";
+
+  // Optional-header example so the model knows the `timeout:`/`workdir:` fence prefix.
+  const shellExample = `\n\nThe block may start with optional header lines before the commands:\n\`\`\`${shellName}\ntimeout: 30000\nworkdir: /path/to/dir\n<commands>\n\`\`\``;
 
   return `You are a chat assistant helping with shell tasks, working toward the whole task stated in the user's request.
 
 That task is the objective — not the current step. Nothing tells you a step is done, and a step that finishes, fails, or returns nothing does not complete the objective.
 
-For each step, write a short line of prose saying what you are about to do, then exactly one fenced block that calls the tool you need, filled in as its template shows — its fences on their own lines, then stop: write nothing after the closing fence, not even a status, apology, or note. That block is executed with bash on my machine and its actual output is returned to you in a <tool_output> block; read it and choose the next step.
+For each step, write a short line of prose saying what you are about to do, then a single fenced block opened with the word bash (or shell) containing the commands for that step — its fences on their own new lines, nothing after the closing fence. I run it and paste the real output back in a <tool_output> block; read it and write the next step.
 
-For reading, creating, or changing files, you write the commands; they are executed with bash on my machine and the output is returned to you.
+For reading, creating, or changing files, you write the shell commands; I run them and return the output.
 
-An unexpected or imperfect result — an error, an empty output, a wrong path, a truncated one — is information toward the objective, not grounds to stop; keep adjusting and going, and treat the objective as unachievable only when you are certain of it. A truncated result is a size cap — fetch the remainder with a narrower read (offset/limit, sed -n, head/tail). Keep working, one block at a time, until the whole objective is achieved. Only then reply with the final answer in plain language — not a command, not a fence.
-
-${toolsBlock}`;
+An unexpected or imperfect result — an error, an empty output, a wrong path, a truncated one — is information toward the objective, not grounds to stop; keep adjusting and going, and treat the objective as unachievable only when you are certain of it. A truncated result is a size cap — fetch the remainder with a narrower read (offset, limit; sed -n; head/tail). Keep working one block at a time until the whole objective is achieved. Only then reply with the final answer in plain language — not a command, not a fence.${shellExample}`;
 }
 
 export function formatFencedToolDefinitions(tools: ToolDef[], _variantOverride?: string): string {
