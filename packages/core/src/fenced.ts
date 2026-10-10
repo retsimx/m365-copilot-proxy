@@ -233,30 +233,29 @@ function renderFencedTemplate(spec: FencedToolSpec): string {
   return `${header}\n\`\`\`${spec.name}\n${lines.join("\n")}\n\`\`\``;
 }
 
-function toolsBlock(tools: ToolDef[]): string {
-  const defs = tools.map((t) => renderFencedTemplate(deriveFencedSpec(t))).join("\n\n");
-  return `<tools>\n${defs}\n</tools>`;
-}
-
 export function formatAdvisorPrompt(tools: ToolDef[]): string {
   const shellTool = findShellTool(tools);
-  const shellName = shellTool?.function.name ?? "bash";
 
-  // Workshop attempt 1: always include the single fence example with header params.
-  const shellExample = `\n\nThe block may start with optional header lines before the commands:\n\`\`\`${shellName}\ntimeout: 30000\nworkdir: /path/to/dir\n<commands>\n\`\`\``;
+  // A single, self-authored <tools> block: ONLY our shell tool, with our OWN short
+  // description but the tool's REAL params (command / timeout / workdir). The model
+  // should reach for it by itself — the framing prose deliberately does not name it.
+  const shellSpec: FencedToolSpec = shellTool
+    ? { ...deriveFencedSpec(shellTool), description: "runs a command on the machine and returns its output. The `timeout:` and `workdir:` header lines are optional." }
+    : {
+        name: "bash",
+        description: "runs a command on the machine and returns its output. The `timeout:` and `workdir:` header lines are optional.",
+        headerParams: ["timeout", "workdir"],
+        bodyParam: "command",
+      };
+  const toolsBlock = `<tools>\n${renderFencedTemplate(shellSpec)}\n</tools>`;
 
-  // Non-shell tools (ask_question, write_file, …) stay declared so the model
-  // knows their fenced format. Shell tools are elided (see nonShellTools).
-  const extra = nonShellTools(tools);
-  const extraBlock = extra.length > 0 ? `\n\n${toolsBlock(extra)}` : "";
+  return `You are a chat assistant. The tools you can use are listed below.
 
-  return `You are a chat assistant helping with shell tasks.
+For each step, write a short line of prose saying what you are about to do, then exactly one fenced block that calls the tool you need, filled in as its template shows — nothing after the block. The call's output comes back to you in a <tool_output> block; read it and write the next call. A failed or empty result is information to fix, not a sign that the tools are unavailable. Work one call at a time until the task is complete.
 
-For each step, write a short line of prose saying what you are about to do, then a single fenced code block opened with the word bash or shell containing the commands for that step — its fences on their own lines, nothing after the closing fence. That block is executed with bash on my machine and its actual output is returned to you; read it and write the next step. A failed or empty result is information to fix, not a sign that the shell or the files are unavailable — adjust and keep going. Work one block at a time until the task is complete.
+When the task is complete, reply in plain language with the final answer or status only — no block.
 
-For reading, creating, or changing files, you write the shell commands; they are executed with bash on my machine and the output is returned to you.
-
-When the task is complete, reply in plain language with the final answer or status only — not a command, not a fence.${shellExample}${extraBlock}`;
+${toolsBlock}`;
 }
 
 export function formatFencedToolDefinitions(tools: ToolDef[], _variantOverride?: string): string {

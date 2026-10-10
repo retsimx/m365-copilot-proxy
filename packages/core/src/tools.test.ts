@@ -169,31 +169,13 @@ describe("M365_INJECT_REPLY_TOOL", () => {
     expect(out).not.toContain("```reply");
   });
 
-  it("injects a reply tool when M365_INJECT_REPLY_TOOL is set", async () => {
+  it("surfaces only the bash tool even when a reply tool is injected", async () => {
     process.env.M365_INJECT_REPLY_TOOL = "1";
     const fmt = await importFormat();
     const out = fmt(userMsg, sampleTools);
-    expect(out).toContain("```reply");
-    // It must also still include the caller's tools (fenced template)
     expect(out).toContain("```bash");
-    delete process.env.M365_INJECT_REPLY_TOOL;
-  });
-
-  it("doesn't double-inject a reply tool already provided by the caller", async () => {
-    process.env.M365_INJECT_REPLY_TOOL = "1";
-    const fmt = await importFormat();
-    const callerReply = {
-      type: "function" as const,
-      function: {
-        name: "reply",
-        description: "Caller-supplied reply",
-        parameters: { type: "object", properties: { text: { type: "string" } }, required: ["text"] },
-      },
-    };
-    const out = fmt(userMsg, [callerReply, ...sampleTools]);
-    // Exactly one fenced template for the reply tool
-    const matches = out.match(/```reply/g) ?? [];
-    expect(matches).toHaveLength(1);
+    // our framing declares only the shell tool for now
+    expect(out).not.toContain("```reply");
     delete process.env.M365_INJECT_REPLY_TOOL;
   });
 });
@@ -650,18 +632,18 @@ describe("formatToolDefinitions", () => {
   it("emits the fenced contract (delegates to formatFencedToolDefinitions)", () => {
     const output = formatToolDefinitions(tools);
 
-    expect(output).toContain("You are a chat assistant helping with shell tasks");
-    expect(output).toContain("a single fenced code block opened with the word bash or shell");
+    expect(output).toContain("You are a chat assistant. The tools you can use are listed below");
+    expect(output).toContain("exactly one fenced block that calls the tool you need");
     expect(output).not.toContain("TOOL USE IS REQUIRED");
     expect(output).not.toContain("PRIMARY JOB");
   });
 
-  it("lists each tool as a fenced template inside <tools>", () => {
+  it("emits our bash-only <tools> block, ignoring non-shell tools", () => {
     const output = formatToolDefinitions(tools);
 
-    expect(output).toContain("read_file"); // the tool name heads its template
-    expect(output).toContain("```read_file");
     expect(output).toContain("<tools>");
+    expect(output).toContain("```bash");
+    expect(output).not.toContain("```read_file"); // only the shell tool is declared for now
     expect(output).toContain("</tools>");
   });
 });
