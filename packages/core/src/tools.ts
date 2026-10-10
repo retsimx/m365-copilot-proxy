@@ -570,10 +570,14 @@ export function isProseDocument(parsed: ParseResult): boolean {
   if (hasClientTool) return false;
 
   const prose = parsed.textContent ? parsed.textContent.trim() : "";
-  // Check for document-level tutorial headings (e.g. "# Title" or "## Install / ## Usage / ## Run / ## Setup")
+  // A valid shell call between two prose runs is an ACTION, not a document. Do NOT
+  // downgrade on prose *length* — that swallowed real tool calls (e.g. sonnet's
+  // "read the file ```bash cat … ``` — then I'll update it" was returned as text
+  // because the surrounding prose was long). Only document-level signals downgrade:
+  // many fences, or tutorial headings.
   const hasDocHeaders = /(?:^|\n)#{1,3}\s+(?:readme|install|usage|run|getting started|build|setup|example|overview|configuration|documentation)\b/i.test(prose)
     || /(?:^|\n)#\s+[^\n]+/m.test(prose);
-  return parsed.toolCalls.length >= 4 || hasDocHeaders || prose.length >= 350;
+  return parsed.toolCalls.length >= 4 || hasDocHeaders;
 }
 
 export function parseToolCalls(text: string, tools?: ToolDef[]): ParseResult {
