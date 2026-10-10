@@ -313,7 +313,7 @@ describe("delta tool re-injection (shell elision)", () => {
     vi.restoreAllMocks();
   });
 
-  async function deltaPromptFor(tools: any[]): Promise<string> {
+  async function deltaPromptFor(tools: any[], toolContent = "ok"): Promise<string> {
     // Force the second request down the delta path (turn > 0 AND sentMessageCount > 0).
     vi.spyOn(core.ModelSession.prototype, "turnCount", "get").mockReturnValue(1);
     const pool = new SessionPool();
@@ -327,7 +327,7 @@ describe("delta tool re-injection (shell elision)", () => {
       model: "gpt-5.6-think-deeper",
       messages: [
         { role: "user" as const, content: "do a thing" },
-        { role: "tool" as const, tool_call_id: "c1", name: "bash", content: "ok" },
+        { role: "tool" as const, tool_call_id: "c1", name: "bash", content: toolContent },
       ],
       stream: false,
       tools,
@@ -354,6 +354,27 @@ describe("delta tool re-injection (shell elision)", () => {
     expect(prompt).not.toContain("You are a chat assistant helping with shell tasks, working toward the whole task stated in the user's request");
     expect(prompt).not.toContain("<tools>");
     expect(prompt).toContain('<tool_output name="bash"');
+  });
+
+  it("annotates an empty tool result so the model keeps going", async () => {
+    const prompt = await deltaPromptFor([bashTool], "(no output)");
+    expect(prompt).toContain('<tool_output name="bash" empty="true">');
+    expect(prompt).toContain("A command that prints nothing is a normal result, not a failure");
+  });
+
+  it("annotates a truncated tool result with a fetch-the-rest instruction (incl. saved path)", async () => {
+    const toolContent = "...output truncated...\nFull output saved to: /tmp/oc/out-1.txt";
+    const prompt = await deltaPromptFor([bashTool], toolContent);
+    expect(prompt).toContain('<tool_output name="bash" truncated="true">');
+    expect(prompt).toContain("a size cap, NOT the end");
+    expect(prompt).toContain("/tmp/oc/out-1.txt");
+  });
+
+  it("leaves a normal tool result unannotated", async () => {
+    const prompt = await deltaPromptFor([bashTool]);
+    expect(prompt).toContain('<tool_output name="bash">');
+    expect(prompt).not.toContain('empty="true"');
+    expect(prompt).not.toContain('truncated="true"');
   });
 });
 

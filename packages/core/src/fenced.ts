@@ -279,7 +279,7 @@ For each step, write a short line of prose saying what you are about to do, then
 
 For reading, creating, or changing files, you write the commands; they are executed with bash on my machine and the output is returned to you.
 
-A failed or empty result is information to fix, not a sign that the shell or the files are unavailable — adjust and keep going. Keep working, one block at a time, until the whole objective is achieved. Only then reply with the final answer in plain language — not a command, not a fence.
+An unexpected or imperfect result — an error, an empty output, a wrong path, a truncated one — is information toward the objective, not grounds to stop; keep adjusting and going, and treat the objective as unachievable only when you are certain of it. A truncated result is a size cap — fetch the remainder with a narrower read (offset/limit, sed -n, head/tail). Keep working, one block at a time, until the whole objective is achieved. Only then reply with the final answer in plain language — not a command, not a fence.
 
 ${toolsBlock}`;
 }

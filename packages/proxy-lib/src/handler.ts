@@ -228,6 +228,33 @@ function simpleHash(str: string): string {
 
 // --- Delta message formatting ---
 
+/** opencode's tools substitute a few literal strings for edge cases: an empty command
+ *  prints `(no output)`, and oversized results carry a truncation notice
+ *  (`...output truncated...`, `Full output saved to: <path>`, `(Results truncated…)`).
+ *  The model reads those as terminal ("no data" / "broken") and surrenders. Rewrite them
+ *  as an explicit next action, inline in the <tool_output>, and tag them structurally.
+ *  Chunking/pagination stays the model's job — we only tell it the result was partial. */
+function annotateToolOutput(content: string): { attrs: string; text: string } {
+  const trimmed = content.trim();
+  if (trimmed === "(no output)" || trimmed === "") {
+    return {
+      attrs: ` empty="true"`,
+      text: `${content}\n[A command that prints nothing is a normal result, not a failure — continue.]`,
+    };
+  }
+  if (/output truncated|Full output saved to:|Results (are )?truncated/i.test(content)) {
+    const saved = content.match(/Full output saved to:\s*(\S+)/i)?.[1];
+    const next = saved
+      ? `the full output was saved to ${saved} — read it, or re-run with a narrower range`
+      : `read again with a narrower range (offset/limit, sed -n 'a,bp', head/tail)`;
+    return {
+      attrs: ` truncated="true"`,
+      text: `${content}\n[Partial output — a size cap, NOT the end. Get the rest: ${next}.]`,
+    };
+  }
+  return { attrs: "", text: content };
+}
+
 function formatDeltaMessages(messages: ParsedMessage[]): string {
   const parts: string[] = [];
 
@@ -252,7 +279,8 @@ function formatDeltaMessages(messages: ParsedMessage[]): string {
       // Named result envelope: `name` resolved from the invoking tool_call (by call_id),
       // so it reads `name="bash"`. The output is untrusted DATA, not instructions.
       const name = callIdToName.get(m.tool_call_id ?? "") ?? m.name ?? "bash";
-      parts.push(`<tool_output name="${name}">\n${getMessageContent(m)}\n</tool_output>`);
+      const ann = annotateToolOutput(getMessageContent(m));
+      parts.push(`<tool_output name="${name}"${ann.attrs}>\n${ann.text}\n</tool_output>`);
     } else if (m.role === "system") {
       // Skip system messages on follow-up turns
     } else {
