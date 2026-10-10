@@ -895,6 +895,16 @@ describe("createProseStreamGate (design 002 §3.2)", () => {
     expect(out).toBe("A ```python block, then a real one:\n");
     expect(gate.sealed).toBe(true);
   });
+
+  it("seals on a fence glued to the end of a prose line, dropping it and everything after (regression)", () => {
+    const gate = createProseStreamGate(specs);
+    // M365 emits `prose + fence + surrender text` with the opener glued to the prose
+    // line — the fence and the trailing text must never reach the content channel.
+    const out = gate.push("I'll run the command now```bash\nuname -s\n```UNABLE");
+    expect(out).toBe("I'll run the command now");
+    expect(gate.sealed).toBe(true);
+    expect(gate.push(" trailing surrender")).toBe("");
+  });
 });
 
 describe("isAdvisorTone", () => {

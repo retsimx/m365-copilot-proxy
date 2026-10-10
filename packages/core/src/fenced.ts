@@ -103,6 +103,10 @@ export interface FencedToolSpec {
   bodyParam?: string;
   /** Schema of the body parameter if available */
   bodyParamSchema?: any;
+  /** Override the rendered body placeholder. `null` omits the placeholder line entirely
+   *  (used for the shell, where a copied placeholder like `<command>` ends up prefixed
+   *  to the real command and breaks it). */
+  bodyPlaceholder?: string | null;
   /** An (old → new) pair rendered as a SEARCH/REPLACE diff. */
   editPair?: { search: string; replace: string };
 }
@@ -225,9 +229,9 @@ function renderFencedTemplate(spec: FencedToolSpec): string {
     lines.push("=======");
     lines.push(`<${spec.editPair.replace}>`);
     lines.push(">>>>>>> REPLACE");
-  } else if (spec.bodyParam !== undefined) {
+  } else if (spec.bodyParam !== undefined && spec.bodyPlaceholder !== null) {
     if (lines.length) lines.push("");
-    lines.push(renderSchemaSkeleton(spec.bodyParam, spec.bodyParamSchema));
+    lines.push(spec.bodyPlaceholder ?? renderSchemaSkeleton(spec.bodyParam, spec.bodyParamSchema));
   }
   const header = spec.description ? `${spec.name} — ${spec.description}` : spec.name;
   return `${header}\n\`\`\`${spec.name}\n${lines.join("\n")}\n\`\`\``;
@@ -242,12 +246,13 @@ function advisorToolSpecs(tools: ToolDef[]): FencedToolSpec[] {
   const shellTool = findShellTool(tools);
   const specs: FencedToolSpec[] = [
     shellTool
-      ? { ...deriveFencedSpec(shellTool), description: "runs a command on the machine and returns its output. The `timeout:` and `workdir:` header lines are optional." }
+      ? { ...deriveFencedSpec(shellTool), bodyPlaceholder: null, description: "runs a command on the machine and returns its output. The `timeout:`/`workdir:` header lines are optional; put the shell command(s) in the body." }
       : {
           name: "bash",
-          description: "runs a command on the machine and returns its output. The `timeout:` and `workdir:` header lines are optional.",
+          description: "runs a command on the machine and returns its output. The `timeout:`/`workdir:` header lines are optional; put the shell command(s) in the body.",
           headerParams: ["timeout", "workdir"],
           bodyParam: "command",
+          bodyPlaceholder: null,
         },
   ];
 
@@ -270,7 +275,7 @@ export function formatAdvisorPrompt(tools: ToolDef[]): string {
 
 That task is the objective — not the current step. Nothing tells you a step is done, and a step that finishes, fails, or returns nothing does not complete the objective.
 
-For each step, write a short line of prose saying what you are about to do, then exactly one fenced block that calls the tool you need, filled in as its template shows — nothing after the block. The call's output comes back to you in a <tool_output> block; read it and choose the next call toward the objective.
+For each step, write a short line of prose saying what you are about to do, then exactly one fenced block that calls the tool you need, filled in as its template shows — then stop: write nothing after the closing fence, not even a status, apology, or note. The call's output comes back to you in a <tool_output> block; read it and choose the next call toward the objective.
 
 An empty, failed, or unexpected result is evidence to work around with a different call or path — never a sign that the tools are unavailable.
 
@@ -714,17 +719,27 @@ export interface ProseStreamGate {
   readonly sealed: boolean;
 }
 
-/** Offset of the earliest line in `buf` that opens a known tool fence, or -1. */
+/** Offset of the earliest opener in `buf` whose info-string is a known tool, or -1.
+ *  Matches fences on their own line (≤3 leading spaces) AND fences glued to the end of
+ *  a prose line (`...prose```bash`) — M365 emits both, and the parser (restoreM365Fences)
+ *  already accepts the glued form. If the gate only matched own-line fences, the glued
+ *  fence — and everything after it — would leak into the streamed prose. Returns the
+ *  offset of the backticks, so the fence itself and anything after it are never emitted. */
 function findToolFenceOffset(buf: string, specs: Map<string, FencedToolSpec>): number {
-  let pos = 0;
-  while (pos <= buf.length) {
-    const nl = buf.indexOf("\n", pos);
-    const lineEnd = nl === -1 ? buf.length : nl;
-    const line = buf.slice(pos, lineEnd).replace(/\r$/, "");
-    const m = line.match(OPEN_FENCE_REGEX);
-    if (m && specs.has(m[3])) return pos;
-    if (nl === -1) break;
-    pos = nl + 1;
+  const re = /(`{3,})([A-Za-z0-9_.-]+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(buf)) !== null) {
+    const i = m.index;
+    if (!specs.has(m[2])) continue;
+    const prev = i > 0 ? buf[i - 1] : "\n";
+    if (i === 0 || prev === "\n") return i; // own-line opener
+    if (prev === " ") {
+      let s = i;
+      while (s > 0 && buf[s - 1] === " ") s--; // leading indentation
+      if ((s === 0 || buf[s - 1] === "\n") && i - s <= 3) return i;
+      continue; // 4+ spaces = indented code, not a call opener
+    }
+    if (prev !== "`" && prev !== "\r") return i; // glued opener (`...contract.```read`)
   }
   return -1;
 }
