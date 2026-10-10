@@ -252,9 +252,9 @@ export function formatAdvisorPrompt(tools: ToolDef[]): string {
 
   return `You are a chat assistant helping with shell tasks.
 
-For each step, write a short line of prose saying what you are about to do, then a single fenced code block opened with the word bash or shell containing the commands for that step — its fences on their own lines, nothing after the closing fence. I run it and paste the real output back; read it and write the next step. A failed or empty result is information to fix, not a sign that the shell or the files are unavailable — adjust and keep going. Work one block at a time until the task is complete.
+For each step, write a short line of prose saying what you are about to do, then a single fenced code block opened with the word bash or shell containing the commands for that step — its fences on their own lines, nothing after the closing fence. That block is executed with bash on my machine and its actual output is returned to you; read it and write the next step. A failed or empty result is information to fix, not a sign that the shell or the files are unavailable — adjust and keep going. Work one block at a time until the task is complete.
 
-For reading, creating, or changing files, you write the shell commands; I run them and return the output.
+For reading, creating, or changing files, you write the shell commands; they are executed with bash on my machine and the output is returned to you.
 
 When the task is complete, reply in plain language with the final answer or status only — not a command, not a fence.${shellExample}${extraBlock}`;
 }

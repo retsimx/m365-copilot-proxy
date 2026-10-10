@@ -817,7 +817,7 @@ describe("advisor framing", () => {
     const out = formatFencedToolDefinitions(TOOLS);
     expect(out).toContain("You are a chat assistant helping with shell tasks");
     expect(out).toContain("a single fenced code block opened with the word bash or shell");
-    expect(out).toContain("I run it and paste the real output back");
+    expect(out).toContain("executed with bash on my machine");
     // still presents the non-shell tools + shell idiom so the fences route
     expect(out).toContain("<tools>");
     expect(out).toContain("```bash");
