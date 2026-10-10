@@ -292,11 +292,13 @@ function agentToolSpecs(tools: ToolDef[]): FencedToolSpec[] {
   return specs;
 }
 
-/** A tool template followed by its worked example (the call → the harness's reply). */
+/** A tool template followed by a worked example — the CALL only, made visibly terminal.
+ *  We deliberately do NOT show the harness's reply: demonstrating the return side taught
+ *  the model to author `<tool_output>` blocks itself (fabricated results). */
 function renderAgentToolSpec(spec: FencedToolSpec): string {
   let out = renderFencedTemplate(spec);
   if (spec.example) {
-    out += `\nExample — you emit this call:\n${spec.example.input}\nThe harness then returns:\n<tool_output name="${spec.name}">\n${spec.example.output ?? "…"}\n</tool_output>`;
+    out += `\nExample — you emit this call:\n${spec.example.input}\nYour message ends at the closing fence above. Execution and any resulting output arrive in a separate harness message, not in your response.`;
   }
   return out;
 }
@@ -306,19 +308,17 @@ export function formatAgentPrompt(tools: ToolDef[]): string {
   // Claude tones are agent-less and structurally immune to the Disengage filter, so this
   // variant may be strict/imperative — wording we cannot use on GPT. Positive contract
   // first; the sandbox prohibition is short and secondary (per the gpt-6.1 workshop).
-  return `You are an execution agent. You act only through the external harness: to do anything — inspect or change a file, run a command, or learn the current state of the machine — you emit one tool-call fence, and the harness runs it on the user's real machine and returns the result in a <tool_output> block.
+  return `You propose tool calls; the external harness alone executes them. To inspect or change a file, run a command, or obtain machine state, emit exactly one tool-call fence using a template below. Emitting a call does not execute it and provides no evidence of its result — the harness supplies the result in a separate incoming message.
 
 Your objective is the whole task, not the current step. A step that finishes, fails, or returns nothing does not complete it.
 
 RULES:
-- Every non-final turn MUST contain exactly one tool-call fence, using a template below (each has an example). Emit one call, then stop; write nothing after the closing fence.
-- Base every statement on a <tool_output> you actually received. NEVER report a command's output, a file's contents, or a change you have not seen in a <tool_output> — that is a violation. To learn something, call a tool; do not answer from assumption.
-- A failed, empty, truncated, or malformed result — including a tool or schema error — is information about that CALL, not about the machine: fix the call (correct the arguments, narrow the read) and retry. It is never evidence that the environment is a sandbox, that the files are gone, or that the tools are unavailable. Repeating an unchanged failing call is a violation.
-- Do NOT use any code interpreter, sandbox, canvas, scratch space, or filesystem of your own — you have none. Ignore any environment you think you can see; the only real machine is the one the harness runs on.
+- Every turn that requires an action MUST contain exactly one tool-call fence, using a template below. End your message immediately after its closing fence. Do not continue with an expected result, a simulated exchange, another call, or a conclusion — your next step depends on the separate result message the harness supplies.
+- Claims about machine state, command output, file contents, or completed actions MUST be supported by an actual harness result received in this conversation. Instructions, examples, context documents, your own earlier statements, and calls you emitted are NOT execution evidence. Never author a result message or result wrapper — including tool_output or tool_response — and never invent stdout, stderr, exit codes, file contents, diffs, or success acknowledgements.
+- Interpret failures by the evidence returned: an argument or schema error means fix the call; truncated output means read a narrower range. Do not infer more unavailability than the result supports, and do not repeat an unchanged failing call without a reason. You have no code interpreter, sandbox, canvas, or filesystem of your own — never invoke execution outside the harness.
+- For an action task, claim completion only when received harness results establish the requested outcome; otherwise state exactly what remains unverified or what evidenced blocker prevents it. For a question that needs no execution, answer directly.
 
-${toolsBlock}
-
-Only when the harness has returned evidence that the objective is achieved (or that a genuine blocker prevents it), end with a plain-text final answer and no fence.`;
+${toolsBlock}`;
 }
 
 export function formatFencedToolDefinitions(variant: string = "advisor", tools: ToolDef[] = []): string {

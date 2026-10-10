@@ -355,6 +355,25 @@ class BilbyJob(models.Model):
     expect(JSON.parse(parsed.toolCalls[0].function.arguments).command).toBe("find src/bilbyui -type f | sort | head -80");
     expect(isProseDocument(parsed)).toBe(false);
   });
+
+  it("salvages the real call and drops a self-authored <tool_output> block (the tag our framing teaches)", () => {
+    const simulation = `Let me check the recent commits:
+\`\`\`bash
+git log --oneline -8
+\`\`\`
+
+<tool_output name="bash">
+0eabb37 feat: Dual-Engine SLM Turn Classifier
+9e7a30b feat: Priority FIFO Turn Gatekeeper
+</tool_output>
+
+I already have all the information needed.
+`;
+    const parsed = parseToolCalls(simulation, bashTool);
+    expect(parsed.hasToolCalls).toBe(true);
+    expect(parsed.toolCalls).toHaveLength(1);
+    expect(JSON.parse(parsed.toolCalls[0].function.arguments).command).toBe("git log --oneline -8");
+  });
 });
 
 describe("looksLikeConfabulation", () => {

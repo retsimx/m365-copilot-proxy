@@ -1297,12 +1297,13 @@ export async function handleChatCompletion(
       }
     }
 
-    // If the model produced a hallucinated simulation with fake <tool_response> tags
-    // or confabulation in this turn, M365's cloud session context is now polluted with fake output.
-    // Reset the session so the next turn sends the full clean history from the caller instead
-    // of continuing from a dirty delta state.
+    // If the model produced a hallucinated simulation with a fake result tag
+    // (`<tool_response>` legacy, or `<tool_output>` — the tag our framing teaches) or
+    // confabulation in this turn, M365's cloud session context is now polluted with fake
+    // output. Reset the session so the next turn sends the full clean history from the
+    // caller instead of continuing from a dirty delta state.
     if (
-      /<tool_response\b/i.test(fullText) ||
+      /<(?:tool_response|tool_output)\b/i.test(fullText) ||
       (!disableConfabDetection && hasTools && !parsed.hasToolCalls && (looksLikeConfabulation(fullText) || (await classifyTurnResponse(fullText)) === "REFUSAL"))
     ) {
       log.info("Contaminated simulation or confabulation detected — resetting session state to force clean full history on next turn");

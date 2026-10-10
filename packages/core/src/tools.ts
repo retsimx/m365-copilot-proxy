@@ -582,10 +582,11 @@ export function isProseDocument(parsed: ParseResult): boolean {
 
 export function parseToolCalls(text: string, tools?: ToolDef[]): ParseResult {
   // If the model self-simulated a conversation by emitting a tool call followed by
-  // a fake <tool_response> tag and subsequent output, isolate the text before the
-  // first <tool_response> tag so we salvage the real tool call(s) and discard
-  // the hallucinated multi-turn script.
-  const toolResponseMatch = text.match(/<tool_response\b/i);
+  // a fake result tag (`<tool_response>` legacy, or `<tool_output>` — the tag our
+  // framing now teaches) and subsequent output, isolate the text before the first
+  // such tag so we salvage the real tool call(s) and discard the hallucinated
+  // multi-turn script (fabricated results the harness never returned).
+  const toolResponseMatch = text.match(/<(?:tool_response|tool_output)\b/i);
   let parseInput = text;
   if (toolResponseMatch && toolResponseMatch.index !== undefined && toolResponseMatch.index > 0) {
     const prefix = text.slice(0, toolResponseMatch.index);

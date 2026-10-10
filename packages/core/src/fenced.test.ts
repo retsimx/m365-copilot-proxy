@@ -596,10 +596,11 @@ describe("formatFencedToolDefinitions", () => {
       T("bash", { command: { type: "string" }, timeout: { type: "number" }, workdir: { type: "string" } }, ["command"]),
     ];
     const out = formatFencedToolDefinitions("agent", tools);
-    expect(out).toContain("You act only through the external harness");
-    expect(out).toContain("Do NOT use any code interpreter, sandbox, canvas");
+    expect(out).toContain("You propose tool calls; the external harness alone executes them");
+    expect(out).toContain("Never author a result message or result wrapper");
     expect(out).toContain("Example — you emit this call");
-    expect(out).toContain('<tool_output name="read">');
+    expect(out).toContain("Your message ends at the closing fence above");
+    expect(out).not.toContain('<tool_output name="read">'); // return-side example removed (taught imitation)
     expect(out).toContain("<tools>");
     expect(out).toContain("```read");
     expect(out).toContain("```write");
