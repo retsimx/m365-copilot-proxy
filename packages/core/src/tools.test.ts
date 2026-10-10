@@ -650,8 +650,8 @@ describe("formatToolDefinitions", () => {
   it("emits the fenced contract (delegates to formatFencedToolDefinitions)", () => {
     const output = formatToolDefinitions(tools);
 
-    expect(output).toContain("You have access to bash through the runtime");
-    expect(output).toContain("one bash-fenced block");
+    expect(output).toContain("You are a chat assistant helping with shell tasks");
+    expect(output).toContain("a single fenced code block opened with the word bash or shell");
     expect(output).not.toContain("TOOL USE IS REQUIRED");
     expect(output).not.toContain("PRIMARY JOB");
   });

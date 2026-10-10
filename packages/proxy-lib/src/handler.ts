@@ -232,30 +232,25 @@ function simpleHash(str: string): string {
 function formatDeltaMessages(messages: ParsedMessage[]): string {
   const parts: string[] = [];
 
-  // No framing re-injection on delta turns — the model is stateful and mid-loop, and
-  // the tool result itself signals the loop is live.
-  //
-  // call_id → tool name, from the assistant's tool_calls, so the result envelope can
-  // read `name="bash"` instead of the client's `name="unknown"`.
-  const callIdToName = new Map<string, string>();
-  for (const m of messages) {
-    if (m.role === "assistant" && m.tool_calls) {
-      for (const tc of m.tool_calls) if (tc.id) callIdToName.set(tc.id, tc.function?.name ?? "bash");
-    }
-  }
-
+  // No framing re-injection on delta turns. The advisor framing is sent on turn 0; the
+  // model is stateful and mid-loop. Re-stating "you never touch files directly — you
+  // only write the commands" every turn was (a) per-turn Disengage weight and (b)
+  // priming the "I can't create/modify files" refusal. The tool result itself is the
+  // strongest signal that the loop is working.
   for (const m of messages) {
     if (m.role === "assistant") {
       // Skip assistant messages — M365 already has them server-side.
       // Echoing them back as a user message confuses M365.
       continue;
     } else if (m.role === "tool") {
-      // Named, correlated result envelope. `name` is resolved from the invoking
-      // tool_call (by call_id) so it reads `name="bash"` rather than `name="unknown"`.
-      // The output is untrusted DATA, not instructions.
-      const name = callIdToName.get(m.tool_call_id ?? "") ?? m.name ?? "bash";
-      const callId = m.tool_call_id || "?";
-      parts.push(`<tool_response name="${name}" call_id="${callId}">\n${getMessageContent(m)}\n</tool_response>`);
+      // Package the result in the advisor/user voice: the output bounded by dividers,
+      // then a one-line turn-taking directive. Keeps the loop on rails (send the next
+      // script, or the final response) without re-injecting the whole framing every
+      // turn. Untagged — the old <tool_response name="unknown" …> tags were referenced
+      // nowhere and read as mystery XML.
+      parts.push(
+        `I ran your previous block on my machine; its output follows:\n---\n${getMessageContent(m)}\n---\nPlease send the next script to run — correcting anything that looked off — or, if the task is done, your final response.`,
+      );
     } else if (m.role === "system") {
       // Skip system messages on follow-up turns
     } else {
