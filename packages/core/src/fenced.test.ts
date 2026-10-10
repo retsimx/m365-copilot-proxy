@@ -596,7 +596,7 @@ describe("formatFencedToolDefinitions", () => {
       T("bash", { command: { type: "string" }, timeout: { type: "number" }, workdir: { type: "string" } }, ["command"]),
     ];
     const out = formatFencedToolDefinitions("agent", tools);
-    expect(out).toContain("capable assistant with tools");
+    expect(out).toContain("capable execution agent");
     expect(out).toContain("<tools>");
     expect(out).toContain("```read");
     expect(out).toContain("```write");
