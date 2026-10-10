@@ -1114,38 +1114,52 @@ export async function handleChatCompletion(
       (m) => m.role === "assistant" && Array.isArray(m.tool_calls) && m.tool_calls.length > 0,
     );
     const disableConfabDetection = process.env.M365_DISABLE_CONFAB_DETECTION === "1";
-    // Commit-on-stream (§3.3): if prose already reached the client, a retry with
-    // different text would diverge from `sent` and be silently dropped by the
-    // end-of-turn prefix guard — so skip the text-replacing retries entirely and
-    // leave the streamed answer as the result.
-    if (streamedProse && !parsed.hasToolCalls) {
-      log.info("Prose already streamed live (commit-on-stream) — skipping confab/hallucination retry to preserve the sent prefix");
-    }
-    for (let attempt = 0; attempt < maxConfabRetries && !parsed.hasToolCalls && !streamedProse; attempt++) {
-      const truncationSurrender = !disableConfabDetection && looksLikeTruncationSurrender(parsed.textContent);
-      const isRefusal =
-        !disableConfabDetection &&
-        hasTools &&
-        !parsed.hasToolCalls &&
-        Boolean(parsed.textContent) &&
-        (truncationSurrender || looksLikeConfabulation(parsed.textContent) || (await classifyTurnResponse(parsed.textContent)) === "REFUSAL");
-      const confab = isRefusal;
-      const remoteArtifact = looksLikeRemoteArtifactCompletion(parsed.textContent);
-      const halluc = !everActed && looksLikeHallucinatedCompletion(parsed.textContent);
-      if (!confab && !remoteArtifact && !halluc) break;
+    const disableStallRetry = process.env.M365_DISABLE_STALL_RETRY === "1";
+    // Commit-on-stream (§3.3): a retry after prose reached the client would diverge from
+    // `sent` and be dropped by the end-of-turn prefix guard, so we normally skip retries
+    // then. EXCEPTION — the narrow stall guard below: on a tool-mode turn that returns NO
+    // tool call and reads as a surrender/refusal, retry anyway. The stale prose is harmless
+    // (assistant turns are never resent to M365, so the model's context stays clean), and
+    // the retry usually yields the missing tool call.
+    for (let attempt = 0; attempt < maxConfabRetries && !parsed.hasToolCalls; attempt++) {
+      const turnText = parsed.textContent ?? "";
+      const toolModeNoCall = hasTools && !parsed.hasToolCalls && Boolean(turnText);
+      const truncationSurrender = looksLikeTruncationSurrender(turnText);
+      const looksConfab = toolModeNoCall && looksLikeConfabulation(turnText);
+      // Only call the (comparatively expensive) SLM when a cheap signal hasn't already
+      // decided: skip it if the surrender regex fired, or if the broad path is enabled and
+      // its confab regex matched. The narrow guard deliberately does NOT use that confab
+      // regex (its false positives are why it's off), so when the broad path is disabled we
+      // always classify to get the precise verdict.
+      let classifiedRefusal = false;
+      if (toolModeNoCall && !truncationSurrender && (!looksConfab || disableConfabDetection)) {
+        classifiedRefusal = (await classifyTurnResponse(turnText)) === "REFUSAL";
+      }
+      // Narrow, high-precision stall guard — runs even when M365_DISABLE_CONFAB_DETECTION=1
+      // (whose broad regexes are off for false positives on legit prose deliverables).
+      const narrowStall = !disableStallRetry && toolModeNoCall && (truncationSurrender || classifiedRefusal);
+      // Broad detectors (disabled on prod when M365_DISABLE_CONFAB_DETECTION=1).
+      const confab = !disableConfabDetection && toolModeNoCall && (truncationSurrender || looksConfab || classifiedRefusal);
+      const remoteArtifact = looksLikeRemoteArtifactCompletion(turnText);
+      const halluc = !everActed && looksLikeHallucinatedCompletion(turnText);
+      if (!narrowStall && !confab && !remoteArtifact && !halluc) break;
+      if (streamedProse && !narrowStall) {
+        log.info("Prose already streamed live (commit-on-stream) — skipping confab/hallucination retry to preserve the sent prefix");
+        break;
+      }
       if (truncationSurrender) {
         log.info(`Truncation surrender detected (no tool call) — forcing retry ${attempt + 1}/${maxConfabRetries}`);
-      } else if (confab) {
-        log.info(`SLM classified turn as REFUSAL (no tool call) — forcing retry ${attempt + 1}/${maxConfabRetries}`);
+      } else if (confab || narrowStall) {
+        log.info(`Turn reads as a refusal/stall (no tool call) — forcing retry ${attempt + 1}/${maxConfabRetries}`);
       } else {
         const retryKind = remoteArtifact ? "Remote artifact completion" : "Hallucinated completion";
         log.info(`${retryKind} detected (no tool call) — forcing retry ${attempt + 1}/${maxConfabRetries}`);
       }
-      const forcePrompt = looksLikeTruncationSurrender(parsed.textContent)
+      const forcePrompt = truncationSurrender
         ? TRUNCATION_SURRENDER_FORCE_PROMPT
-        : looksLikeRemoteArtifactCompletion(parsed.textContent)
+        : remoteArtifact
           ? ARTIFACT_FORCE_PROMPT
-          : confab
+          : confab || narrowStall
             ? CONFAB_FORCE_PROMPT
             : HALLUCINATION_FORCE_PROMPT;
       const basePrompt = forcePrompt;
