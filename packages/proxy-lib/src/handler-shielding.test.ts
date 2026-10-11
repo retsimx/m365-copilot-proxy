@@ -9,6 +9,7 @@ import {
   resetTurnQueue,
   TRUNCATION_SURRENDER_FORCE_PROMPT,
   hasPostFenceContamination,
+  bucketRampDelay,
 } from "./handler.js";
 import * as core from "@m365-copilot/core";
 import { getNewSessionsInWindow, getTurnsInWindow, resetMetrics } from "./metrics.js";
@@ -851,34 +852,34 @@ describe("Sliding-Window Velocity Governor (paceTurnVelocity)", () => {
     }
   });
 
-  it("resolves immediately with 0ms delay for turns 1 to 29", async () => {
+  it("resolves immediately with 0ms delay below the burst ramp start (turns 1 to 24)", async () => {
     let now = 1_000_000;
     vi.spyOn(Date, "now").mockImplementation(() => now);
 
-    for (let i = 1; i <= 29; i++) {
+    for (let i = 1; i <= 24; i++) {
       const delay = await paceTurnVelocity();
       expect(delay).toBe(0);
       now += 1000;
     }
   });
 
-  it("enforces soft elastic spacing (3s, 6s, 9s, 12s, 15s) for turns 30 to 34", async () => {
+  it("applies a quadratic occupancy ramp toward the burst ceiling (counts 24..34)", async () => {
     vi.useFakeTimers();
     try {
       let now = 1_000_000;
       vi.spyOn(Date, "now").mockImplementation(() => now);
 
-      // Execute 30 turns to populate the burst window up to burstSoft (30)
-      for (let i = 1; i <= 30; i++) {
+      // Fill the burst window to count 24 with 0 delay.
+      for (let i = 1; i <= 24; i++) {
         const delay = await paceTurnVelocity();
         expect(delay).toBe(0);
         now += 1000;
       }
 
-      // Turns with burstCount 30..34 receive progressive soft spacing:
-      // excess * 3000ms -> 3s, 6s, 9s, 12s, 15s
-      const expectedDelays = [3000, 6000, 9000, 12000, 15000];
-      for (const expectedDelay of expectedDelays) {
+      // Each subsequent request sees count 24..34 -> round(((count-23)/11)^2 * 60000):
+      // gentle at first, steep near the ceiling.
+      for (let count = 24; count <= 34; count++) {
+        const expectedDelay = Math.round(Math.pow((count - 23) / 11, 2) * 60_000);
         const p = paceTurnVelocity();
         let resolved = false;
         p.then(() => {
@@ -898,33 +899,33 @@ describe("Sliding-Window Velocity Governor (paceTurnVelocity)", () => {
     }
   });
 
-  it("incurs burst drain delay on turn 35", async () => {
+  it("incurs the exact burst drain-wait once the bucket is full (count 35)", async () => {
     vi.useFakeTimers();
     try {
       let now = 10_000;
       vi.spyOn(Date, "now").mockImplementation(() => now);
+      const recorded: number[] = [];
 
-      // Run 30 turns with 0 delay (t = 10_000, 11_000, ..., 39_000)
-      for (let i = 1; i <= 30; i++) {
+      // 24 turns at 0 delay (recorded at t = 10_000 .. 33_000).
+      for (let i = 1; i <= 24; i++) {
         const delay = await paceTurnVelocity();
         expect(delay).toBe(0);
+        recorded.push(now);
         now += 1000;
       }
 
-      // Run 5 turns with soft spacing (burstCount 30..34)
-      for (let count = 30; count <= 34; count++) {
-        const spacing = (count - 30 + 1) * 3000;
+      // Ramp turns for counts 24..34.
+      for (let count = 24; count <= 34; count++) {
+        const d = Math.round(Math.pow((count - 23) / 11, 2) * 60_000);
         const p = paceTurnVelocity();
-        now += spacing;
-        await vi.advanceTimersByTimeAsync(spacing);
+        now += d;
+        await vi.advanceTimersByTimeAsync(d);
         await p;
+        recorded.push(now);
       }
 
-      // Now burstCount === 35 (burstMax is 35)
-      // oldestBurst is at t = 10_000
-      // burstWindowMs = 600_000
-      // drainDelay = (10_000 + 600_000) - now
-      const oldestBurst = 10_000;
+      // count is now 35 -> exact drain-wait for the oldest of the last 35 turns.
+      const oldestBurst = recorded[recorded.length - 35];
       const expectedDrainDelay = Math.max(1000, (oldestBurst + 600_000) - now);
 
       const p35 = paceTurnVelocity();
@@ -945,49 +946,36 @@ describe("Sliding-Window Velocity Governor (paceTurnVelocity)", () => {
     }
   });
 
-  it("applies graduated resistance (5s..25s) when 60m count reaches 90 turns", async () => {
+  it("applies the quadratic sustained ramp once the 60m count reaches the warn (90)", async () => {
     vi.useFakeTimers();
     try {
       let now = 1_000_000;
       vi.spyOn(Date, "now").mockImplementation(() => now);
 
-      // Space 89 turns by 21s across ~31 minutes
-      // In any 10-minute window (600s), there are at most 28 turns (< 30 burstSoft), so all resolve with 0ms
-      for (let i = 0; i < 89; i++) {
-        now = 1_000_000 + i * 21_000;
+      // Space 90 turns by 30s (~45 min); each sees count 0..89, all 0ms. (30s keeps the
+      // 10m burst window at ~20 turns, well under the burst ramp start of 24.)
+      for (let i = 0; i < 90; i++) {
+        now = 1_000_000 + i * 30_000;
         const delay = await paceTurnVelocity();
         expect(delay).toBe(0);
       }
 
-      // Advance by 650s: all 89 prior turns are now older than the 10m burst window (> 600s),
-      // but well within the 60m sustained window (< 3600s)
+      // Advance 650s: prior turns are out of the 10m burst window, still in the 60m one.
       now += 650_000;
 
-      // Turn brings sustainedCount from 89 to 90
-      const delay89 = await paceTurnVelocity();
-      expect(delay89).toBe(0);
-
-      // Now sustainedCount is 90!
-      // Progress = (90 - 90 + 1) / (120 - 90) = 1 / 30
-      // Expected delay: Math.round(5000 + (1 / 30) * 20000) = 5667 ms
-      const expectedDelay90 = Math.round(5000 + (1 / 30) * 20000);
-      expect(expectedDelay90).toBe(5667);
-      expect(expectedDelay90).toBeGreaterThanOrEqual(5000);
-      expect(expectedDelay90).toBeLessThanOrEqual(25000);
-
-      const p90 = paceTurnVelocity();
-      let p90Resolved = false;
-      p90.then(() => {
-        p90Resolved = true;
+      // Next request sees sustainedCount 90 -> round(((90-90+1)/(120-90))^2 * 30000) = 33 ms
+      // (the test env uses the default sustainedMax of 120).
+      const expectedDelay = Math.round(Math.pow((90 - 90 + 1) / (120 - 90), 2) * 30_000);
+      const p = paceTurnVelocity();
+      let resolved = false;
+      p.then(() => {
+        resolved = true;
       });
-      expect(p90Resolved).toBe(false);
-
-      now += expectedDelay90;
-      await vi.advanceTimersByTimeAsync(expectedDelay90);
-
-      const delay90 = await p90;
-      expect(p90Resolved).toBe(true);
-      expect(delay90).toBe(expectedDelay90);
+      expect(resolved).toBe(false);
+      now += expectedDelay;
+      await vi.advanceTimersByTimeAsync(expectedDelay);
+      expect(await p).toBe(expectedDelay);
+      expect(resolved).toBe(true);
     } finally {
       vi.useRealTimers();
     }
@@ -999,8 +987,8 @@ describe("Sliding-Window Velocity Governor (paceTurnVelocity)", () => {
       let now = 10_000;
       vi.spyOn(Date, "now").mockImplementation(() => now);
 
-      // Run 30 turns so the next call triggers soft spacing
-      for (let i = 1; i <= 30; i++) {
+      // Run 24 turns so the next call triggers the occupancy ramp (count 24)
+      for (let i = 1; i <= 24; i++) {
         await paceTurnVelocity();
         now += 1000;
       }
@@ -1015,11 +1003,33 @@ describe("Sliding-Window Velocity Governor (paceTurnVelocity)", () => {
     }
   });
 
+  it("bucketRampDelay: quadratic ramp below the ceiling, exact drain-wait at/over it", () => {
+    const now = 1_000_000;
+    const window = 600_000, max = 35, start = 24, target = 60_000;
+    const ts = Array.from({ length: max }, (_, i) => now - (max - i) * 1000);
+    // below the ramp start -> no delay
+    expect(bucketRampDelay(start - 1, ts, start, max, window, target, now)).toBe(0);
+    // gentle at the start, full target at max-1
+    expect(bucketRampDelay(start, ts, start, max, window, target, now)).toBe(Math.round(Math.pow(1 / 11, 2) * target));
+    expect(bucketRampDelay(max - 1, ts, start, max, window, target, now)).toBe(target);
+    // monotonically increasing across the ramp
+    let prev = -1;
+    for (let c = start; c < max; c++) {
+      const d = bucketRampDelay(c, ts, start, max, window, target, now);
+      expect(d).toBeGreaterThanOrEqual(prev);
+      prev = d;
+    }
+    // at/over max -> exact rolling-window drain-wait (the hard ceiling)
+    const oldest = ts[ts.length - max];
+    expect(bucketRampDelay(max, ts, start, max, window, target, now)).toBe(Math.max(1000, oldest + window - now));
+    expect(bucketRampDelay(max + 5, ts, start, max, window, target, now)).toBe(Math.max(1000, oldest + window - now));
+  });
+
   it("resetTurnVelocityPacing resets state and clears history", async () => {
     let now = 10_000;
     vi.spyOn(Date, "now").mockImplementation(() => now);
 
-    for (let i = 1; i <= 30; i++) {
+    for (let i = 1; i <= 23; i++) {
       const delay = await paceTurnVelocity();
       expect(delay).toBe(0);
       now += 1000;

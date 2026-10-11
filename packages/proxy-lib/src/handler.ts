@@ -548,6 +548,31 @@ export function setRecentTurnTimestamps(ts: number[]): void {
   recentTurnTimestamps = [...ts];
 }
 
+/** Convex (quadratic) occupancy ramp for one rolling-window bucket.
+ *  Below the ceiling the delay grows gently then steeply toward `targetMs` (mild early
+ *  friction, strong late friction) so a user can still REACH 100% of the bucket — just with
+ *  increasing per-turn timeouts — instead of a sudden multi-minute freeze at the cap.
+ *  At/over `max` the exact rolling-window drain-wait applies: the hard ceiling is NEVER
+ *  crossed (the max-th turn is admissible at count max-1; the next blocks until a slot frees). */
+export function bucketRampDelay(
+  count: number,
+  timestamps: number[],
+  start: number,
+  max: number,
+  windowMs: number,
+  targetMs: number,
+  now: number,
+): number {
+  if (max <= 0 || windowMs <= 0) return 0;
+  if (count >= max) {
+    const oldest = timestamps[timestamps.length - max];
+    return Math.max(1000, oldest + windowMs - now);
+  }
+  if (count < start) return 0;
+  const p = (count - start + 1) / (max - start);
+  return Math.round(p * p * targetMs);
+}
+
 export function getGovernorState(): {
   tenMinute: {
     turns: number;
@@ -591,27 +616,12 @@ export function getGovernorState(): {
   const burstCount = Math.max(burstEntries.length, metricTurns10m);
   const sustainedCount = Math.max(recentTurnTimestamps.length, metricTurns60m);
 
-  let burstDelayMs = 0;
-  if (burstMax > 0 && burstWindowMs > 0) {
-    if (burstCount >= burstMax) {
-      const oldestBurst = burstEntries[burstEntries.length - burstMax];
-      burstDelayMs = Math.max(1000, (oldestBurst + burstWindowMs) - now);
-    } else if (burstCount >= burstSoft) {
-      const excess = burstCount - burstSoft + 1;
-      burstDelayMs = excess * 3000;
-    }
-  }
+  const burstRampStart = Number(process.env.M365_BURST_RAMP_START ?? 24);
+  const burstRampTargetMs = Number(process.env.M365_BURST_RAMP_TARGET_MS ?? 60_000);
+  const sustainedRampTargetMs = Number(process.env.M365_SUSTAINED_RAMP_TARGET_MS ?? 30_000);
 
-  let sustainedDelayMs = 0;
-  if (sustainedMax > 0 && sustainedWindowMs > 0) {
-    if (sustainedCount >= sustainedMax) {
-      const oldestSustained = recentTurnTimestamps[recentTurnTimestamps.length - sustainedMax];
-      sustainedDelayMs = Math.max(1000, (oldestSustained + sustainedWindowMs) - now);
-    } else if (sustainedCount >= sustainedWarn) {
-      const progress = (sustainedCount - sustainedWarn + 1) / (sustainedMax - sustainedWarn);
-      sustainedDelayMs = Math.round(5000 + Math.min(1, progress) * 20000);
-    }
-  }
+  const burstDelayMs = bucketRampDelay(burstCount, burstEntries, burstRampStart, burstMax, burstWindowMs, burstRampTargetMs, now);
+  const sustainedDelayMs = bucketRampDelay(sustainedCount, recentTurnTimestamps, sustainedWarn, sustainedMax, sustainedWindowMs, sustainedRampTargetMs, now);
 
   const freshSessions10m = getNewSessionsInWindow(burstWindowMs, now);
   const freshSessions60m = getNewSessionsInWindow(sustainedWindowMs, now);
@@ -722,13 +732,20 @@ async function processTurnQueue(): Promise<void> {
       const burstCount = burstEntries.length;
       const sustainedCount = recentTurnTimestamps.length;
 
+      const burstRampStart = Number(process.env.M365_BURST_RAMP_START ?? 24);
+      const burstRampTargetMs = Number(process.env.M365_BURST_RAMP_TARGET_MS ?? 60_000);
+      const sustainedRampTargetMs = Number(process.env.M365_SUSTAINED_RAMP_TARGET_MS ?? 30_000);
+      // The soft ramp is served once per queue head; the hard drain-wait is not.
+      const softEligible = !head.softDelayServed;
+
       let burstDelayMs = 0;
       if (burstMax > 0 && burstWindowMs > 0) {
         if (burstCount >= burstMax) {
           const oldestBurst = burstEntries[burstEntries.length - burstMax];
           burstDelayMs = Math.max(1000, (oldestBurst + burstWindowMs) - now);
-        } else if (burstCount >= burstSoft && !head.softDelayServed) {
-          burstDelayMs = (burstCount - burstSoft + 1) * 3000;
+        } else if (softEligible && burstCount >= burstRampStart) {
+          const p = (burstCount - burstRampStart + 1) / (burstMax - burstRampStart);
+          burstDelayMs = Math.round(p * p * burstRampTargetMs);
         }
       }
 
@@ -737,9 +754,9 @@ async function processTurnQueue(): Promise<void> {
         if (sustainedCount >= sustainedMax) {
           const oldestSustained = recentTurnTimestamps[recentTurnTimestamps.length - sustainedMax];
           sustainedDelayMs = Math.max(1000, (oldestSustained + sustainedWindowMs) - now);
-        } else if (sustainedCount >= sustainedWarn && !head.softDelayServed) {
-          const progress = (sustainedCount - sustainedWarn + 1) / (sustainedMax - sustainedWarn);
-          sustainedDelayMs = Math.round(5000 + Math.min(1, progress) * 20000);
+        } else if (softEligible && sustainedCount >= sustainedWarn) {
+          const p = (sustainedCount - sustainedWarn + 1) / (sustainedMax - sustainedWarn);
+          sustainedDelayMs = Math.round(p * p * sustainedRampTargetMs);
         }
       }
 
