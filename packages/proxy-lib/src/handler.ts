@@ -291,12 +291,30 @@ function annotateToolOutput(content: string): { attrs: string; text: string } {
 /** Post-fence contamination guard. With one call per turn, a valid assistant message is:
  *  optional prose + ONE complete tool-call fence + whitespace. Anything non-whitespace
  *  after the fence, or a self-authored result opener, means the model is simulating the
- *  harness (the token-prediction "call → result" prior) — the turn is aborted. */
-function hasPostFenceContamination(text: string): boolean {
-  if (/<(?:tool_output|tool_response)\b/i.test(text)) return true;
-  const m = /```[A-Za-z0-9_.-]+\r?\n[\s\S]*?\r?\n```/.exec(text);
-  if (!m) return false;
-  return text.slice(m.index + m[0].length).trim().length > 0;
+ *  harness (the token-prediction "call → result" prior) — the turn is aborted.
+ *  Fence-aware: text INSIDE a fence is call data (a command may legitimately contain the
+ *  literal `<tool_output>` string), so it is never flagged. */
+export function hasPostFenceContamination(text: string): boolean {
+  let inFence = false;
+  let fencesClosed = 0;
+  for (const line of text.split(/\r?\n/)) {
+    if (/^\s*```/.test(line)) {
+      if (inFence) {
+        inFence = false;
+        fencesClosed++;
+      } else {
+        // A SECOND fence opening — we run at most one call per turn, so the rest is
+        // unexecutable anyway; abort rather than let it continue into simulation.
+        if (fencesClosed >= 1) return true;
+        inFence = true;
+      }
+      continue;
+    }
+    if (inFence) continue; // inside a call body — call data, not contamination
+    if (/<(?:tool_output|tool_response)\b/i.test(line)) return true;
+    if (fencesClosed >= 1 && line.trim().length > 0) return true; // non-whitespace after the fence
+  }
+  return false;
 }
 
 function formatDeltaMessages(messages: ParsedMessage[]): string {

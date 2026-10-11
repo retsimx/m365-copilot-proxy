@@ -8,6 +8,7 @@ import {
   resetTurnVelocityPacing,
   resetTurnQueue,
   TRUNCATION_SURRENDER_FORCE_PROMPT,
+  hasPostFenceContamination,
 } from "./handler.js";
 import * as core from "@m365-copilot/core";
 import { getNewSessionsInWindow, getTurnsInWindow, resetMetrics } from "./metrics.js";
@@ -1454,6 +1455,32 @@ describe("Priority FIFO Turn Gatekeeper", () => {
     const ac = new AbortController();
     ac.abort();
     await expect(paceTurnVelocity(ac.signal)).rejects.toThrow("Aborted while waiting in turn velocity queue");
+  });
+});
+
+describe("hasPostFenceContamination (post-fence abort guard)", () => {
+  it("does not flag a clean single call", () => {
+    expect(hasPostFenceContamination("I'll inspect it.\n\n```bash\npwd && ls -la .\n```\n")).toBe(false);
+  });
+
+  it("does not flag a result-opener string INSIDE a call body", () => {
+    expect(hasPostFenceContamination("```bash\ngrep -n '<tool_output' src/*.ts\n```\n")).toBe(false);
+  });
+
+  it("flags a self-authored result opener after the fence", () => {
+    expect(hasPostFenceContamination("```bash\npwd\n```\n\n<tool_output>\n/home/x\n</tool_output>\n")).toBe(true);
+  });
+
+  it("flags non-whitespace continuation after the closing fence", () => {
+    expect(hasPostFenceContamination("```bash\npwd\n```\nGood, now I know the directory.\n")).toBe(true);
+  });
+
+  it("flags a SECOND tool-call fence (we run at most one)", () => {
+    expect(hasPostFenceContamination("```bash\nls\n```\n\n```bash\ncat x\n```\n")).toBe(true);
+  });
+
+  it("does not flag prose before the fence", () => {
+    expect(hasPostFenceContamination("Let me ground myself first.\n\n```bash\npwd\n```")).toBe(false);
   });
 });
 

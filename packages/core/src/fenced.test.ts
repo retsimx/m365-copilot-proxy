@@ -624,6 +624,47 @@ describe("formatFencedToolDefinitions", () => {
     expect(out).toContain("```bash");
   });
 
+  it("agent framing: one call per turn, fence hygiene, TURN ZERO, anti-fabrication", () => {
+    const T = (name: string, props: Record<string, unknown>, req: string[]): ToolDef => ({
+      type: "function", function: { name, description: "d", parameters: { type: "object", properties: props, required: req } },
+    });
+    const tools = [T("bash", { command: { type: "string" }, workdir: { type: "string" } }, ["command"])];
+    const out = formatFencedToolDefinitions("agent", tools);
+    // one call per turn + density inside one call
+    expect(out).toContain("Emit exactly ONE tool-call fence per turn");
+    expect(out).toContain("Never emit a second tool fence in the same turn");
+    expect(out).toContain("Make the single call substantial but coherent");
+    // fence hygiene (the anti-malformation anchors)
+    expect(out).toContain("Never omit the backticks, never write the tool name inline with a sentence");
+    // turn-zero epistemic statement + grounding
+    expect(out).toContain("TURN ZERO: You have run nothing");
+    expect(out).toContain("pwd && whoami && uname -srm && ls -la .");
+    // anti-fabrication
+    expect(out).toContain("YOU KNOW NOTHING ABOUT THE USER'S MACHINE UNTIL THE HARNESS SHOWS IT TO YOU");
+    expect(out).toContain("a path named in the task");
+    expect(out).toContain("CALL A TOOL AND READ THE REAL OBSERVATION");
+    // no leftover multi-call / batching language
+    expect(out).not.toContain("batch independent calls");
+    expect(out).not.toContain("genuinely independent calls");
+    expect(out).not.toContain("closing fence of the last call");
+    expect(out).not.toContain("only whitespace between their fences");
+  });
+
+  it("advisor framing is unchanged by the agent-path changes", () => {
+    const T = (name: string, props: Record<string, unknown>, req: string[]): ToolDef => ({
+      type: "function", function: { name, description: "d", parameters: { type: "object", properties: props, required: req } },
+    });
+    const tools = [T("bash", { command: { type: "string" } }, ["command"])];
+    const adv = formatFencedToolDefinitions("advisor", tools);
+    expect(adv).toContain("You are a chat assistant helping with shell tasks");
+    // none of the agent-only additions leaked in
+    expect(adv).not.toContain("You are an execution agent working toward");
+    expect(adv).not.toContain("Emit exactly ONE tool-call fence per turn");
+    expect(adv).not.toContain("YOU KNOW NOTHING ABOUT THE USER'S MACHINE");
+    expect(adv).not.toContain("TURN ZERO");
+    expect(adv).not.toContain("MESSAGE BOUNDARY");
+  });
+
   it("indented file-tool documentation in the <tools> block is not parsed as a call", () => {
     const T = (name: string, props: Record<string, unknown>, req: string[]): ToolDef => ({
       type: "function", function: { name, description: "d", parameters: { type: "object", properties: props, required: req } },
