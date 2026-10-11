@@ -3034,6 +3034,11 @@ boundary only bounded to roughly **(124, 140]/hr**.
 local policy, reversible). 135 sits ~5 below the one observed trip — an accepted risk with a one-line
 rollback (set 135→130, or delete `limits.conf`).
 
+**Update (2026-10-11, same day).** 135 **DID trip** the upstream `PerUserThrottled` under real
+tool-enabled production load (multiple concurrent long sessions). **Wound back to 130.** This narrows
+the safe ceiling to **≤ 130/hr** and brackets the trip between 130 and ~140. F35's shared-account-bucket
+reading holds.
+
 **Unresolved.** Whether tool-enabled turns cost the same upstream as tool-less; whether 135 stays safe
 with production bursts layered on sustained volume; whether any per-model allowance exists.
 
