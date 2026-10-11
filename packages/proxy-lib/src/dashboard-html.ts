@@ -187,7 +187,7 @@ export function getDashboardHtml(): string {
     $("sessionValue").textContent=sq.sessionTokens;$("sessionUnit").textContent="/ "+sq.tokenCapacity+" tokens";
     const sessionRatio=sq.sessionTokens/Math.max(1,sq.tokenCapacity),sessionCritical=sessionRatio<=.2,sessionLow=sessionRatio<=.5;
     $("sessionFill").style.width=Math.min(100,sessionRatio*100)+"%";
-    $("sessionFill").style.background=sessionCritical?"var(--red)":sessionLow?"var(--amber)":"var(--green)";
+    $("sessionFill").style.background=sessionCritical?"var(--rose)":sessionLow?"var(--amber)":"var(--green)";
     $("sessionWindows").textContent=g.tenMinute.freshSessions+" / "+g.sixtyMinute.freshSessions+" (10m/60m)";
     $("sessionRefill").textContent=fmtMs(sq.nextRefillMs);$("sessionEligible").textContent=fmtMs(sq.nextEligibleMs);$("sessionDelay").textContent=fmtMs(sq.delayMs);
     const sessState=sessionCritical?"critical":sessionLow||sq.delayMs>0?"pacing":"ready",sessClass=sessionCritical?"bad":sessionLow||sq.delayMs>0?"warn":"ok";

@@ -70,7 +70,7 @@ describe("Web Dashboard & Telemetry API", () => {
       expect(html).not.toContain('id="sessionFill" class="fill" style="background:var(--amber)"');
       expect(html).toContain("sessionRatio<=.2");
       expect(html).toContain("sessionRatio<=.5");
-      expect(html).toContain('sessionCritical?"var(--red)":sessionLow?"var(--amber)":"var(--green)"');
+      expect(html).toContain('sessionCritical?"var(--rose)":sessionLow?"var(--amber)":"var(--green)"');
       expect(html).toContain('sessionCritical?"bad":sessionLow||sq.delayMs>0?"warn":"ok"');
     });
 
