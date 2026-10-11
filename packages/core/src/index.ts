@@ -95,6 +95,7 @@ export {
   isAdvisorTone,
   nonShellTools,
   restoreM365Fences,
+  agentTurnProhibition,
   FRAMING_VARIANT_NAMES,
   buildSpecMap,
   createProseStreamGate,

@@ -251,6 +251,11 @@ That should be everything you need to get going quickly.`;
     expect(isProseDocument(parse("```bash\nls\n```\n```bash\ncat calc.py\n```"))).toBe(false);
   });
 
+  it("does NOT flag 4+ batched shell calls as a document (multi-call batching regression)", () => {
+    const batched = "Now I need to see the implementations.\n\n```bash\nsed -n '450,480p' sys/vm/vm_phys.c\n```\n\n```bash\nsed -n '840,960p' sys/vm/vm_phys.c\n```\n\n```bash\ngrep -n 'foo' sys/vm/vm_phys.c\n```\n\n```bash\ngrep -n 'bar' sys/vm/vm_page.h\n```";
+    expect(isProseDocument(parse(batched))).toBe(false);
+  });
+
   it("does NOT flag Claude's 'preamble + a couple command fences' action style (F23)", () => {
     const claude = "I'll start by exploring the project structure and understanding the bug before fixing it.\n\n```bash\nls -la\n```\n\n```bash\ncat check.py\n```";
     expect(isProseDocument(parse(claude))).toBe(false);

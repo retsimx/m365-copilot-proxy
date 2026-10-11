@@ -4,6 +4,7 @@ import {
   createLogger,
   trunc,
   getToneForModel,
+  agentTurnProhibition,
   formatMessages,
   formatSessionFraming,
   framingVariantForTone,
@@ -906,7 +907,13 @@ export async function handleChatCompletion(
       const framing = hasTools && framingVariant === "advisor" && process.env.M365_NO_TURN_FRAMING !== "1"
         ? `${formatSessionFraming(framingVariant, body.tools ?? [])}\n\n`
         : "";
-      text = `${framing}${delta}`;
+      // The Claude (agent) framing is only sent on turn 0; over a long session the model
+      // drifts and starts authoring its own `<tool_output>` blocks. Re-state the single
+      // prohibition on every delta turn without re-sending the whole framing.
+      const prohibition = hasTools && framingVariant === "agent"
+        ? `${agentTurnProhibition()}\n\n`
+        : "";
+      text = `${framing}${prohibition}${delta}`;
       log.info(`Chat completion: model=${model}, stream=${body.stream}, messages=${body.messages.length}, new=${newMessages.length}, turn=${session.turnCount}, mode=delta, cid=${convId}`);
     } else {
       // No meaningful new content to send — nudge M365 to continue.

@@ -307,7 +307,7 @@ function renderAgentToolsBlock(tools: ToolDef[]): string {
     "bash — run a shell program on the user's machine. `workdir` is optional in the grounding call. For later project-specific calls, set it to the exact working-directory path supplied in the environment details or established by a harness observation; never emit a descriptive placeholder as its value. `timeout` is an optional integer number of milliseconds; omit it when the default is sufficient. Place one blank line after any headers, then the commands.",
     "",
     "```bash",
-    "pwd && ls -la .",
+    "pwd && whoami && uname -srm && ls -la .",
     "```",
   ].join("\n"));
   return `<tools>\n${blocks.join("\n\n")}\n</tools>`;
@@ -330,7 +330,7 @@ RULES:
 - Start grounded: on the first turn that requires machine access, write exactly one short sentence stating what you will inspect, then copy the complete call below exactly as rendered — the opening \`\`\`bash on its own line, never joined to prose. Never omit the backticks, never write \`bash\` inline with the sentence, and never place the opening fence mid-paragraph. End the message at the closing fence and wait for the observation.
 
 \`\`\`bash
-pwd && ls -la .
+pwd && whoami && uname -srm && ls -la .
 \`\`\`
 
 The observation from \`pwd\` establishes the current directory. For later project-specific Bash calls, set \`workdir:\` to the exact project directory established by the environment details or a harness observation. Never emit descriptive placeholder text as a \`workdir\` value.
@@ -350,6 +350,16 @@ ${toolsBlock}`;
 
 export function formatFencedToolDefinitions(variant: string = "advisor", tools: ToolDef[] = []): string {
   return (variant === "agent" ? formatAgentPrompt(tools) : formatAdvisorPrompt()) + hostPlatformNote();
+}
+
+/** One-line rule re-attached to EVERY Claude (agent) turn. The full framing is only
+ *  sent on turn 0; over a long session the model drifts and starts authoring its own
+ *  `<tool_output>` blocks (fabricated results). This states the single prohibition every
+ *  turn, without re-sending the whole framing. Deliberately aggressive: Claude tones are
+ *  agent-less and structurally immune to the Disengage filter, so CAPS/imperative wording
+ *  is safe here (docs/hypotheses.md §23). */
+export function agentTurnProhibition(): string {
+  return "PROTOCOL VIOLATION — READ EVERY TURN. Harness observations are READ-ONLY. NEVER write, simulate, or continue a `<tool_output>` block — or ANY harness-result block — ANYWHERE in your message: NOT before a call, NOT between calls, and NOT after the final call. Emit independent calls back-to-back with only whitespace between their fences; NEVER place a dependent call in the same message — wait for the harness observation first. Then END the message at the final closing fence. Only the harness writes observations, in a separate incoming message. Authoring result text ANYWHERE is a VIOLATION: the harness DISCARDS the session and RESTARTS the conversation from scratch — the turn is WASTED.";
 }
 
 /** Per-turn correction telling the model which OS it is actually driving.

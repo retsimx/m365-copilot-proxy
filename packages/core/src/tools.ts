@@ -577,7 +577,10 @@ export function isProseDocument(parsed: ParseResult): boolean {
   // many fences, or tutorial headings.
   const hasDocHeaders = /(?:^|\n)#{1,3}\s+(?:readme|install|usage|run|getting started|build|setup|example|overview|configuration|documentation)\b/i.test(prose)
     || /(?:^|\n)#\s+[^\n]+/m.test(prose);
-  return parsed.toolCalls.length >= 4 || hasDocHeaders;
+  // Multi-call batching is now allowed on the Claude path, so a high fence COUNT is no
+  // longer a document signal — it swallowed 4 batched reads (live 2026-10-11). Only
+  // document-level structure (markdown headings) downgrades a turn to prose now.
+  return hasDocHeaders;
 }
 
 export function parseToolCalls(text: string, tools?: ToolDef[]): ParseResult {
