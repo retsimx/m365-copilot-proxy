@@ -608,7 +608,7 @@ describe("formatFencedToolDefinitions", () => {
       T("bash", { command: { type: "string" }, timeout: { type: "number" }, workdir: { type: "string" } }, ["command"]),
     ];
     const out = formatFencedToolDefinitions("agent", tools);
-    expect(out).toContain("You write assistant messages; the external harness writes observations");
+    expect(out).toContain("You are an execution agent working toward the user's whole objective");
     expect(out).toContain("MESSAGE BOUNDARY");
     expect(out).toContain("A `<tool_output>` block is written only by the harness");
     expect(out).toContain("Choose the tool that performs the step most safely and clearly");

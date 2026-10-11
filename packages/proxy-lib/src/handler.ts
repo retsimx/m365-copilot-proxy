@@ -288,6 +288,17 @@ function annotateToolOutput(content: string): { attrs: string; text: string } {
   return { attrs: "", text: content };
 }
 
+/** Post-fence contamination guard. With one call per turn, a valid assistant message is:
+ *  optional prose + ONE complete tool-call fence + whitespace. Anything non-whitespace
+ *  after the fence, or a self-authored result opener, means the model is simulating the
+ *  harness (the token-prediction "call → result" prior) — the turn is aborted. */
+function hasPostFenceContamination(text: string): boolean {
+  if (/<(?:tool_output|tool_response)\b/i.test(text)) return true;
+  const m = /```[A-Za-z0-9_.-]+\r?\n[\s\S]*?\r?\n```/.exec(text);
+  if (!m) return false;
+  return text.slice(m.index + m[0].length).trim().length > 0;
+}
+
 function formatDeltaMessages(messages: ParsedMessage[]): string {
   const parts: string[] = [];
 
@@ -982,6 +993,12 @@ export async function handleChatCompletion(
     let agentRefreshed = false;
     let disengageRetried = false;
     const originalText = text;
+    // Post-fence contamination guard: with one call per turn a valid assistant message is
+    // optional prose + ONE complete tool-call fence + whitespace. If the model continues
+    // past the fence (or authors a result opener) it is simulating the harness — abort the
+    // turn immediately (Stop frame) and keep the valid call prefix.
+    const guardAbort = new AbortController();
+    const turnSignal = opts.signal ? AbortSignal.any([opts.signal, guardAbort.signal]) : guardAbort.signal;
 
     // Circuit breaker / Local Shielding: when the account is in degradation cooldown
     // (thread-rate throttle), do NOT send requests to Microsoft (which would keep the
@@ -1036,7 +1053,7 @@ export async function handleChatCompletion(
         // ModelSession.run / docs H8.6.
         requestWireTurns++;
         conv.upstreamAttempts++;
-        copilotStream = await session.run(text, model, opts.signal, useToolAgent, {
+        copilotStream = await session.run(text, model, turnSignal, useToolAgent, {
           onReasoning,
           beforeReconnectAttempt: async () => {
             await paceTurnVelocity(opts.signal, { priority: true });
@@ -1056,6 +1073,11 @@ export async function handleChatCompletion(
         for await (const delta of copilotStream) {
           fullText += delta;
           onDelta?.(delta);
+          if (hasPostFenceContamination(fullText)) {
+            log.warn(`Post-fence contamination — aborting generation (Stop frame), keeping the valid call prefix: ${JSON.stringify(fullText.slice(-200))}`);
+            guardAbort.abort();
+            break;
+          }
         }
         if (copilotStream.fullText && copilotStream.fullText.length > fullText.length) {
           fullText = copilotStream.fullText;
