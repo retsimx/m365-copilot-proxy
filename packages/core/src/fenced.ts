@@ -352,14 +352,13 @@ export function formatFencedToolDefinitions(variant: string = "advisor", tools: 
   return (variant === "agent" ? formatAgentPrompt(tools) : formatAdvisorPrompt()) + hostPlatformNote();
 }
 
-/** One-line rule re-attached to EVERY Claude (agent) turn. The full framing is only
- *  sent on turn 0; over a long session the model drifts and starts authoring its own
- *  `<tool_output>` blocks (fabricated results). This states the single prohibition every
- *  turn, without re-sending the whole framing. Deliberately aggressive: Claude tones are
- *  agent-less and structurally immune to the Disengage filter, so CAPS/imperative wording
- *  is safe here (docs/hypotheses.md §23). */
+/** Short, wrapper-free rule re-attached to EVERY Claude (agent) turn. The full framing is
+ *  only sent on turn 0; over a long session the model drifts. This is deliberately NOT the
+ *  long aggressive prohibition — repeating the reserved `<tool_output>` wrapper every turn
+ *  primes the very pattern we suppress (and empirically did not prevent it). The strong
+ *  version is used only as an incident correction in the handler. */
 export function agentTurnProhibition(): string {
-  return "PROTOCOL VIOLATION — READ EVERY TURN. Harness observations are READ-ONLY. NEVER write, simulate, or continue a `<tool_output>` block — or ANY harness-result block — ANYWHERE in your message: NOT before a call, NOT between calls, and NOT after the final call. Emit independent calls back-to-back with only whitespace between their fences; NEVER place a dependent call in the same message — wait for the harness observation first. Then END the message at the final closing fence. Only the harness writes observations, in a separate incoming message. Authoring result text ANYWHERE is a VIOLATION: the harness DISCARDS the session and RESTARTS the conversation from scratch — the turn is WASTED.";
+  return "Harness observations are read-only. If you emit calls, include only independent calls, put only whitespace between their fences, end at the final closing fence, and wait for the harness before using any result.";
 }
 
 /** Per-turn correction telling the model which OS it is actually driving.

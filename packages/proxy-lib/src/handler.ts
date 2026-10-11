@@ -92,6 +92,21 @@ export const ADVISOR_HALLUCINATION_FORCE_PROMPT = HALLUCINATION_FORCE_PROMPT;
 export const ADVISOR_REMOTE_ARTIFACT_FORCE_PROMPT = REMOTE_ARTIFACT_FORCE_PROMPT;
 export const ADVISOR_TRUNCATION_SURRENDER_FORCE_PROMPT = TRUNCATION_SURRENDER_FORCE_PROMPT;
 
+// The model authored its own `<tool_output>` block (a fabricated result). We no longer
+// reset the session for this (that caused an endless full-replay loop — the model
+// re-grounded and re-simulated every turn; live 2026-10-11). Instead we keep the session,
+// execute only the calls that came BEFORE the fabrication, and prepend this correction
+// immediately before their real results on the next turn. Deliberately aggressive —
+// Claude tones are agent-less and structurally immune to the Disengage filter.
+export const HALLUCINATION_CORRECTION_PROMPT =
+  "PROTOCOL CORRECTION. Your previous response fabricated tool output — you authored your own `<tool_output>` block. That is FORBIDDEN and has been DISCARDED; it is not evidence. Only the complete tool calls BEFORE the fabricated result were accepted (any later calls did not run). The REAL harness observations for the accepted calls follow — read them and continue from reality. NEVER author, predict, continue, or simulate a `<tool_output>` block or any machine result.";
+
+// Pure-transcript hallucination: the model fabricated output but emitted NO valid call, so
+// there is no real result to attach a correction to. Force a corrective retry in the same
+// live session (no reset).
+export const HALLUCINATION_NO_CALL_CORRECTION_PROMPT =
+  "PROTOCOL ERROR. Your previous response fabricated machine output but contained NO valid executable call. Nothing ran, and every claimed result was disregarded. Emit the required action NOW as one complete fenced call — or consecutive independent calls with only whitespace between them. Do NOT write a result, a transcript, a shell prompt, or expected output. End at the final closing fence and wait for the harness.";
+
 // M365 soft-caps output around ~3k tokens (~12k chars) and — critically —
 // CONCLUDES EARLY rather than truncating mid-stream, so a too-long answer comes
 // back clean-looking but incomplete with no error to detect (docs/hypotheses.md
@@ -129,6 +144,9 @@ interface ConversationState {
   agentAttached?: boolean;
   upstreamAttempts: number;
   retryAttempts: number;
+  /** Set when the model authored its own `<tool_output>` (a fabricated result). The
+   *  correction preamble is prepended to the NEXT delta so it precedes the real results. */
+  pendingHallucinationCorrection?: boolean;
 }
 
 // --- Session pool: maps conversation fingerprint → M365 session ---
@@ -908,12 +926,15 @@ export async function handleChatCompletion(
         ? `${formatSessionFraming(framingVariant, body.tools ?? [])}\n\n`
         : "";
       // The Claude (agent) framing is only sent on turn 0; over a long session the model
-      // drifts and starts authoring its own `<tool_output>` blocks. Re-state the single
-      // prohibition on every delta turn without re-sending the whole framing.
+      // drifts. Re-state a short invariant on every delta turn (not the whole framing).
       const prohibition = hasTools && framingVariant === "agent"
         ? `${agentTurnProhibition()}\n\n`
         : "";
-      text = `${framing}${prohibition}${delta}`;
+      // If the previous turn fabricated its own `<tool_output>`, prepend the correction
+      // IMMEDIATELY BEFORE the real tool results so it frames them as authoritative.
+      const correction = conv.pendingHallucinationCorrection ? `${HALLUCINATION_CORRECTION_PROMPT}\n\n` : "";
+      conv.pendingHallucinationCorrection = false;
+      text = `${framing}${prohibition}${correction}${delta}`;
       log.info(`Chat completion: model=${model}, stream=${body.stream}, messages=${body.messages.length}, new=${newMessages.length}, turn=${session.turnCount}, mode=delta, cid=${convId}`);
     } else {
       // No meaningful new content to send — nudge M365 to continue.
@@ -1303,6 +1324,25 @@ export async function handleChatCompletion(
       log.info(`After forcing retry: hasToolCalls=${parsed.hasToolCalls}, count=${parsed.toolCalls.length}`);
     }
 
+    // Pure-transcript hallucination: the model fabricated machine output (a `<tool_output>`
+    // block or a shell transcript) but produced NO valid call, so nothing ran and there is
+    // no real result to attach a correction to. Force a corrective retry in the SAME live
+    // session — do not reset (that looped; live 2026-10-11).
+    for (let attempt = 0; attempt < maxConfabRetries && !parsed.hasToolCalls && /<(?:tool_response|tool_output)\b/i.test(fullText); attempt++) {
+      log.info(`Hallucinated tool output with no valid call — forcing corrective retry ${attempt + 1}/${maxConfabRetries}`);
+      const toolsBlock = hasTools ? `${formatSessionFraming(framingVariant, body.tools ?? [])}\n\n` : "";
+      text = `${toolsBlock}${HALLUCINATION_NO_CALL_CORRECTION_PROMPT}`;
+      const retry = await runBuffered(onDelta, onReasoning);
+      if ("error" in retry) return { kind: "error", resp: retry.error };
+      conv.sentMessageCount = body.messages.length;
+      fullText = restoreM365Fences(retry.fullText, specs ?? new Map());
+      parsed = parseToolCalls(fullText, body.tools);
+      if (isProseDocument(parsed)) {
+        parsed = { hasToolCalls: false, toolCalls: [], textContent: fullText };
+      }
+      log.info(`After corrective retry: hasToolCalls=${parsed.hasToolCalls}, count=${parsed.toolCalls.length}`);
+    }
+
     // Never pass a remote M365 artifact off as a successful local edit. A retry
     // may merely transform a Teams URL into `sandbox:/mnt/data/...`; once the
     // configured attempts are exhausted, fail explicitly so the harness/user can
@@ -1388,17 +1428,15 @@ export async function handleChatCompletion(
     }
 
     // If the model produced a hallucinated simulation with a fake result tag
-    // (`<tool_response>` legacy, or `<tool_output>` — the tag our framing teaches) or
-    // confabulation in this turn, M365's cloud session context is now polluted with fake
-    // output. Reset the session so the next turn sends the full clean history from the
-    // caller instead of continuing from a dirty delta state.
-    if (
-      /<(?:tool_response|tool_output)\b/i.test(fullText) ||
-      (!disableConfabDetection && hasTools && !parsed.hasToolCalls && (looksLikeConfabulation(fullText) || (await classifyTurnResponse(fullText)) === "REFUSAL"))
-    ) {
-      log.info("Contaminated simulation or confabulation detected — resetting session state to force clean full history on next turn");
-      conv.session.reset();
-      conv.sentMessageCount = 0;
+    // (`<tool_response>` legacy, or `<tool_output>` — the tag our framing teaches), do NOT
+    // reset the session: that caused an endless full-replay loop (the model re-grounded
+    // and re-simulated every turn; live 2026-10-11). The parser already discarded the
+    // fabricated suffix; if valid calls came before it, flag a correction to be prepended
+    // to their real results next turn. A no-call transcript is handled by the corrective
+    // retry loop above.
+    if (/<(?:tool_response|tool_output)\b/i.test(fullText) && parsed.hasToolCalls) {
+      log.info("Hallucinated tool output (self-authored result block) discarded — will attach a correction before the real results");
+      conv.pendingHallucinationCorrection = true;
     }
 
     if (parsed.hasToolCalls && parsed.toolCalls.length > 0) {
