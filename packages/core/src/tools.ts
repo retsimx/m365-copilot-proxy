@@ -589,7 +589,7 @@ export function parseToolCalls(text: string, tools?: ToolDef[]): ParseResult {
   // framing now teaches) and subsequent output, isolate the text before the first
   // such tag so we salvage the real tool call(s) and discard the hallucinated
   // multi-turn script (fabricated results the harness never returned).
-  const toolResponseMatch = text.match(/<(?:tool_response|tool_output)\b/i);
+  const toolResponseMatch = text.match(/<(?:tool_response|tool_output|assistant)\b/i);
   let parseInput = text;
   if (toolResponseMatch && toolResponseMatch.index !== undefined && toolResponseMatch.index > 0) {
     const prefix = text.slice(0, toolResponseMatch.index);

@@ -1481,6 +1481,10 @@ describe("hasPostFenceContamination (post-fence abort guard)", () => {
     expect(hasPostFenceContamination("```bash\npwd\n```\n\n<tool_output>\n/home/x\n</tool_output>\n")).toBe(true);
   });
 
+  it("flags a self-authored <assistant> role tag (simulated transcript)", () => {
+    expect(hasPostFenceContamination("```bash\npwd\n```\n\n<assistant>\nnext turn\n")).toBe(true);
+  });
+
   it("flags non-whitespace continuation after the closing fence", () => {
     expect(hasPostFenceContamination("```bash\npwd\n```\nGood, now I know the directory.\n")).toBe(true);
   });

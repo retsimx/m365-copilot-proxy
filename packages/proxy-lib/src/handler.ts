@@ -318,7 +318,7 @@ export function hasPostFenceContamination(text: string): boolean {
       inFence = true;
       continue;
     }
-    if (/<(?:tool_output|tool_response)\b/i.test(line)) return true;
+    if (/<(?:tool_output|tool_response|assistant)\b/i.test(line)) return true;
     if (fencesClosed >= 1 && line.trim().length > 0) return true; // non-whitespace after the fence
   }
   return false;
@@ -1393,7 +1393,7 @@ export async function handleChatCompletion(
     // transcript) but produced NO valid call, so nothing ran and there is no real result to
     // attach a correction to. Force a corrective retry in the SAME live session — do not
     // reset (that looped; live 2026-10-11).
-    for (let attempt = 0; framingVariant === "agent" && attempt < maxConfabRetries && !parsed.hasToolCalls && /<(?:tool_response|tool_output)\b/i.test(fullText); attempt++) {
+    for (let attempt = 0; framingVariant === "agent" && attempt < maxConfabRetries && !parsed.hasToolCalls && /<(?:tool_response|tool_output|assistant)\b/i.test(fullText); attempt++) {
       log.info(`Hallucinated tool output with no valid call — forcing corrective retry ${attempt + 1}/${maxConfabRetries}`);
       const toolsBlock = hasTools ? `${formatSessionFraming(framingVariant, body.tools ?? [])}\n\n` : "";
       text = `${toolsBlock}${HALLUCINATION_NO_CALL_CORRECTION_PROMPT}`;
@@ -1503,7 +1503,7 @@ export async function handleChatCompletion(
     // and re-simulated every turn; live 2026-10-11). The parser already discarded the
     // fabricated suffix; if valid calls came before it, flag a correction to be prepended
     // to their real results next turn. Agent/Claude path ONLY — GPT is unchanged.
-    if (framingVariant === "agent" && /<(?:tool_response|tool_output)\b/i.test(fullText) && parsed.hasToolCalls) {
+    if (framingVariant === "agent" && /<(?:tool_response|tool_output|assistant)\b/i.test(fullText) && parsed.hasToolCalls) {
       log.info("Hallucinated tool output (self-authored result block) discarded — will attach a correction before the real results");
       conv.pendingHallucinationCorrection = true;
     }
