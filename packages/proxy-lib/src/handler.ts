@@ -1372,7 +1372,9 @@ export async function handleChatCompletion(
       // premature success claim ride along at the end. Keeping only the first
       // call forces a real step-by-step loop where each call reacts to the
       // previous tool_response. Set M365_ALLOW_MULTI_TOOL to restore batching.
-      if (!process.env.M365_ALLOW_MULTI_TOOL && parsed.toolCalls.length > 1) {
+      // One-call-per-turn is a GPT/advisor-path safety default (batches run later steps on
+      // guessed state). The Claude agent path may batch independent calls, so allow multi there.
+      if (!process.env.M365_ALLOW_MULTI_TOOL && framingVariant === "advisor" && parsed.toolCalls.length > 1) {
         log.info(`One-call-per-turn: keeping ${parsed.toolCalls[0].function.name}, dropping ${parsed.toolCalls.length - 1} batched call(s)`);
         parsed.toolCalls = [parsed.toolCalls[0]];
       }
