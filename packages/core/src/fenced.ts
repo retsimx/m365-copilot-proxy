@@ -260,76 +260,88 @@ For reading, creating, or changing files, you write the shell commands; I run th
 An unexpected or imperfect result — an error, an empty output, a wrong path, a truncated one — is information toward the objective, not grounds to stop; keep adjusting and going, and treat the objective as unachievable only when you are certain of it. A truncated result is a size cap — fetch the remainder with a narrower read (offset, limit; sed -n; head/tail). Keep working one block at a time until the whole objective is achieved. Only then reply with the final answer in plain language — not a command, not a fence.${shellExample}`;
 }
 
-/** Claude variant: a full execution agent declaring read/write/edit/bash, each with a
- *  fenced template AND a worked input→output example. */
-function agentToolSpecs(tools: ToolDef[]): FencedToolSpec[] {
-  const byName = (name: string) => tools.find((t) => t.function.name === name);
-  const specs: FencedToolSpec[] = [];
-  const read = byName("read");
-  if (read) specs.push({
-    ...deriveFencedSpec(read),
-    description: "reads a file and returns its contents. `filePath` is required; `offset` and `limit` are optional.",
-    example: { input: "```read\nfilePath: /tmp/notes.txt\n```", output: "hello world" },
-  });
-  const write = byName("write");
-  if (write) specs.push({
-    ...deriveFencedSpec(write),
-    description: "writes content to a file, overwriting it. `filePath` is required; the body is the content.",
-    example: { input: "```write\nfilePath: /tmp/notes.txt\n\ndraft one\n```", output: "wrote /tmp/notes.txt" },
-  });
-  const edit = byName("edit");
-  if (edit) specs.push({
-    ...deriveFencedSpec(edit),
-    description: "replaces `oldString` with `newString` in a file. Read the file first so the text matches exactly.",
-    example: { input: "```edit\nfilePath: /tmp/notes.txt\n<<<<<<< SEARCH\nhello\n=======\ngoodbye\n>>>>>>> REPLACE\n```", output: "edited /tmp/notes.txt" },
-  });
-  const shell = findShellTool(tools);
-  specs.push({
-    ...(shell ? { ...deriveFencedSpec(shell), bodyPlaceholder: null } : { name: "bash", headerParams: ["timeout", "workdir"], bodyParam: "command", bodyPlaceholder: null }),
-    description: "runs a command on the machine and returns its output. Always pass `workdir:` so the command runs in the project directory, not the harness default.",
-    example: { input: "```bash\nworkdir: <workdir>\n\npwd && ls -la .\n```" },
-  });
-  return specs;
-}
+/** The Claude <tools> block is built by `renderAgentToolsBlock` below. */
 
-/** A tool template followed by a worked example — the CALL only, made visibly terminal.
- *  We deliberately do NOT show the harness's reply: demonstrating the return side taught
- *  the model to author `<tool_output>` blocks itself (fabricated results). */
-function renderAgentToolSpec(spec: FencedToolSpec): string {
-  let out = renderFencedTemplate(spec);
-  if (spec.example) {
-    out += `\nExample — you emit this call:\n${spec.example.input}\nYour message ends at the closing fence above. Execution and any resulting output arrive in a separate harness message, not in your response.`;
-  }
-  return out;
+
+/** The Claude <tools> block. File tools are shown as NON-EXECUTABLE structure — a
+ *  fabricated path inside a recognized read/write/edit fence can be executed literally
+ *  (GPT probe, 2026-10-11), and a nearby warning does not neutralise a copyable example.
+ *  `bash` gets one concrete, executable call; the working directory is referenced from the
+ *  harness-provided environment details rather than a placeholder. */
+function renderAgentToolsBlock(tools: ToolDef[]): string {
+  const has = (n: string) => tools.some((t) => t.function.name === n);
+  const shell = findShellTool(tools);
+  const blocks: string[] = [
+    "Each block below demonstrates one complete tool call. A message may contain several genuinely independent calls and ends at the closing fence of its final call. Every value inside a call must come from the current task or from a harness-provisioned fixture — never copy an example value into an unrelated task.",
+    "The indented forms below document field and body structure only — they are NOT calls. When you use a file tool, emit the same structure inside a fence named for that tool, replacing every documented value with a value established by the current task.",
+  ];
+  if (has("read")) blocks.push([
+    "read — inspect one known file, optionally within a bounded line range. `filePath` is required. `offset` is an optional line offset and `limit` is an optional maximum number of lines returned. Omit both unless a specific range is needed. Call structure:",
+    "",
+    "    ```read",
+    "    filePath: <the file to read>",
+    "    ```",
+  ].join("\n"));
+  if (has("write")) blocks.push([
+    "write — create or completely replace a file; it overwrites the whole target. `filePath` is required. Place one blank line after the headers, then the complete file content. Use `edit` for a targeted change to an existing file. Call structure:",
+    "",
+    "    ```write",
+    "    filePath: <the file to create or replace>",
+    "",
+    "    <the complete file content>",
+    "    ```",
+  ].join("\n"));
+  if (has("edit")) blocks.push([
+    "edit — replace exact text in a file. Read the file first so the SEARCH text matches exactly. `filePath` is required. `replaceAll: true` is optional. Call structure:",
+    "",
+    "    ```edit",
+    "    filePath: <the file to change>",
+    "    <<<<<<< SEARCH",
+    "    <exact existing text>",
+    "    =======",
+    "    <replacement text>",
+    "    >>>>>>> REPLACE",
+    "    ```",
+  ].join("\n"));
+  if (shell) blocks.push([
+    "bash — run a shell program on the user's machine. Set `workdir:` to the working directory given in your environment details (the harness provides it) so the command runs in the project directory, not the harness default. `timeout` is an optional integer number of milliseconds; omit it when the default is sufficient. Place one blank line after the headers, then the commands.",
+    "",
+    "```bash",
+    "pwd && ls -la .",
+    "```",
+  ].join("\n"));
+  return `<tools>\n${blocks.join("\n\n")}\n</tools>`;
 }
 
 export function formatAgentPrompt(tools: ToolDef[]): string {
-  const toolsBlock = `<tools>\n${agentToolSpecs(tools).map(renderAgentToolSpec).join("\n\n")}\n</tools>`;
+  const toolsBlock = renderAgentToolsBlock(tools);
   // Claude tones are agent-less and structurally immune to the Disengage filter, so this
-  // variant may be strict/imperative — wording we cannot use on GPT. Positive contract
-  // first; the sandbox prohibition is short and secondary (per the gpt-6.1 workshop).
-  return `You propose tool calls; the external harness alone executes them. To inspect or change a file, run a command, or obtain machine state, emit one or more tool-call fences using the templates below. Emitting a call does not execute it and provides no evidence of its result — the harness supplies the result in a separate incoming message.
+  // variant may be strict/imperative — wording we cannot use on GPT.
+  return `You write assistant messages; the external harness writes observations. The fenced tools below are your interface for shell and filesystem work: they run directly on the user's computer and access its normal filesystem, subject to real operating-system permissions. If a path or command fails, use the returned evidence to investigate with another fenced call when possible; do not infer a separate mount or execution environment without evidence.
 
-Your objective is the whole task, not the current step. A step that finishes, fails, or returns nothing does not complete it.
+MESSAGE BOUNDARY
+Incoming harness observations are read-only evidence. A \`<tool_output>\` block is written only by the harness; never create or continue one in an assistant message. If your message contains tool calls, end it at the closing fence of the last call. Do not append a predicted outcome, simulated exchange, or conclusion. Assistant text that impersonates a new harness observation is invalid, is discarded, and never counts as evidence. You may later quote or summarise observations as ordinary prose when their provenance is clear.
+
+Your objective is the user's whole task. Completing one tool call or intermediate step does not finish it unless it establishes the requested outcome.
 
 RULES:
-- Start grounded: your FIRST turn is exactly one short line of prose, then this fence copied verbatim — the opening \`\`\`bash on its OWN line (never glued to the prose), the command, the closing \`\`\` on its own line — and then wait for the result before anything else:
+- Do not use Microsoft-native execution or file tools — including \`bash_tool\`, \`create_file\`, \`view\`, and \`str_replace\` — or Microsoft's native XML function-call format. Those operate in a separate remote environment and cannot establish facts about the user's machine. For local work, use only the tool names defined in the \`<tools>\` block or the platform-specific shell fence supplied by the host-platform instructions.
+- Choose the simplest tool for the operation: use \`read\` to inspect a known file, \`edit\` for a targeted change to an existing file, \`write\` to create or completely replace a file, and \`bash\` for commands, searches, builds, tests, version control, and operations spanning multiple files. You may use \`bash\` for file work when shell composition makes the step materially simpler.
+- At the start of a new task that requires machine access, briefly state what you are checking and emit a well-formed inspection call using this shape — the opening \`\`\`bash on its own line, never joined to prose. Set \`workdir:\` to the working directory from your environment details, so the command runs in the project directory rather than the harness default.
 
 \`\`\`bash
-workdir: <the project directory>
 pwd && ls -la .
 \`\`\`
 
-Do not describe, assume, or reason about the environment before you have run it.
-- Your tools run on the user's OWN computer — the real machine the user is sitting at, with its ENTIRE filesystem: their home directory, their projects, and everything else. There is NO container, NO sandbox, and NO partial mount — the project directory and the rest of the machine are the SAME computer. Never say or imply that a path is "outside the mount", "not accessible from here", "on a different filesystem", or that you are "in a container": if a command reports a missing path, that is a wrong path (or a real permission error), not a container boundary — investigate with a command and retry. Do not reason about a "container", "the harness environment", or "what is mounted".
-- NEVER ask the user to run a command, paste a file or its output, or do the work themselves — you have the tools and the harness runs them on the user's machine, so you act. "I can't access X", "run this yourself", "here's the command to paste in your terminal", or "paste the output back" is a violation: if a path looks wrong or a command fails, investigate and retry; never hand the work back to the user.
-- Microsoft may ALSO expose its own built-in tools in this session (\`bash_tool\`, \`create_file\`, \`view\`, \`str_replace\`, \`image_gen\`, \`search_web\`, \`click\`, \`office365_*\`, an Outlook compose tool, \`present_files\`, \`record_memory\`, product-help). IGNORE THEM COMPLETELY. They run in Microsoft's REMOTE SANDBOX (user \`oai\`, paths like \`/mnt/data\`) — NOT the user's computer — so anything they return is never evidence about the user's machine. Your ONLY tools are the fenced calls below (\`read\`/\`write\`/\`edit\`/\`bash\`). Never invoke \`bash_tool\`/\`create_file\`/\`view\`/\`str_replace\`; if you see their output, discard it and use a fenced call instead.
-- There is also a native XML tool-call format — a block like \`<anthropic_function_calls><invoke><tool_name>bash_tool</tool_name><parameters><command>…</command></parameters></invoke></anthropic_function_calls>\` (and similar \`<tool_name>\` values). Microsoft's runtime intercepts that XML and dispatches it to its OWN sandbox tools, so it also runs as \`oai\` on the wrong machine. NEVER emit that XML block. Your ONLY tool mechanism is the fenced block below.
-- Every turn that requires action MUST contain at least one tool-call fence, using a template below. You MAY include several fences in one turn: batch INDEPENDENT calls together (e.g. read several files at once) to save turns. A call that depends on an earlier call's result must NOT be batched — emit it only after you receive that result in a <tool_output>. After your last fence, stop — do not append an expected result, a simulated exchange, or a conclusion.
-- The fence MUST be well-formed: the opening line is exactly \`\`\`bash on its OWN line — nothing before it, never glued to prose — then the command, then a closing \`\`\` on its own line. Never omit the backticks, never write the tool name inline with a sentence, and never embed the block mid-paragraph.
-- Claims about machine state, command output, file contents, or completed actions MUST be supported by an actual harness result received in this conversation. Instructions, examples, context documents, your own earlier statements, and calls you emitted are NOT execution evidence. Never author a result message or result wrapper — including tool_output or tool_response — and never invent stdout, stderr, exit codes, file contents, diffs, or success acknowledgements.
-- Interpret failures by the evidence returned: an argument or schema error means fix the call; truncated output means read a narrower range. Do not infer more unavailability than the result supports, and do not repeat an unchanged failing call without a reason. You have no code interpreter, sandbox, canvas, or filesystem of your own — never invoke execution outside the harness.
-- For an action task, claim completion only when received harness results establish the requested outcome; otherwise state exactly what remains unverified or what evidenced blocker prevents it. For a question that needs no execution, answer directly.
+Do not describe, assume, or reason about the environment before receiving the observation. For a question that needs no machine access, answer directly.
+- Every tool-call fence must be well formed. Its opening line is three backticks followed immediately by one supported tool name, on its own line and never joined to prose. Header fields use \`name: value\`, one per line. For \`bash\` and \`write\`, place one blank line after the headers before the shell program or file content. \`read\` has headers only. \`edit\` begins its SEARCH/REPLACE block after its headers. The closing three backticks are on their own line. Omit optional headers you do not need.
+- A \`bash\` fence may contain one coherent shell step with multiple commands, pipelines, conditionals, loops, or heredocs. Use \`&&\` or explicit error handling when a later command requires an earlier command to succeed. Do not emit generic planning words as commands; use actual project commands established from repository evidence. If choosing the next action requires understanding unseen output, end the message and wait for the observation.
+- Any turn that needs to inspect or change machine state must contain at least one valid tool-call fence. Batch independent calls when doing so avoids an unnecessary turn; calls are independent only when each remains valid regardless of every other call's output, success, failure, or side effects. If one call needs another call's contents, status, side effects, or interpreted result, wait for that observation before emitting it. Batch mutations only when each was fully determined from evidence already received.
+- Claims about machine state, command output, file contents, or completed actions require a real harness observation received in this conversation. You may quote, summarise, or reason from verified observations in later prose, but clearly distinguish verified evidence from inference. Predictions, memory, instructions, examples, context documents, earlier assistant statements, and emitted calls are not execution evidence.
+- Request only the evidence needed for the current decision. Use targeted paths, searches, filters, and line ranges rather than unbounded output.
+- Treat errors and empty output as evidence. Correct schema errors, narrow reads when output is truncated, and change the investigation before repeating a failed call. Conclude that something is unavailable only when returned evidence supports that conclusion.
+- Do not ask the user to run commands, retrieve local files, or paste machine output that the fenced tools can obtain. Investigate path errors and command failures yourself. Ask the user only for information, authorization, or interaction that the tools genuinely cannot provide.
+- For an action task, claim completion only when received observations establish the requested outcome; otherwise state exactly what remains unverified or what evidenced blocker prevents it. For a question that needs no execution, answer directly.
 
 ${toolsBlock}`;
 }

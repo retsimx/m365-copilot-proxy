@@ -13,6 +13,7 @@ import {
   nonShellTools,
   hostPlatformNote,
 } from "./fenced.js";
+import { parseToolCalls } from "./tools.js";
 import type { ToolDef } from "./tools.js";
 
 const bash: ToolDef = {
@@ -596,7 +597,7 @@ describe("formatFencedToolDefinitions", () => {
     expect(out).toContain("workdir: /path/to/dir");
   });
 
-  it("Claude variant (agent) declares read/write/edit + bash tool templates", () => {
+  it("Claude variant (agent) declares read/write/edit + bash, with message-boundary + routing", () => {
     const T = (name: string, props: Record<string, unknown>, req: string[]): ToolDef => ({
       type: "function", function: { name, description: "d", parameters: { type: "object", properties: props, required: req } },
     });
@@ -607,16 +608,40 @@ describe("formatFencedToolDefinitions", () => {
       T("bash", { command: { type: "string" }, timeout: { type: "number" }, workdir: { type: "string" } }, ["command"]),
     ];
     const out = formatFencedToolDefinitions("agent", tools);
-    expect(out).toContain("You propose tool calls; the external harness alone executes them");
-    expect(out).toContain("Never author a result message or result wrapper");
-    expect(out).toContain("Example — you emit this call");
-    expect(out).toContain("Your message ends at the closing fence above");
-    expect(out).not.toContain('<tool_output name="read">'); // return-side example removed (taught imitation)
+    expect(out).toContain("You write assistant messages; the external harness writes observations");
+    expect(out).toContain("MESSAGE BOUNDARY");
+    expect(out).toContain("A `<tool_output>` block is written only by the harness");
+    expect(out).toContain("Choose the simplest tool for the operation");
+    expect(out).toContain("they are NOT calls");
+    expect(out).not.toContain("ENTIRE filesystem");
+    expect(out).not.toContain("anthropic_function_calls"); // full native-XML example removed
+    expect(out).not.toContain("You have no code interpreter, sandbox, canvas");
+    expect(out).not.toContain('<tool_output name="read">'); // no return-side example
     expect(out).toContain("<tools>");
     expect(out).toContain("```read");
     expect(out).toContain("```write");
     expect(out).toContain("```edit");
     expect(out).toContain("```bash");
+  });
+
+  it("indented file-tool documentation in the <tools> block is not parsed as a call", () => {
+    const T = (name: string, props: Record<string, unknown>, req: string[]): ToolDef => ({
+      type: "function", function: { name, description: "d", parameters: { type: "object", properties: props, required: req } },
+    });
+    const tools = [
+      T("read", { filePath: { type: "string" } }, ["filePath"]),
+      T("write", { filePath: { type: "string" }, content: { type: "string" } }, ["filePath", "content"]),
+      T("edit", { filePath: { type: "string" }, oldString: { type: "string" }, newString: { type: "string" } }, ["filePath", "oldString", "newString"]),
+      T("bash", { command: { type: "string" }, workdir: { type: "string" } }, ["command"]),
+    ];
+    const out = formatFencedToolDefinitions("agent", tools);
+    // The framed `bash` example IS a real call; the indented read/write/edit docs must not be.
+    const parsed = parseToolCalls(out, tools);
+    const names = parsed.toolCalls.map((c) => c.function.name);
+    expect(names).not.toContain("read");
+    expect(names).not.toContain("write");
+    expect(names).not.toContain("edit");
+    expect(names).toContain("bash");
   });
 
   it("derives task tool spec with prompt body and parses multiline prompt body correctly", () => {
