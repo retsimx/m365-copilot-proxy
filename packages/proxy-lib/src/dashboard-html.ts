@@ -42,8 +42,10 @@ export function getDashboardHtml(): string {
     .charts{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border)}
     .chart{background:var(--card2);padding:.65rem}.chart-head{display:flex;justify-content:space-between;gap:.5rem;margin-bottom:.35rem}.chart-name{font-size:.71rem;font-weight:700}.chart-meta{font:.63rem var(--mono);color:var(--dim)}
     svg{width:100%;height:170px;display:block}.axis{stroke:#2a3852;stroke-width:1}.threshold{stroke-dasharray:5 4;stroke-width:1}.series{fill:none;stroke-width:2.2;stroke-linejoin:round;stroke-linecap:round}.area{opacity:.11}.tick{fill:var(--dim);font:9px var(--mono)}
-    .tooltip{position:fixed;z-index:20;pointer-events:none;opacity:0;background:#111a28;border:1px solid var(--border);border-radius:7px;padding:.55rem .65rem;box-shadow:0 8px 25px #0008;font-size:.68rem;color:var(--muted);min-width:210px}
+    .tooltip{position:fixed;z-index:20;pointer-events:none;opacity:0;background:#111a28;border:1px solid var(--border);border-radius:7px;padding:.55rem .65rem;box-shadow:0 8px 25px #0008;font-size:.68rem;color:var(--muted);min-width:210px;max-width:calc(100vw - 16px)}
     .tooltip strong{color:var(--text);font-family:var(--mono)}
+    .crosshair{stroke:var(--muted);stroke-width:1;stroke-dasharray:3 3;vector-effect:non-scaling-stroke}
+    .cursor-point{fill:var(--card2);stroke-width:3;vector-effect:non-scaling-stroke}
     table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:.62rem .8rem;border-bottom:1px solid #202b40;font-size:.7rem}th{color:var(--dim);font-size:.64rem;text-transform:uppercase;letter-spacing:.04em;background:#101722}td{color:var(--muted)}tr:last-child td{border-bottom:0}.mono{font-family:var(--mono)}.id{color:var(--cyan)}
     .empty{padding:2rem;text-align:center;color:var(--dim);font-size:.75rem}.turns{white-space:nowrap}.activity{white-space:nowrap}
     details{border-bottom:1px solid var(--border)}details:last-child{border-bottom:0}summary{cursor:pointer;padding:.72rem .9rem;font-size:.74rem;font-weight:650;color:var(--muted)}details p{padding:0 .9rem .75rem;font-size:.71rem;line-height:1.55;color:var(--dim)}code{font-family:var(--mono);color:var(--cyan)}
@@ -82,7 +84,7 @@ export function getDashboardHtml(): string {
     <article class="card">
       <div class="card-head"><span class="card-title">Fresh-Session Capacity</span><span id="sessionBadge" class="badge neutral">—</span></div>
       <div class="value-row"><span id="sessionValue" class="value">—</span><span id="sessionUnit" class="unit">/ — tokens</span></div>
-      <div class="bar"><div id="sessionFill" class="fill" style="background:var(--amber)"></div></div>
+      <div class="bar"><div id="sessionFill" class="fill"></div></div>
       <div class="details"><span>Fresh sessions</span><span id="sessionWindows">—</span><span>Next refill</span><span id="sessionRefill">—</span><span>Next eligible</span><span id="sessionEligible">—</span><span>Session delay</span><span id="sessionDelay">—</span></div>
     </article>
 
@@ -183,10 +185,13 @@ export function getDashboardHtml(): string {
     $("turnStatus").className="pill "+statusClass(g.sixtyMinute.status);$("turnStatus").textContent="Turns "+g.sixtyMinute.status;
 
     $("sessionValue").textContent=sq.sessionTokens;$("sessionUnit").textContent="/ "+sq.tokenCapacity+" tokens";
-    $("sessionFill").style.width=Math.min(100,sq.sessionTokens/Math.max(1,sq.tokenCapacity)*100)+"%";
+    const sessionRatio=sq.sessionTokens/Math.max(1,sq.tokenCapacity),sessionCritical=sessionRatio<=.2,sessionLow=sessionRatio<=.5;
+    $("sessionFill").style.width=Math.min(100,sessionRatio*100)+"%";
+    $("sessionFill").style.background=sessionCritical?"var(--red)":sessionLow?"var(--amber)":"var(--green)";
     $("sessionWindows").textContent=g.tenMinute.freshSessions+" / "+g.sixtyMinute.freshSessions+" (10m/60m)";
     $("sessionRefill").textContent=fmtMs(sq.nextRefillMs);$("sessionEligible").textContent=fmtMs(sq.nextEligibleMs);$("sessionDelay").textContent=fmtMs(sq.delayMs);
-    const sessState=sq.delayMs>0?"pacing":"ready";badge($("sessionBadge"),sessState,sessState);$("sessionStatus").className="pill "+(sessState==="ready"?"ok":"warn");$("sessionStatus").textContent="Sessions "+sessState;
+    const sessState=sessionCritical?"critical":sessionLow||sq.delayMs>0?"pacing":"ready",sessClass=sessionCritical?"bad":sessionLow||sq.delayMs>0?"warn":"ok";
+    badge($("sessionBadge"),sessClass,sessState);$("sessionStatus").className="pill "+sessClass;$("sessionStatus").textContent="Sessions "+sessState;
 
     if(cb.isArmed){
       badge($("circuitBadge"),"armed","armed");$("circuitValue").textContent=fmtMs(cb.remainingCooldownSec*1000);$("circuitUnit").textContent="cooldown";
@@ -228,14 +233,26 @@ export function getDashboardHtml(): string {
       '<text class="tick" x="3" y="'+(ty+3)+'">'+threshold+'</text>'+
       '<path class="series" d="'+d+'" stroke="'+color+'"/>';
     points.forEach((p,i)=>{if((p.throttles||0)>0){const x=pad+i*(w-2*pad)/Math.max(1,points.length-1);html+='<line x1="'+x+'" y1="'+pad+'" x2="'+x+'" y2="'+(h-pad)+'" stroke="var(--purple)" stroke-dasharray="3 3"/>'}});
-    html+='<rect data-overlay="'+key+'" x="'+pad+'" y="'+pad+'" width="'+(w-2*pad)+'" height="'+(h-2*pad)+'" fill="transparent"/>';
+    html+='<line class="crosshair" data-crosshair="'+key+'" x1="0" y1="'+pad+'" x2="0" y2="'+(h-pad)+'" visibility="hidden"/>'+
+      '<circle class="cursor-point" data-cursor-point="'+key+'" cx="0" cy="0" r="4.5" stroke="'+color+'" visibility="hidden"/>'+
+      '<rect data-overlay="'+key+'" x="'+pad+'" y="'+pad+'" width="'+(w-2*pad)+'" height="'+(h-2*pad)+'" fill="transparent"/>';
     svg.innerHTML=html;
-    const overlay=svg.querySelector("rect[data-overlay]");
+    const overlay=svg.querySelector("rect[data-overlay]"),crosshair=svg.querySelector("[data-crosshair]"),cursorPoint=svg.querySelector("[data-cursor-point]");
     overlay.onmousemove=e=>{
-      const r=svg.getBoundingClientRect(),ratio=Math.max(0,Math.min(1,(e.clientX-r.left)/r.width)),i=Math.round(ratio*(points.length-1)),p=points[i],tip=$("tooltip");
-      tip.innerHTML='<strong>'+new Date(p.timestamp).toLocaleString()+'</strong><br>'+tooltipLabel+': <strong>'+(p[key]||0)+'</strong><br>1m attempts: <strong>'+(p.turns||0)+'</strong><br>Turn delay: <strong>'+fmtMs(p.averageTurnDelayMs||0)+'</strong><br>Session delay: <strong>'+fmtMs(p.averageSessionDelayMs||0)+'</strong>';
-      tip.style.left=(e.clientX+12)+"px";tip.style.top=(e.clientY+12)+"px";tip.style.opacity="1";
-    };overlay.onmouseleave=()=>{$("tooltip").style.opacity="0"};
+      if(!points.length)return;
+      const r=svg.getBoundingClientRect(),chartRatio=Math.max(0,Math.min(1,((e.clientX-r.left)/r.width*w-pad)/(w-2*pad))),i=Math.round(chartRatio*(points.length-1)),p=points[i],tip=$("tooltip");
+      const x=pad+i*(w-2*pad)/Math.max(1,points.length-1),value=p[key]||0,y=h-pad-Math.min(max,value)/Math.max(1,max)*(h-2*pad);
+      crosshair.setAttribute("x1",x);crosshair.setAttribute("x2",x);crosshair.setAttribute("visibility","visible");
+      cursorPoint.setAttribute("cx",x);cursorPoint.setAttribute("cy",y);cursorPoint.setAttribute("visibility","visible");
+      tip.innerHTML='<strong>'+new Date(p.timestamp).toLocaleString()+'</strong><br>'+tooltipLabel+': <strong>'+value+'</strong><br>1m attempts: <strong>'+(p.turns||0)+'</strong><br>Turn delay: <strong>'+fmtMs(p.averageTurnDelayMs||0)+'</strong><br>Session delay: <strong>'+fmtMs(p.averageSessionDelayMs||0)+'</strong>';
+      tip.style.opacity="1";
+      const gap=12,margin=8,tipRect=tip.getBoundingClientRect();
+      let left=e.clientX+gap,top=e.clientY+gap;
+      if(left+tipRect.width>window.innerWidth-margin)left=e.clientX-gap-tipRect.width;
+      if(top+tipRect.height>window.innerHeight-margin)top=e.clientY-gap-tipRect.height;
+      tip.style.left=Math.max(margin,Math.min(left,window.innerWidth-tipRect.width-margin))+"px";
+      tip.style.top=Math.max(margin,Math.min(top,window.innerHeight-tipRect.height-margin))+"px";
+    };overlay.onmouseleave=()=>{crosshair.setAttribute("visibility","hidden");cursorPoint.setAttribute("visibility","hidden");$("tooltip").style.opacity="0"};
   }
   function renderCharts(d){
     const p=d.history.points,c=d.config;

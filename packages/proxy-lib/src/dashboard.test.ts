@@ -65,6 +65,15 @@ describe("Web Dashboard & Telemetry API", () => {
       expect(html).toContain("Waiting for session capacity");
     });
 
+    it("colours fresh-session capacity by remaining tokens", () => {
+      const html = getDashboardHtml();
+      expect(html).not.toContain('id="sessionFill" class="fill" style="background:var(--amber)"');
+      expect(html).toContain("sessionRatio<=.2");
+      expect(html).toContain("sessionRatio<=.5");
+      expect(html).toContain('sessionCritical?"var(--red)":sessionLow?"var(--amber)":"var(--green)"');
+      expect(html).toContain('sessionCritical?"bad":sessionLow||sq.delayMs>0?"warn":"ok"');
+    });
+
     it("shows factual request consumption instead of model quality scoring", () => {
       const html = getDashboardHtml();
       expect(html).toContain('id="consumptionValue"');
@@ -92,6 +101,17 @@ describe("Web Dashboard & Telemetry API", () => {
       expect(html).toContain("rolling10mSessions");
       expect(html).toContain("averageTurnDelayMs");
       expect(html).not.toContain("Combined");
+    });
+
+    it("shows a cursor crosshair and keeps hover details inside the viewport", () => {
+      const html = getDashboardHtml();
+      expect(html).toContain('class="crosshair"');
+      expect(html).toContain('class="cursor-point"');
+      expect(html).toContain('crosshair.setAttribute("x1",x)');
+      expect(html).toContain('cursorPoint.setAttribute("cy",y)');
+      expect(html).toContain("window.innerWidth-tipRect.width-margin");
+      expect(html).toContain("window.innerHeight-tipRect.height-margin");
+      expect(html).toContain("max-width:calc(100vw - 16px)");
     });
 
     it("contains newest-first recently active conversation rendering", () => {
