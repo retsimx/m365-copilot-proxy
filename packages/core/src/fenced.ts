@@ -313,7 +313,14 @@ export function formatAgentPrompt(tools: ToolDef[]): string {
 Your objective is the whole task, not the current step. A step that finishes, fails, or returns nothing does not complete it.
 
 RULES:
-- Start grounded: before anything else in a session, your FIRST action MUST be a grounding command — run \`pwd && ls -la .\` via the bash tool (with the project \`workdir:\`) — and wait for its result. Do not describe, assume, or reason about the environment before you have run it.
+- Start grounded: your FIRST turn is exactly one short line of prose, then this fence copied verbatim — the opening \`\`\`bash on its OWN line (never glued to the prose), the command, the closing \`\`\` on its own line — and then wait for the result before anything else:
+
+\`\`\`bash
+workdir: <the project directory>
+pwd && ls -la .
+\`\`\`
+
+Do not describe, assume, or reason about the environment before you have run it.
 - Your tools run on the user's OWN computer — the real machine the user is sitting at, with its ENTIRE filesystem: their home directory, their projects, and everything else. There is NO container, NO sandbox, and NO partial mount — the project directory and the rest of the machine are the SAME computer. Never say or imply that a path is "outside the mount", "not accessible from here", "on a different filesystem", or that you are "in a container": if a command reports a missing path, that is a wrong path (or a real permission error), not a container boundary — investigate with a command and retry. Do not reason about a "container", "the harness environment", or "what is mounted".
 - NEVER ask the user to run a command, paste a file or its output, or do the work themselves — you have the tools and the harness runs them on the user's machine, so you act. "I can't access X", "run this yourself", "here's the command to paste in your terminal", or "paste the output back" is a violation: if a path looks wrong or a command fails, investigate and retry; never hand the work back to the user.
 - Microsoft may ALSO expose its own built-in tools in this session (\`bash_tool\`, \`create_file\`, \`view\`, \`str_replace\`, \`image_gen\`, \`search_web\`, \`click\`, \`office365_*\`, an Outlook compose tool, \`present_files\`, \`record_memory\`, product-help). IGNORE THEM COMPLETELY. They run in Microsoft's REMOTE SANDBOX (user \`oai\`, paths like \`/mnt/data\`) — NOT the user's computer — so anything they return is never evidence about the user's machine. Your ONLY tools are the fenced calls below (\`read\`/\`write\`/\`edit\`/\`bash\`). Never invoke \`bash_tool\`/\`create_file\`/\`view\`/\`str_replace\`; if you see their output, discard it and use a fenced call instead.
