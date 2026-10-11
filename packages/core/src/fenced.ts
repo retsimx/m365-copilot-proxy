@@ -713,25 +713,12 @@ export function parseFencedToolCalls(
         continue;
       }
 
-      // Check if this line is starting a NEW tool fence without an explicit closing fence
-      // (e.g. ```bash ... ```bash ...) when not inside an active heredoc
-      const openMatch = line.match(OPEN_FENCE_REGEX);
-      const newSpec = openMatch && openMatch[2].length >= fenceLen ? specs.get(openMatch[3]) : null;
-      if (newSpec) {
-        const inner = blockLines.join("\n");
-        const args = parseFencedInner(toolSpec!, inner);
-        if (args) {
-          calls.push(makeCall(toolSpec!.name, args));
-          matchedIndices.push({ start: blockStartIndex, end: i - 1 });
-        }
-        inBlock = true;
-        fenceLen = openMatch![2].length;
-        toolSpec = newSpec;
-        blockLines = [];
-        blockStartIndex = i;
-        heredocStack = [];
-        continue;
-      }
+      // A tool-call fence's BODY is OPAQUE: once a ```<tool> fence is open, only a bare
+      // closing fence (3+ backticks with no tool name) ends it. A ```<tool> line inside the
+      // body is body content — e.g. a bash call that writes a file containing a fenced code
+      // block — NOT a new tool call. (Previously an inner ```<tool> line was treated as a new
+      // call, so any tool call whose body contained a fence mis-parsed; since we run at most
+      // one call per turn, that recovery heuristic is no longer needed.)
 
       // Check for opening a heredoc in the current line
       const hMatch = line.match(HEREDOC_OPEN_REGEX);

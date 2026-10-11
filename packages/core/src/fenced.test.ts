@@ -860,17 +860,20 @@ PYEOF</parameter>
     expect(args.command).toBe("python3 << 'PYEOF'\nprint(\"SAVED\")\nPYEOF");
   });
 
-  it("parses consecutive tool fences emitted back-to-back without closing backticks", () => {
+  it("keeps a tool fence's body opaque — an inner ```<tool> line is body, not a new call", () => {
+    // A bash call that writes a file containing a fenced code block must parse as ONE call
+    // (the inner ```bash is body content). Previously the parser split it into two calls.
     const text = `\`\`\`bash
-git remote get-url origin
+cat > /tmp/f <<'EOF'
 \`\`\`bash
-echo test && git remote get-url origin
+npm start
+\`\`\`
+EOF
 \`\`\``;
-
     const { calls } = parseFencedToolCalls(text, specs);
-    expect(calls).toHaveLength(2);
-    expect(JSON.parse(calls[0].function.arguments).command).toBe("git remote get-url origin");
-    expect(JSON.parse(calls[1].function.arguments).command).toBe("echo test && git remote get-url origin");
+    expect(calls).toHaveLength(1);
+    const args = JSON.parse(calls[0].function.arguments);
+    expect(args.command).toContain("npm start");
   });
 
   it("does not split nested markdown fences inside an active heredoc", () => {
