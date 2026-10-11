@@ -203,6 +203,9 @@ describe("Telemetry Metrics Engine (proxy-lib)", () => {
       priorityCount: 0,
       minSpacingMs: 1500,
       isProcessing: false,
+      oldestWaitMs: 0,
+      nextDispatchMs: 0,
+      delayCause: "ready",
     });
     expect(body.governor).toBeDefined();
     expect(body.staggerQueue).toBeDefined();
@@ -216,6 +219,9 @@ describe("Telemetry Metrics Engine (proxy-lib)", () => {
       priorityCount: 0,
       minSpacingMs: 1500,
       isProcessing: false,
+      oldestWaitMs: 0,
+      nextDispatchMs: 0,
+      delayCause: "ready",
     });
     expect(snapshot.circuitBreaker.reason).toBeUndefined();
   });
@@ -367,5 +373,122 @@ describe("Telemetry Metrics Engine (proxy-lib)", () => {
     expect(quality.cleanTurns).toBe(0);
     expect(quality.salvagedTurns).toBe(0);
     expect(quality.refusalRatePercent).toBe(100);
+  });
+});
+
+describe("Operational dashboard telemetry", () => {
+  beforeEach(() => {
+    resetMetrics();
+    resetNewSessionPacing();
+    resetTurnVelocityPacing();
+    vi.restoreAllMocks();
+  });
+
+  afterEach(() => {
+    resetMetrics();
+    resetNewSessionPacing();
+    resetTurnVelocityPacing();
+    vi.restoreAllMocks();
+  });
+
+  it("records factual request consumption independently of quality classification", async () => {
+    vi.spyOn(core, "isDegradationBackoff").mockReturnValue(false);
+    vi.spyOn(core.ModelSession.prototype, "run").mockResolvedValue({
+      [Symbol.asyncIterator]: async function* () { yield "ok"; },
+      fullText: "ok",
+      hasContent: true,
+      throttle: { current: 1, max: 600 },
+      scores: null,
+      turnCount: 1,
+    } as any);
+
+    const response = await handleChatCompletion({
+      model: "gpt-5.6-think-deeper",
+      messages: [{ role: "user" as const, content: "hello" }],
+      stream: false,
+    }, new SessionPool());
+
+    expect(response.status).toBe(200);
+    const snapshot = getMetricsSnapshot(undefined, "1h");
+    expect(snapshot.consumption).toEqual({
+      clientRequests: 1,
+      upstreamAttempts: 1,
+      retryAttempts: 0,
+      transportReconnects: 0,
+      disengagedRecoveries: 0,
+    });
+  });
+
+  it("computes dispatch delay percentiles and preserves delay causes", () => {
+    const collector = new MetricsCollector();
+    const now = Date.now();
+    collector.recordTurn(now, 1_000, "minimum-spacing");
+    collector.recordTurn(now, 4_000, "burst");
+    collector.recordTurn(now, 20_000, "sustained");
+    collector.recordNewSession(now, 3_000);
+
+    expect(collector.getDispatchDelayMetrics(3_600_000, now)).toEqual({
+      delayedTurns: 3,
+      totalDelayMs: 25_000,
+      averageDelayMs: 8_333,
+      p50DelayMs: 4_000,
+      p95DelayMs: 20_000,
+      maxDelayMs: 20_000,
+      byCause: {
+        "minimum-spacing": 1,
+        burst: 1,
+        sustained: 1,
+      },
+      delayedSessions: 1,
+      sessionDelayMs: 3_000,
+    });
+  });
+
+  it("returns server-computed rolling 10m and 60m history without a left-edge reset", () => {
+    const collector = new MetricsCollector();
+    const now = Math.floor(Date.now() / 60_000) * 60_000;
+    for (let i = 0; i < 12; i++) {
+      collector.recordTurn(now - i * 60_000);
+      if (i % 3 === 0) collector.recordNewSession(now - i * 60_000);
+    }
+
+    const points = collector.getHistoryPoints("1h", now);
+    const latest = points.at(-1)!;
+    expect(latest.rolling10mTurns).toBe(10);
+    expect(latest.rolling60mTurns).toBe(12);
+    expect(latest.rolling10mSessions).toBe(4);
+    expect(latest.rolling60mSessions).toBe(4);
+
+    const leftEdge = points[0];
+    expect(leftEdge.rolling60mTurns).toBeGreaterThanOrEqual(0);
+  });
+
+  it("records explicit upstream throttle reasons", () => {
+    const collector = new MetricsCollector();
+    const now = Date.now();
+    collector.recordThrottle(now, "PerUserThrottled");
+    collector.recordThrottle(now, "PerScenarioThrottled");
+
+    const latest = collector.getHistoryPoints("1h", now).at(-1)!;
+    expect(latest.throttles).toBe(2);
+    expect(latest.throttleReasons).toEqual({
+      PerUserThrottled: 1,
+      PerScenarioThrottled: 1,
+    });
+  });
+
+  it("sorts recently active conversations newest first", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-10-11T00:00:00Z"));
+      const pool = new SessionPool();
+      pool.resolve([{ role: "user" as const, content: "older" }], undefined, "older");
+      vi.setSystemTime(new Date("2026-10-11T00:00:10Z"));
+      pool.resolve([{ role: "user" as const, content: "newer" }], undefined, "newer");
+
+      expect(pool.getSessionsSnapshot().map((s) => s.sessionId)).toEqual(["newer", "older"]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

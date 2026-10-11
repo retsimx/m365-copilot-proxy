@@ -1,11 +1,9 @@
 /**
- * Embedded interactive Web Dashboard for m365-copilot-proxy.
+ * Embedded zero-dependency observability dashboard.
  *
- * Self-contained, zero-external-CDN HTML5/SVG/CSS/JS observability console.
- * Strictly adheres to dynamic config sourcing: all thresholds, limits, and
- * system constants are loaded dynamically from `/api/metrics` (data.config).
+ * The dashboard deliberately separates turn governing, session governing, and
+ * upstream recovery. All limits and thresholds are supplied by /api/metrics.
  */
-
 export function getDashboardHtml(): string {
   return `<!DOCTYPE html>
 <html lang="en">
@@ -13,2191 +11,261 @@ export function getDashboardHtml(): string {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>M365 Copilot Proxy · Observability Console</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%2306b6d4'><path d='M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5'/></svg>">
   <style>
     :root {
-      --bg: #0b0f17;
-      --card-bg: #151c28;
-      --card-header: #1c2637;
-      --border: #232f45;
-      --border-focus: #3b82f6;
-      --cyan: #06b6d4;
-      --cyan-glow: rgba(6, 182, 212, 0.15);
-      --emerald: #10b981;
-      --emerald-glow: rgba(16, 185, 129, 0.15);
-      --amber: #f59e0b;
-      --amber-glow: rgba(245, 158, 11, 0.15);
-      --rose: #f43f5e;
-      --rose-glow: rgba(244, 63, 94, 0.15);
-      --purple: #a855f7;
-      --purple-glow: rgba(168, 85, 247, 0.15);
-      --text-main: #f8fafc;
-      --text-muted: #94a3b8;
-      --text-dim: #64748b;
-      --font-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-    }
-
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-
-    body {
-      background-color: var(--bg);
-      color: var(--text-main);
-      font-family: var(--font-sans);
-      line-height: 1.5;
-      padding: 1.5rem;
-      min-height: 100vh;
-    }
-
-    .container {
-      max-width: 1360px;
-      margin: 0 auto;
-      display: flex;
-      flex-direction: column;
-      gap: 1.5rem;
-    }
-
-    /* Header */
-    header {
-      display: flex;
-      flex-wrap: wrap;
-      justify-content: space-between;
-      align-items: center;
-      gap: 1rem;
-      padding-bottom: 1rem;
-      border-bottom: 1px solid var(--border);
-    }
-
-    .title-group {
-      display: flex;
-      align-items: center;
-      gap: 0.75rem;
-    }
-
-    .logo-badge {
-      width: 36px;
-      height: 36px;
-      background: linear-gradient(135deg, #06b6d4 0%, #3b82f6 100%);
-      border-radius: 8px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      box-shadow: 0 0 12px var(--cyan-glow);
-    }
-
-    .logo-badge svg {
-      width: 22px;
-      height: 22px;
-      fill: #ffffff;
-    }
-
-    h1 {
-      font-size: 1.35rem;
-      font-weight: 700;
-      letter-spacing: -0.02em;
-      color: #ffffff;
-    }
-
-    .header-actions {
-      display: flex;
-      align-items: center;
-      gap: 1rem;
-      font-size: 0.875rem;
-    }
-
-    .health-pill {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.5rem;
-      padding: 0.35rem 0.85rem;
-      border-radius: 9999px;
-      font-weight: 600;
-      font-size: 0.8rem;
-      letter-spacing: 0.05em;
-      text-transform: uppercase;
-      transition: all 0.3s ease;
-      border: 1px solid transparent;
-    }
-
-    .health-healthy {
-      background: rgba(16, 185, 129, 0.12);
-      color: #34d399;
-      border-color: rgba(16, 185, 129, 0.3);
-    }
-
-    .health-warning {
-      background: rgba(245, 158, 11, 0.12);
-      color: #fbbf24;
-      border-color: rgba(245, 158, 11, 0.3);
-    }
-
-    .health-danger {
-      background: rgba(244, 63, 94, 0.12);
-      color: #fb7185;
-      border-color: rgba(244, 63, 94, 0.3);
-      animation: pulse-danger 2s infinite;
-    }
-
-    .health-throttled {
-      background: rgba(168, 85, 247, 0.15);
-      color: #c084fc;
-      border-color: rgba(168, 85, 247, 0.4);
-      animation: pulse-throttled 2s infinite;
-    }
-
-    @keyframes pulse-danger {
-      0%, 100% { box-shadow: 0 0 0 0 rgba(244, 63, 94, 0.4); }
-      50% { box-shadow: 0 0 12px 2px rgba(244, 63, 94, 0.4); }
-    }
-
-    @keyframes pulse-throttled {
-      0%, 100% { box-shadow: 0 0 0 0 rgba(168, 85, 247, 0.4); }
-      50% { box-shadow: 0 0 12px 2px rgba(168, 85, 247, 0.4); }
-    }
-
-    .poll-indicator {
-      display: flex;
-      align-items: center;
-      gap: 0.4rem;
-      color: var(--text-dim);
-      font-family: var(--font-mono);
-      font-size: 0.775rem;
-    }
-
-    .pulse-dot {
-      width: 8px;
-      height: 8px;
-      background-color: var(--emerald);
-      border-radius: 50%;
-      display: inline-block;
-      box-shadow: 0 0 8px var(--emerald);
-      animation: live-pulse 2s infinite;
-    }
-
-    @keyframes live-pulse {
-      0%, 100% { opacity: 1; transform: scale(1); }
-      50% { opacity: 0.4; transform: scale(0.8); }
-    }
-
-    .clock-display {
-      font-family: var(--font-mono);
-      font-size: 0.8rem;
-      color: var(--text-muted);
-    }
-
-    /* Cards Grid */
-    .cards-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-      gap: 1.25rem;
-    }
-
-    .card {
-      background: var(--card-bg);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 1.25rem;
-      display: flex;
-      flex-direction: column;
-      justify-content: space-between;
-      gap: 1rem;
-      position: relative;
-      transition: transform 0.15s ease, border-color 0.15s ease;
-    }
-
-    .card:hover {
-      border-color: #334155;
-    }
-
-    .card-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-
-    .card-title {
-      font-size: 0.85rem;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-      color: var(--text-muted);
-      display: flex;
-      align-items: center;
-      gap: 0.4rem;
-    }
-
-    .tooltip-btn {
-      background: transparent;
-      border: none;
-      color: var(--text-dim);
-      cursor: pointer;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 0.85rem;
-      line-height: 1;
-      padding: 2px;
-      border-radius: 50%;
-      transition: color 0.2s;
-    }
-
-    .tooltip-btn:hover {
-      color: var(--cyan);
-    }
-
-    .tooltip-container {
-      position: relative;
-      display: inline-block;
-    }
-
-    .tooltip-text {
-      visibility: hidden;
-      opacity: 0;
-      position: absolute;
-      bottom: 125%;
-      left: 50%;
-      transform: translateX(-50%);
-      width: 240px;
-      background-color: #1e293b;
-      color: #f1f5f9;
-      font-size: 0.75rem;
-      font-weight: 400;
-      line-height: 1.4;
-      text-transform: none;
-      padding: 0.6rem 0.8rem;
-      border-radius: 6px;
-      border: 1px solid var(--border);
-      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
-      z-index: 50;
-      pointer-events: none;
-      transition: opacity 0.2s ease, visibility 0.2s ease;
-    }
-
-    .tooltip-container:hover .tooltip-text {
-      visibility: visible;
-      opacity: 1;
-    }
-
-    .metric-value-row {
-      display: flex;
-      align-items: baseline;
-      gap: 0.5rem;
-    }
-
-    .metric-primary {
-      font-size: 2rem;
-      font-weight: 700;
-      font-family: var(--font-mono);
-      line-height: 1;
-      color: var(--text-main);
-    }
-
-    .metric-secondary {
-      font-size: 1rem;
-      font-family: var(--font-mono);
-      color: var(--text-dim);
-    }
-
-    .progress-container {
-      width: 100%;
-      height: 8px;
-      background: #0f172a;
-      border-radius: 4px;
-      overflow: hidden;
-      position: relative;
-      margin-top: 0.25rem;
-    }
-
-    .progress-bar {
-      height: 100%;
-      width: 0%;
-      background: var(--cyan);
-      border-radius: 4px;
-      transition: width 0.4s ease, background-color 0.3s ease;
-    }
-
-    .progress-marker {
-      position: absolute;
-      top: 0;
-      bottom: 0;
-      width: 2px;
-      background: rgba(255, 255, 255, 0.4);
-      z-index: 2;
-    }
-
-    .card-footer-info {
-      font-size: 0.75rem;
-      color: var(--text-dim);
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-
-    /* Status badges */
-    .badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.35rem;
-      padding: 0.2rem 0.6rem;
-      border-radius: 6px;
-      font-size: 0.75rem;
-      font-weight: 600;
-      letter-spacing: 0.03em;
-    }
-
-    .badge-emerald {
-      background: rgba(16, 185, 129, 0.15);
-      color: #34d399;
-      border: 1px solid rgba(16, 185, 129, 0.3);
-    }
-
-    .badge-amber {
-      background: rgba(245, 158, 11, 0.15);
-      color: #fbbf24;
-      border: 1px solid rgba(245, 158, 11, 0.3);
-    }
-
-    .badge-rose {
-      background: rgba(244, 63, 94, 0.15);
-      color: #fb7185;
-      border: 1px solid rgba(244, 63, 94, 0.3);
-    }
-
-    .badge-purple {
-      background: rgba(168, 85, 247, 0.15);
-      color: #c084fc;
-      border: 1px solid rgba(168, 85, 247, 0.3);
-    }
-
-    .badge-cyan {
-      background: rgba(6, 182, 212, 0.15);
-      color: #22d3ee;
-      border: 1px solid rgba(6, 182, 212, 0.3);
-    }
-
-    .badge-slate {
-      background: rgba(148, 163, 184, 0.12);
-      color: #94a3b8;
-      border: 1px solid rgba(148, 163, 184, 0.25);
-    }
-
-    /* Chart Section */
-    .section-card {
-      background: var(--card-bg);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 1.5rem;
-      display: flex;
-      flex-direction: column;
-      gap: 1.25rem;
-    }
-
-    .section-header {
-      display: flex;
-      flex-wrap: wrap;
-      justify-content: space-between;
-      align-items: center;
-      gap: 1rem;
-    }
-
-    .section-title {
-      font-size: 1.1rem;
-      font-weight: 700;
-      color: #ffffff;
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-    }
-
-    .chart-controls {
-      display: flex;
-      align-items: center;
-      gap: 0.75rem;
-      flex-wrap: wrap;
-    }
-
-    .btn-group {
-      display: flex;
-      background: #0f172a;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 3px;
-      gap: 3px;
-    }
-
-    .btn {
-      background: transparent;
-      border: none;
-      color: var(--text-dim);
-      padding: 0.35rem 0.85rem;
-      border-radius: 6px;
-      font-size: 0.8rem;
-      font-weight: 600;
-      cursor: pointer;
-      transition: all 0.15s ease;
-      display: inline-flex;
-      align-items: center;
-      gap: 0.35rem;
-    }
-
-    .btn-sm {
-      padding: 0.25rem 0.65rem;
-      font-size: 0.775rem;
-    }
-
-    .btn:hover {
-      color: var(--text-main);
-    }
-
-    .btn.active {
-      background: var(--card-header);
-      color: var(--cyan);
-      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
-    }
-
-    .range-selector {
-      display: flex;
-      background: #0f172a;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 3px;
-      gap: 3px;
-    }
-
-    .range-btn {
-      background: transparent;
-      border: none;
-      color: var(--text-dim);
-      padding: 0.35rem 0.85rem;
-      border-radius: 6px;
-      font-size: 0.8rem;
-      font-weight: 600;
-      cursor: pointer;
-      transition: all 0.15s ease;
-    }
-
-    .range-btn:hover {
-      color: var(--text-main);
-    }
-
-    .range-btn.active {
-      background: var(--card-header);
-      color: var(--cyan);
-      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
-    }
-
-    .chart-container {
-      width: 100%;
-      position: relative;
-      overflow: hidden;
-      border-radius: 8px;
-    }
-
-    .split-view-container {
-      display: flex;
-      flex-direction: column;
-      gap: 0.85rem;
-      width: 100%;
-    }
-
-    .split-chart-pane {
-      background: rgba(15, 23, 42, 0.45);
-      border: 1px solid rgba(35, 47, 69, 0.55);
-      border-radius: 8px;
-      padding: 0.5rem 0.65rem 0.35rem;
-      position: relative;
-    }
-
-    .split-chart-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 0.25rem;
-      padding: 0 0.4rem;
-      font-size: 0.775rem;
-    }
-
-    .split-chart-title {
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-    }
-
-    .split-chart-tag {
-      font-weight: 700;
-      font-family: var(--font-mono);
-      font-size: 0.8rem;
-      letter-spacing: 0.03em;
-    }
-
-    .split-chart-desc {
-      font-size: 0.725rem;
-      color: var(--text-dim);
-    }
-
-    .split-chart-axis-info {
-      font-size: 0.725rem;
-      font-family: var(--font-mono);
-      color: var(--text-muted);
-    }
-
-    .split-svg-wrap {
-      width: 100%;
-      height: 150px;
-      overflow: hidden;
-      position: relative;
-    }
-
-    .combined-view-container {
-      width: 100%;
-      height: 240px;
-      overflow: hidden;
-      position: relative;
-    }
-
-    .chart-svg {
-      width: 100%;
-      height: 100%;
-      overflow: hidden;
-      display: block;
-    }
-
-    .chart-legend {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 1.5rem;
-      font-size: 0.775rem;
-      color: var(--text-muted);
-      align-items: center;
-      padding-top: 0.5rem;
-      border-top: 1px solid rgba(35, 47, 69, 0.5);
-    }
-
-    .legend-item {
-      display: flex;
-      align-items: center;
-      gap: 0.4rem;
-    }
-
-    .legend-color {
-      width: 12px;
-      height: 12px;
-      border-radius: 3px;
-    }
-
-    .chart-tooltip {
-      position: absolute;
-      background: #1e293b;
-      border: 1px solid var(--border);
-      color: #ffffff;
-      padding: 0.6rem 0.8rem;
-      border-radius: 6px;
-      font-size: 0.775rem;
-      font-family: var(--font-mono);
-      pointer-events: none;
-      opacity: 0;
-      transition: opacity 0.15s ease;
-      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
-      z-index: 100;
-      white-space: nowrap;
-    }
-
-    /* Active Sessions Table */
-    .table-container {
-      width: 100%;
-      overflow-x: auto;
-    }
-
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      text-align: left;
-      font-size: 0.85rem;
-    }
-
-    th {
-      color: var(--text-muted);
-      font-weight: 600;
-      text-transform: uppercase;
-      font-size: 0.75rem;
-      letter-spacing: 0.04em;
-      padding: 0.75rem 1rem;
-      border-bottom: 1px solid var(--border);
-      background: var(--card-header);
-    }
-
-    th:first-child { border-top-left-radius: 8px; }
-    th:last-child { border-top-right-radius: 8px; }
-
-    td {
-      padding: 0.85rem 1rem;
-      border-bottom: 1px solid rgba(35, 47, 69, 0.4);
-      color: var(--text-main);
-      vertical-align: middle;
-    }
-
-    tr:last-child td {
-      border-bottom: none;
-    }
-
-    tbody tr:hover {
-      background: rgba(255, 255, 255, 0.02);
-    }
-
-    .conv-id-cell {
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-      font-family: var(--font-mono);
-      font-size: 0.8rem;
-    }
-
-    .copy-btn {
-      background: transparent;
-      border: none;
-      color: var(--text-dim);
-      cursor: pointer;
-      display: inline-flex;
-      align-items: center;
-      padding: 2px;
-      border-radius: 4px;
-      transition: color 0.15s;
-    }
-
-    .copy-btn:hover {
-      color: var(--cyan);
-    }
-
-    .table-meter {
-      display: flex;
-      flex-direction: column;
-      gap: 0.25rem;
-      width: 140px;
-    }
-
-    .table-meter-bar {
-      height: 6px;
-      background: #0f172a;
-      border-radius: 3px;
-      overflow: hidden;
-    }
-
-    .table-meter-fill {
-      height: 100%;
-      background: var(--cyan);
-      border-radius: 3px;
-    }
-
-    .empty-state {
-      padding: 2.5rem 1rem;
-      text-align: center;
-      color: var(--text-dim);
-      font-size: 0.9rem;
-    }
-
-    .empty-state svg {
-      width: 40px;
-      height: 40px;
-      stroke: var(--text-dim);
-      margin-bottom: 0.75rem;
-      opacity: 0.6;
-    }
-
-    /* Accordion Primer */
-    .accordion-group {
-      display: flex;
-      flex-direction: column;
-      gap: 0.75rem;
-    }
-
-    .accordion-item {
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      overflow: hidden;
-      background: #101623;
-      transition: border-color 0.2s;
-    }
-
-    .accordion-item:hover {
-      border-color: #334155;
-    }
-
-    .accordion-toggle {
-      width: 100%;
-      background: transparent;
-      border: none;
-      color: var(--text-main);
-      padding: 1rem 1.25rem;
-      font-size: 0.9rem;
-      font-weight: 600;
-      text-align: left;
-      cursor: pointer;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 1rem;
-      transition: background-color 0.2s;
-    }
-
-    .accordion-toggle:hover {
-      background: rgba(255, 255, 255, 0.02);
-    }
-
-    .accordion-chevron {
-      width: 16px;
-      height: 16px;
-      stroke: var(--text-dim);
-      transition: transform 0.25s ease;
-      flex-shrink: 0;
-    }
-
-    .accordion-item.open .accordion-chevron {
-      transform: rotate(180deg);
-      stroke: var(--cyan);
-    }
-
-    .accordion-content {
-      display: none;
-      padding: 0 1.25rem 1.25rem 1.25rem;
-      color: var(--text-muted);
-      font-size: 0.85rem;
-      line-height: 1.6;
-      border-top: 1px solid rgba(35, 47, 69, 0.4);
-      background: rgba(0, 0, 0, 0.1);
-    }
-
-    .accordion-item.open .accordion-content {
-      display: block;
-      padding-top: 1rem;
-    }
-
-    .accordion-content p {
-      margin-bottom: 0.5rem;
-    }
-
-    .accordion-content p:last-child {
-      margin-bottom: 0;
-    }
-
-    .highlight-param {
-      font-family: var(--font-mono);
-      color: var(--cyan);
-      background: rgba(6, 182, 212, 0.1);
-      padding: 0.1rem 0.35rem;
-      border-radius: 4px;
-      font-size: 0.8rem;
-    }
-
-    /* Utilities */
-    .mono { font-family: var(--font-mono); }
-
-    /* Responsive */
-    @media (max-width: 768px) {
-      body { padding: 1rem; }
-      header { flex-direction: column; align-items: flex-start; }
-      .header-actions { width: 100%; justify-content: space-between; flex-wrap: wrap; }
-      .cards-grid { grid-template-columns: 1fr; }
-    }
+      --bg:#0b0f17;--card:#151c28;--card2:#101722;--border:#253149;
+      --text:#f8fafc;--muted:#94a3b8;--dim:#64748b;
+      --cyan:#06b6d4;--green:#10b981;--amber:#f59e0b;--rose:#f43f5e;--purple:#a855f7;
+      --mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;
+      --sans:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+    }
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{background:var(--bg);color:var(--text);font-family:var(--sans);padding:1.25rem;min-height:100vh}
+    .container{max-width:1440px;margin:auto;display:flex;flex-direction:column;gap:1rem}
+    header{display:flex;justify-content:space-between;align-items:center;gap:1rem;padding-bottom:.85rem;border-bottom:1px solid var(--border)}
+    .brand{display:flex;align-items:center;gap:.7rem}.logo{width:34px;height:34px;border-radius:8px;background:linear-gradient(135deg,var(--cyan),#3b82f6);display:grid;place-items:center;font-weight:800}
+    h1{font-size:1.25rem;letter-spacing:-.02em}.subtitle{font-size:.73rem;color:var(--dim);margin-top:.08rem}
+    .header-status{display:flex;align-items:center;gap:.55rem;flex-wrap:wrap;justify-content:flex-end}
+    .pill,.badge{display:inline-flex;align-items:center;border:1px solid;border-radius:999px;padding:.25rem .58rem;font-size:.68rem;font-weight:700;letter-spacing:.03em;text-transform:uppercase}
+    .ok{color:#34d399;background:#10b98118;border-color:#10b98155}.warn{color:#fbbf24;background:#f59e0b18;border-color:#f59e0b55}.bad{color:#fb7185;background:#f43f5e18;border-color:#f43f5e55}.info{color:#67e8f9;background:#06b6d418;border-color:#06b6d455}.neutral{color:#cbd5e1;background:#64748b18;border-color:#64748b55}
+    .clock{font: .72rem var(--mono);color:var(--muted)}
+    .cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.85rem}
+    .card{min-height:148px;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:.85rem;display:flex;flex-direction:column;gap:.58rem}
+    .card-head{display:flex;justify-content:space-between;align-items:center;gap:.5rem}.card-title{font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+    .value-row{display:flex;align-items:baseline;gap:.42rem}.value{font:700 1.72rem/1 var(--mono)}.unit{font:.72rem var(--mono);color:var(--dim)}
+    .bar{height:6px;background:#0c1320;border-radius:4px;position:relative;overflow:hidden}.fill{height:100%;width:0;background:var(--cyan);transition:width .25s}.marker{position:absolute;width:2px;top:0;bottom:0;background:#ffffff77}
+    .details{margin-top:auto;display:grid;grid-template-columns:1fr 1fr;gap:.22rem .5rem;font-size:.67rem;color:var(--dim)}.details span:nth-child(even){text-align:right;font-family:var(--mono);color:var(--muted)}
+    .section{background:var(--card);border:1px solid var(--border);border-radius:10px;overflow:hidden}
+    .section-head{padding:.75rem .9rem;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap}
+    .section-title{font-size:.84rem;font-weight:700}.section-note{font-size:.69rem;color:var(--dim);margin-top:.12rem}
+    .controls{display:flex;gap:.35rem}.btn{border:1px solid var(--border);background:#0f1724;color:var(--muted);border-radius:5px;padding:.28rem .55rem;font-size:.68rem;cursor:pointer}.btn.active{color:var(--cyan);border-color:#06b6d477;background:#06b6d412}
+    .charts{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border)}
+    .chart{background:var(--card2);padding:.65rem}.chart-head{display:flex;justify-content:space-between;gap:.5rem;margin-bottom:.35rem}.chart-name{font-size:.71rem;font-weight:700}.chart-meta{font:.63rem var(--mono);color:var(--dim)}
+    svg{width:100%;height:170px;display:block}.axis{stroke:#2a3852;stroke-width:1}.threshold{stroke-dasharray:5 4;stroke-width:1}.series{fill:none;stroke-width:2.2;stroke-linejoin:round;stroke-linecap:round}.area{opacity:.11}.tick{fill:var(--dim);font:9px var(--mono)}
+    .tooltip{position:fixed;z-index:20;pointer-events:none;opacity:0;background:#111a28;border:1px solid var(--border);border-radius:7px;padding:.55rem .65rem;box-shadow:0 8px 25px #0008;font-size:.68rem;color:var(--muted);min-width:210px}
+    .tooltip strong{color:var(--text);font-family:var(--mono)}
+    table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:.62rem .8rem;border-bottom:1px solid #202b40;font-size:.7rem}th{color:var(--dim);font-size:.64rem;text-transform:uppercase;letter-spacing:.04em;background:#101722}td{color:var(--muted)}tr:last-child td{border-bottom:0}.mono{font-family:var(--mono)}.id{color:var(--cyan)}
+    .empty{padding:2rem;text-align:center;color:var(--dim);font-size:.75rem}.turns{white-space:nowrap}.activity{white-space:nowrap}
+    details{border-bottom:1px solid var(--border)}details:last-child{border-bottom:0}summary{cursor:pointer;padding:.72rem .9rem;font-size:.74rem;font-weight:650;color:var(--muted)}details p{padding:0 .9rem .75rem;font-size:.71rem;line-height:1.55;color:var(--dim)}code{font-family:var(--mono);color:var(--cyan)}
+    @media(max-width:1100px){.cards{grid-template-columns:repeat(2,1fr)}.charts{grid-template-columns:1fr}}
+    @media(max-width:650px){body{padding:.7rem}.cards{grid-template-columns:1fr}header{align-items:flex-start;flex-direction:column}.header-status{justify-content:flex-start}.card{min-height:135px}.table-wrap{overflow:auto}}
   </style>
 </head>
 <body>
-  <div class="container">
-    <!-- Header -->
-    <header>
-      <div class="title-group">
-        <div class="logo-badge">
-          <svg viewBox="0 0 24 24">
-            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
-          </svg>
-        </div>
-        <div>
-          <h1>M365 Copilot Proxy · Observability Console</h1>
-          <div style="font-size: 0.75rem; color: var(--text-dim);">Live Telemetry &amp; Upstream Account Governor</div>
-        </div>
-      </div>
-
-      <div class="header-actions">
-        <span id="healthBadge" class="health-pill health-healthy">HEALTHY</span>
-        <div class="poll-indicator">
-          <span class="pulse-dot"></span>
-          <span>Live Polling (2s)</span>
-        </div>
-        <div id="clockDisplay" class="clock-display">—</div>
-      </div>
-    </header>
-
-    <!-- Top Metric Cards -->
-    <div class="cards-grid">
-      <!-- Card 1: Thread Creation Rate -->
-      <div class="card">
-        <div class="card-header">
-          <span class="card-title">
-            Thread Creation (10m)
-            <span class="tooltip-container">
-              <button class="tooltip-btn" aria-label="Info">ⓘ</button>
-              <span class="tooltip-text">Tracks fresh session (turn 0) creation over a rolling 10-minute horizon. Observed upstream thread-creation throttling around ~15-20 threads/10m; the proxy's pacing here is conservative local policy. Exceeding the danger threshold triggers proactive pacing.</span>
-            </span>
-          </span>
-          <span id="threadStatusBadge" class="badge badge-emerald">Safe</span>
-        </div>
-        <div class="metric-value-row">
-          <span id="threadPrimary" class="metric-primary">—</span>
-          <span id="threadSecondary" class="metric-secondary">/ — max</span>
-        </div>
-        <div class="progress-container">
-          <div id="threadBar" class="progress-bar"></div>
-          <div id="threadWarnMarker" class="progress-marker" title="Warn marker"></div>
-        </div>
-        <div class="card-footer-info">
-          <span id="threadFooter">Horizon: 10m</span>
-          <span id="threadWarnFooter" class="mono">Warn: —</span>
-        </div>
-      </div>
-
-      <!-- Card 2: Turn Burst (10m) -->
-      <div class="card">
-        <div class="card-header">
-          <span class="card-title">
-            Turn Burst (10m)
-            <span class="tooltip-container">
-              <button class="tooltip-btn" aria-label="Info">ⓘ</button>
-              <span class="tooltip-text">Monitors total turns across all conversations within the last 10 minutes. When turns cross the soft limit, elastic braking introduces progressive pacing.</span>
-            </span>
-          </span>
-          <span id="burstStatusBadge" class="badge badge-emerald">Safe</span>
-        </div>
-        <div class="metric-value-row">
-          <span id="burstPrimary" class="metric-primary">—</span>
-          <span id="burstSecondary" class="metric-secondary">/ — max</span>
-        </div>
-        <div class="progress-container">
-          <div id="burstBar" class="progress-bar"></div>
-          <div id="burstSoftMarker" class="progress-marker" title="Soft marker"></div>
-        </div>
-        <div class="card-footer-info">
-          <span id="burstFooter">Horizon: 10m</span>
-          <span id="burstSoftFooter" class="mono">Soft: —</span>
-        </div>
-      </div>
-
-      <!-- Card 3: Sustained Hourly Turns (60m) -->
-      <div class="card">
-        <div class="card-header">
-          <span class="card-title">
-            Sustained Turns (60m)
-            <span class="tooltip-container">
-              <button class="tooltip-btn" aria-label="Info">ⓘ</button>
-              <span class="tooltip-text">Tracks cumulative hourly turn velocity across all conversations. Guards against account degradation over long-running automated development sessions.</span>
-            </span>
-          </span>
-          <span id="sustainedStatusBadge" class="badge badge-emerald">Safe</span>
-        </div>
-        <div class="metric-value-row">
-          <span id="sustainedPrimary" class="metric-primary">—</span>
-          <span id="sustainedSecondary" class="metric-secondary">/ — max</span>
-        </div>
-        <div class="progress-container">
-          <div id="sustainedBar" class="progress-bar"></div>
-          <div id="sustainedWarnMarker" class="progress-marker" title="Warn marker"></div>
-        </div>
-        <div class="card-footer-info">
-          <span id="sustainedFooter">Horizon: 60m</span>
-          <span id="sustainedWarnFooter" class="mono">Warn: —</span>
-        </div>
-      </div>
-
-      <!-- Card 4: Circuit Shield & Gatekeeper -->
-      <div class="card">
-        <div class="card-header">
-          <span class="card-title">
-            Circuit Shield &amp; Gatekeeper
-            <span class="tooltip-container">
-              <button class="tooltip-btn" aria-label="Info">ⓘ</button>
-              <span class="tooltip-text">Monitors local circuit breaker state, the Priority FIFO Turn Gatekeeper (1.5s wire pacing), and the initial session stagger queue. Intercepts traffic locally during cooldown to protect Microsoft account quota.</span>
-            </span>
-          </span>
-          <span id="circuitBadge" class="badge badge-emerald">DISARMED</span>
-        </div>
-        <div class="metric-value-row">
-          <span id="queueDelayPrimary" class="metric-primary">0</span>
-          <span id="queueDelaySecondary" class="metric-secondary">queued turns</span>
-        </div>
-        <div class="progress-container">
-          <div id="queueBar" class="progress-bar" style="background: var(--purple);"></div>
-        </div>
-        <div class="card-footer-info">
-          <span id="queueTokensFooter">Tokens: —</span>
-          <span id="cooldownFooter" class="mono">Cooldown: 0s</span>
-        </div>
-      </div>
-
-      <!-- Card 5: Turn Quality & Yield (60m) -->
-      <div class="card">
-        <div class="card-header">
-          <span class="card-title">
-            Turn Quality &amp; Yield (60m)
-            <span class="tooltip-container">
-              <button class="tooltip-btn" aria-label="Info">ⓘ</button>
-              <span class="tooltip-text">Tracks model turn compliance and quota efficiency over a rolling 60-minute window. First-Pass Yield (FPY) is the % of turns solved on Attempt 0 with zero retries. Wire Multiplier shows upstream turns burned per client request.</span>
-            </span>
-          </span>
-          <span id="qualityStatusBadge" class="badge badge-emerald">Optimal</span>
-        </div>
-        <div class="metric-value-row">
-          <span id="fpyPrimary" class="metric-primary">100%</span>
-          <span id="wireMultiplierSecondary" class="metric-secondary">· 1.00x wire</span>
-        </div>
-        <div class="progress-container">
-          <div id="qualityBar" class="progress-bar" style="background: var(--emerald);"></div>
-        </div>
-        <div class="card-footer-info">
-          <span id="qualityBreakdownFooter">Clean: 0 · Salvaged: 0 · Refused: 0</span>
-          <span id="qualityReqsFooter" class="mono">0 reqs</span>
-        </div>
-      </div>
+<div class="container">
+  <header>
+    <div class="brand"><div class="logo">M</div><div><h1>M365 Copilot Proxy</h1><div class="subtitle">Turn governing · session governing · upstream recovery</div></div></div>
+    <div class="header-status">
+      <span id="serviceStatus" class="pill ok">Service online</span>
+      <span id="turnStatus" class="pill neutral">Turns —</span>
+      <span id="sessionStatus" class="pill neutral">Sessions —</span>
+      <span id="upstreamStatus" class="pill neutral">Upstream —</span>
+      <span id="clock" class="clock">—</span>
     </div>
+  </header>
 
-    <!-- Historical Timeline & Risk Zones -->
-    <div class="section-card">
-      <div class="section-header">
-        <div>
-          <div class="section-title">
-            <span>Historical Timeline &amp; Risk Zones · Cumulative Rolling 10-Minute Velocity (Upstream Sliding Window)</span>
-          </div>
-          <div style="font-size: 0.775rem; color: var(--text-dim); margin-top: 2px;">
-            Displays the rolling 10m load tracked against the proxy's conservative leaky-bucket limiters at each point in time.
-          </div>
-        </div>
-        <div class="chart-controls">
-          <div class="btn-group view-toggle">
-            <button class="btn btn-sm active" id="viewSplitBtn" title="Split into dedicated synchronized charts for Turns and Sessions">⊞ Split View</button>
-            <button class="btn btn-sm" id="viewCombinedBtn" title="Composite both series onto one dual-axis chart">⊡ Combined</button>
-          </div>
-          <div class="btn-group range-toggle">
-            <button class="btn btn-sm active" data-range="1h">1h</button>
-            <button class="btn btn-sm" data-range="6h">6h</button>
-            <button class="btn btn-sm" data-range="24h">24h</button>
-          </div>
-        </div>
-      </div>
+  <div class="cards">
+    <article class="card">
+      <div class="card-head"><span class="card-title">Sustained Turns · 60m</span><span id="sustainedBadge" class="badge neutral">—</span></div>
+      <div class="value-row"><span id="sustainedValue" class="value">—</span><span id="sustainedUnit" class="unit">/ — attempts</span></div>
+      <div class="bar"><div id="sustainedFill" class="fill"></div><div id="sustainedMarker" class="marker"></div></div>
+      <div class="details"><span>Remaining</span><span id="sustainedRemaining">—</span><span>Current delay</span><span id="sustainedDelay">—</span><span>Oldest expires</span><span id="sustainedRecovery">—</span><span>Policy warning</span><span id="sustainedWarn">—</span></div>
+    </article>
 
-      <div class="chart-container" id="chartWrapper">
-        <div id="splitViewContainer" class="split-view-container">
-          <div class="split-chart-pane">
-            <div class="split-chart-header">
-              <div class="split-chart-title">
-                <span class="split-chart-tag" style="color: var(--cyan);">◀ TURNS</span>
-                <span class="split-chart-desc">Rolling 10m Velocity · Leaky Bucket Burst Horizon</span>
-              </div>
-              <span id="splitTurnsCeiling" class="split-chart-axis-info">Left Axis: 0-40</span>
-            </div>
-            <div class="split-svg-wrap">
-              <svg class="chart-svg" id="chartSvgTurns" preserveAspectRatio="none" viewBox="0 0 1000 150"></svg>
-            </div>
-          </div>
-          <div class="split-chart-pane">
-            <div class="split-chart-header">
-              <div class="split-chart-title">
-                <span class="split-chart-tag" style="color: var(--amber);">◀ FRESH SESSIONS</span>
-                <span class="split-chart-desc">Turn 0 Handshake Rate · New Session Stagger Rate</span>
-              </div>
-              <span id="splitSessionsCeiling" class="split-chart-axis-info">Left Axis: 0-20</span>
-            </div>
-            <div class="split-svg-wrap">
-              <svg class="chart-svg" id="chartSvgSessions" preserveAspectRatio="none" viewBox="0 0 1000 150"></svg>
-            </div>
-          </div>
-        </div>
+    <article class="card">
+      <div class="card-head"><span class="card-title">Burst Turns · 10m</span><span id="burstBadge" class="badge neutral">—</span></div>
+      <div class="value-row"><span id="burstValue" class="value">—</span><span id="burstUnit" class="unit">/ — attempts</span></div>
+      <div class="bar"><div id="burstFill" class="fill"></div><div id="burstMarker" class="marker"></div></div>
+      <div class="details"><span>Remaining</span><span id="burstRemaining">—</span><span>Current delay</span><span id="burstDelay">—</span><span>Oldest expires</span><span id="burstRecovery">—</span><span>Soft pacing</span><span id="burstSoft">—</span></div>
+    </article>
 
-        <div id="combinedViewContainer" class="combined-view-container" style="display: none;">
-          <svg class="chart-svg" id="chartSvg" preserveAspectRatio="none" viewBox="0 0 1000 240"></svg>
-        </div>
+    <article class="card">
+      <div class="card-head"><span class="card-title">Fresh-Session Capacity</span><span id="sessionBadge" class="badge neutral">—</span></div>
+      <div class="value-row"><span id="sessionValue" class="value">—</span><span id="sessionUnit" class="unit">/ — tokens</span></div>
+      <div class="bar"><div id="sessionFill" class="fill" style="background:var(--amber)"></div></div>
+      <div class="details"><span>Fresh sessions</span><span id="sessionWindows">—</span><span>Next refill</span><span id="sessionRefill">—</span><span>Next eligible</span><span id="sessionEligible">—</span><span>Session delay</span><span id="sessionDelay">—</span></div>
+    </article>
 
-        <div class="chart-tooltip" id="chartTooltip"></div>
-      </div>
+    <article class="card">
+      <div class="card-head"><span class="card-title">Upstream Circuit Breaker</span><span id="circuitBadge" class="badge neutral">—</span></div>
+      <div class="value-row"><span id="circuitValue" class="value">—</span><span id="circuitUnit" class="unit">upstream</span></div>
+      <div class="bar"><div id="circuitFill" class="fill" style="background:var(--purple)"></div></div>
+      <div class="details"><span>Reason</span><span id="circuitReason">—</span><span>Recovery</span><span id="circuitRecovery">—</span><span>Last throttle</span><span id="lastThrottle">—</span><span>Lifetime events</span><span id="throttleCount">—</span></div>
+    </article>
 
-      <div class="chart-legend">
-        <div class="legend-item">
-          <div class="legend-color" style="background: var(--cyan);"></div>
-          <span id="legendTurnsLabel">Turns Filled Area (Left Axis: 0-40)</span>
-        </div>
-        <div class="legend-item">
-          <div class="legend-color" style="background: var(--amber);"></div>
-          <span id="legendSessionsLabel">New Sessions (Turn 0) · Right Axis: 0-20</span>
-        </div>
-        <div class="legend-item">
-          <div class="legend-color" style="background: var(--purple);"></div>
-          <span>⚡ Upstream Throttle (PerScenario / PerUser)</span>
-        </div>
-        <div class="legend-item">
-          <div class="legend-color" style="background: rgba(16, 185, 129, 0.25);"></div>
-          <span>Safe Zone</span>
-        </div>
-        <div class="legend-item">
-          <div class="legend-color" style="background: rgba(245, 158, 11, 0.25);"></div>
-          <span>Guarded Zone</span>
-        </div>
-        <div class="legend-item">
-          <div class="legend-color" style="background: rgba(244, 63, 94, 0.25);"></div>
-          <span>Danger Zone</span>
-        </div>
-      </div>
-    </div>
+    <article class="card">
+      <div class="card-head"><span class="card-title">Next Turn / Queue</span><span id="queueBadge" class="badge neutral">—</span></div>
+      <div class="value-row"><span id="queueValue" class="value">—</span><span class="unit">next dispatch</span></div>
+      <div class="details"><span>Delay source</span><span id="queueCause">—</span><span>Queued turns</span><span id="queueDepth">—</span><span>Priority retries</span><span id="queueRetries">—</span><span>Oldest waiting</span><span id="queueOldest">—</span></div>
+    </article>
 
-    <!-- Fleet Session Directory -->
-    <div class="section-card">
-      <div class="section-header">
-        <div class="section-title">
-          <span>Fleet Session Directory</span>
-          <span id="activeSessionsCount" class="badge badge-slate">0 Active</span>
-        </div>
-        <div style="font-size: 0.775rem; color: var(--text-dim);">
-          In-Memory Conversations &amp; Turns Quota
-        </div>
-      </div>
+    <article class="card">
+      <div class="card-head"><span class="card-title">Request Consumption · 60m</span><span class="badge info">Factual</span></div>
+      <div class="value-row"><span id="consumptionValue" class="value">—</span><span id="consumptionUnit" class="unit">upstream attempts</span></div>
+      <div class="details"><span>Client requests</span><span id="clientRequests">—</span><span>Internal retries</span><span id="retryAttempts">—</span><span>Reconnects</span><span id="reconnectAttempts">—</span><span>Disengaged recovery</span><span id="disengagedAttempts">—</span></div>
+    </article>
 
-      <div class="table-container">
-        <table>
-          <thead>
-            <tr>
-              <th>Conversation / Session ID</th>
-              <th>Turn Meter</th>
-              <th>Idle Time</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody id="sessionsTableBody">
-            <tr>
-              <td colspan="4">
-                <div class="empty-state">
-                  <svg viewBox="0 0 24 24" fill="none" stroke-width="1.5">
-                    <circle cx="12" cy="12" r="10"></circle>
-                    <line x1="12" y1="8" x2="12" y2="12"></line>
-                    <line x1="12" y1="16" x2="12.01" y2="16"></line>
-                  </svg>
-                  <p>No active conversations in memory. Sessions appear when agent requests arrive.</p>
-                </div>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
+    <article class="card">
+      <div class="card-head"><span class="card-title">Current Throughput</span><span id="throughputBadge" class="badge neutral">—</span></div>
+      <div class="value-row"><span id="throughputValue" class="value">—</span><span class="unit">attempts / hour</span></div>
+      <div class="details"><span>Last 10 minutes</span><span id="throughput10">—</span><span>Last 60 minutes</span><span id="throughput60">—</span><span>Capacity used</span><span id="throughputUsed">—</span><span>Flow state</span><span id="flowState">—</span></div>
+    </article>
 
-    <!-- Collapsible System Primer & Knowledge Base -->
-    <div class="section-card">
-      <div class="section-header">
-        <div class="section-title">
-          <span>System Primer &amp; Architectural Knowledge Base</span>
-        </div>
-        <div style="font-size: 0.775rem; color: var(--text-dim);">
-          Operating Principles &amp; Rate-Limiting Mechanics
-        </div>
-      </div>
-
-      <div class="accordion-group">
-        <!-- Section 1 -->
-        <div class="accordion-item">
-          <button class="accordion-toggle" type="button">
-            <span>What is the difference between a "Session" and a "Turn"?</span>
-            <svg class="accordion-chevron" viewBox="0 0 24 24" fill="none" stroke-width="2">
-              <polyline points="6 9 12 15 18 9"></polyline>
-            </svg>
-          </button>
-          <div class="accordion-content">
-            <p>A <strong>Session</strong> represents a distinct conversation thread with Microsoft 365 Copilot Studio. It maintains stateful conversation context in upstream data stores. A <strong>Turn</strong> is an individual prompt-and-response round trip (such as an agent executing a tool call) within an established conversation.</p>
-            <p>While a single session can comfortably sustain hundreds of turns (up to <span class="highlight-param cfg-max-turns">—</span> user messages), opening fresh sessions consumes upstream thread creation budget. High-velocity subagent spawning burns threads quickly, whereas deep multiturn conversations in existing sessions are cheap.</p>
-          </div>
-        </div>
-
-        <!-- Section 2 -->
-        <div class="accordion-item">
-          <button class="accordion-toggle" type="button">
-            <span>What are Microsoft's two distinct throttling horizons (Thread Creation vs Turn Volume)?</span>
-            <svg class="accordion-chevron" viewBox="0 0 24 24" fill="none" stroke-width="2">
-              <polyline points="6 9 12 15 18 9"></polyline>
-            </svg>
-          </button>
-          <div class="accordion-content">
-            <p>Empirical reverse engineering reveals that Microsoft enforces rate limits across two distinct operational horizons rather than raw prompt tokens:</p>
-            <p>1. <strong>Thread Creation Rate Limit (<span class="highlight-param">PerScenarioThrottled</span>):</strong> Tracks <em>conversations started per unit time</em>. Tripping it signals explicit <span class="highlight-param">PerScenarioThrottled</span> completion frames when fresh thread creation exceeds roughly 15–20 conversations per 10 minutes. A single persistent session running dozens of tool turns rarely trips this limit, but rapid subagent spawning burns it immediately.</p>
-            <p>2. <strong>Turn Volume Limit (<span class="highlight-param">PerUserThrottled</span>):</strong> An <em>account-wide</em> turn-volume ceiling shared across all models. Its exact value is not pinned: a 2026-10 campaign completed 151 turns (~120/hr) per model for 75 min with no throttle, while a separate smoke tripped <span class="highlight-param">PerUserThrottled</span> at ~140 account turns/60m and blocked both Sonnet and GPT-5.6 (existing and fresh conversations). The local <span class="highlight-param cfg-sustained-max">—</span>-turn/60m cap below is therefore <strong>conservative local policy</strong>, not a confirmed Microsoft threshold (see hypotheses F35).</p>
-          </div>
-        </div>
-
-        <!-- Section 3 -->
-        <div class="accordion-item">
-          <button class="accordion-toggle" type="button">
-            <span>How does the Dual-Horizon Governor calculate elastic braking?</span>
-            <svg class="accordion-chevron" viewBox="0 0 24 24" fill="none" stroke-width="2">
-              <polyline points="6 9 12 15 18 9"></polyline>
-            </svg>
-          </button>
-          <div class="accordion-content">
-            <p>The Dual-Horizon Velocity Governor evaluates telemetry across two rolling horizons simultaneously: a 10-minute burst window (capped at <span class="highlight-param cfg-burst-max">—</span> turns with elastic braking starting at <span class="highlight-param cfg-burst-soft">—</span> turns) and a 60-minute sustained window (capped at <span class="highlight-param cfg-sustained-max">—</span> turns with warning at <span class="highlight-param cfg-sustained-warn">—</span> turns).</p>
-            <p>Requests pass through the <strong>Priority FIFO Turn Gatekeeper</strong>, which enforces strict single-file serialization with a minimum 1500ms wire pacing (<span class="highlight-param">M365_MIN_TURN_SPACING_MS = 1500</span>) to eliminate thundering-herd bursts. The gatekeeper re-evaluates live dual-horizon sliding window limits before dispatching each turn. Forcing retries (<span class="highlight-param">attempt &gt; 0</span>) receive head-of-queue priority so recovering turns execute without waiting behind newer requests.</p>
-            <p>When turn velocity enters the guarded zone, the proxy injects progressive micro-delays (elastic braking) into completion requests. This smoothly paces client agents, keeping request rates just below the proxy's conservative thresholds without failing the task.</p>
-          </div>
-        </div>
-
-        <!-- Section 4 -->
-        <div class="accordion-item">
-          <button class="accordion-toggle" type="button">
-            <span>What does the Session Stagger Queue do?</span>
-            <svg class="accordion-chevron" viewBox="0 0 24 24" fill="none" stroke-width="2">
-              <polyline points="6 9 12 15 18 9"></polyline>
-            </svg>
-          </button>
-          <div class="accordion-content">
-            <p>The Session Stagger Queue guards the initiation of brand-new conversations (<span class="highlight-param">turn === 0</span>). It enforces a minimum spacing of <span class="highlight-param cfg-spacing-sec">—</span>s between new session handshakes and maintains a token bucket capacity of <span class="highlight-param cfg-bucket-capacity">—</span> tokens refilling every <span class="highlight-param cfg-refill-sec">—</span>s.</p>
-            <p>This caps new thread creation to approximately 4 threads per minute. Subsequent turns (<span class="highlight-param">turn &gt; 0</span>) bypass the stagger queue entirely, ensuring ongoing agent loops execute at full interactive speed.</p>
-          </div>
-        </div>
-
-        <!-- Section 5 -->
-        <div class="accordion-item">
-          <button class="accordion-toggle" type="button">
-            <span>How does the Local Circuit Breaker protect the account?</span>
-            <svg class="accordion-chevron" viewBox="0 0 24 24" fill="none" stroke-width="2">
-              <polyline points="6 9 12 15 18 9"></polyline>
-            </svg>
-          </button>
-          <div class="accordion-content">
-            <p>When upstream rate limiting or consecutive empty responses are detected, the proxy arms a local circuit breaker shield with tailored cooldown periods:</p>
-            <p>• <strong>Thread Creation Throttle (<span class="highlight-param">PerScenarioThrottled</span>):</strong> Arms an 1800s (30-minute) cooldown by default (<span class="highlight-param">M365_THROTTLE_COOLDOWN_SEC</span>) to allow upstream scenario buckets to recharge.</p>
-            <p>• <strong>Account Turn Throttle (<span class="highlight-param">PerUserThrottled</span>):</strong> Arms a 1200s (20-minute) cooldown by default (<span class="highlight-param">M365_USER_THROTTLE_COOLDOWN_SEC</span>) to clear the rolling hourly turn quota.</p>
-            <p>During cooldown, the proxy locally intercepts requests and returns <span class="highlight-param">HTTP 429 Too Many Requests</span> with a client <span class="highlight-param">Retry-After: <span class="cfg-max-retry">—</span></span> header. <strong>Zero requests reach Microsoft during this window</strong>, allowing upstream limiters to recharge while client agents automatically pause and resume without crashing.</p>
-          </div>
-        </div>
-
-        <!-- Section 6 -->
-        <div class="accordion-item">
-          <button class="accordion-toggle" type="button">
-            <span>What is First-Pass Yield and why does the Wire Multiplier matter?</span>
-            <svg class="accordion-chevron" viewBox="0 0 24 24" fill="none" stroke-width="2">
-              <polyline points="6 9 12 15 18 9"></polyline>
-            </svg>
-          </button>
-          <div class="accordion-content">
-            <p>When an agent sends a request, the proxy attempts to execute it in 1 turn. However, if the upstream model confabulates that tools are unavailable or produces an empty response, the proxy transparently salvages the turn using forced continuation prompts.</p>
-            <p><strong>First-Pass Yield (FPY)</strong> measures the percentage of client requests that succeed on Attempt 0 without any retries. <strong>Salvaged turns</strong> succeed from the client's perspective but burn 2 or 3 upstream wire turns. The <strong>Wire Multiplier</strong> ($\frac{\text{wire turns}}{\text{client requests}}$) reveals this hidden multiplier, explaining why account turn quota may deplete faster than the number of user prompts sent.</p>
-          </div>
-        </div>
-      </div>
-    </div>
+    <article class="card">
+      <div class="card-head"><span class="card-title">Dispatch Delay · 60m</span><span id="delayBadge" class="badge neutral">—</span></div>
+      <div class="value-row"><span id="delayValue" class="value">—</span><span class="unit">p95 turn wait</span></div>
+      <div class="details"><span>Median</span><span id="delayP50">—</span><span>Maximum</span><span id="delayMax">—</span><span>Delayed turns</span><span id="delayedTurns">—</span><span>Session waits</span><span id="delayedSessions">—</span></div>
+    </article>
   </div>
 
-  <!-- Client-side Telemetry Engine -->
-  <script>
-    (function () {
-      let selectedRange = "1h";
-      let isFetching = false;
-      let cachedConfig = null;
-
-      // DOM Elements
-      const healthBadge = document.getElementById("healthBadge");
-      const clockDisplay = document.getElementById("clockDisplay");
-
-      const threadPrimary = document.getElementById("threadPrimary");
-      const threadSecondary = document.getElementById("threadSecondary");
-      const threadBar = document.getElementById("threadBar");
-      const threadWarnMarker = document.getElementById("threadWarnMarker");
-      const threadWarnFooter = document.getElementById("threadWarnFooter");
-      const threadStatusBadge = document.getElementById("threadStatusBadge");
-
-      const burstPrimary = document.getElementById("burstPrimary");
-      const burstSecondary = document.getElementById("burstSecondary");
-      const burstBar = document.getElementById("burstBar");
-      const burstSoftMarker = document.getElementById("burstSoftMarker");
-      const burstSoftFooter = document.getElementById("burstSoftFooter");
-      const burstStatusBadge = document.getElementById("burstStatusBadge");
-
-      const sustainedPrimary = document.getElementById("sustainedPrimary");
-      const sustainedSecondary = document.getElementById("sustainedSecondary");
-      const sustainedBar = document.getElementById("sustainedBar");
-      const sustainedWarnMarker = document.getElementById("sustainedWarnMarker");
-      const sustainedWarnFooter = document.getElementById("sustainedWarnFooter");
-      const sustainedStatusBadge = document.getElementById("sustainedStatusBadge");
-
-      const circuitBadge = document.getElementById("circuitBadge");
-      const queueDelayPrimary = document.getElementById("queueDelayPrimary");
-      const queueDelaySecondary = document.getElementById("queueDelaySecondary");
-      const queueBar = document.getElementById("queueBar");
-      const queueTokensFooter = document.getElementById("queueTokensFooter");
-      const cooldownFooter = document.getElementById("cooldownFooter");
-
-      const fpyPrimary = document.getElementById("fpyPrimary");
-      const wireMultiplierSecondary = document.getElementById("wireMultiplierSecondary");
-      const qualityStatusBadge = document.getElementById("qualityStatusBadge");
-      const qualityBar = document.getElementById("qualityBar");
-      const qualityBreakdownFooter = document.getElementById("qualityBreakdownFooter");
-      const qualityReqsFooter = document.getElementById("qualityReqsFooter");
-
-      const activeSessionsCount = document.getElementById("activeSessionsCount");
-      const sessionsTableBody = document.getElementById("sessionsTableBody");
-
-      const chartSvg = document.getElementById("chartSvg");
-      const chartSvgTurns = document.getElementById("chartSvgTurns");
-      const chartSvgSessions = document.getElementById("chartSvgSessions");
-      const chartTooltip = document.getElementById("chartTooltip");
-      const chartWrapper = document.getElementById("chartWrapper");
-      const splitViewContainer = document.getElementById("splitViewContainer");
-      const combinedViewContainer = document.getElementById("combinedViewContainer");
-      const viewSplitBtn = document.getElementById("viewSplitBtn");
-      const viewCombinedBtn = document.getElementById("viewCombinedBtn");
-
-      let lastMetricsData = null;
-      let viewMode = "split";
-      try {
-        const savedView = localStorage.getItem("proxy_dashboard_view_mode");
-        if (savedView === "combined" || savedView === "split") {
-          viewMode = savedView;
-        }
-      } catch (e) {}
-
-      function applyViewMode() {
-        if (viewMode === "split") {
-          if (viewSplitBtn) viewSplitBtn.classList.add("active");
-          if (viewCombinedBtn) viewCombinedBtn.classList.remove("active");
-          if (splitViewContainer) splitViewContainer.style.display = "flex";
-          if (combinedViewContainer) combinedViewContainer.style.display = "none";
-        } else {
-          if (viewSplitBtn) viewSplitBtn.classList.remove("active");
-          if (viewCombinedBtn) viewCombinedBtn.classList.add("active");
-          if (splitViewContainer) splitViewContainer.style.display = "none";
-          if (combinedViewContainer) combinedViewContainer.style.display = "block";
-        }
-      }
-
-      applyViewMode();
-
-      if (viewSplitBtn) {
-        viewSplitBtn.addEventListener("click", function () {
-          viewMode = "split";
-          try { localStorage.setItem("proxy_dashboard_view_mode", "split"); } catch (e) {}
-          applyViewMode();
-          if (lastMetricsData) renderSvgChart(lastMetricsData);
-        });
-      }
-      if (viewCombinedBtn) {
-        viewCombinedBtn.addEventListener("click", function () {
-          viewMode = "combined";
-          try { localStorage.setItem("proxy_dashboard_view_mode", "combined"); } catch (e) {}
-          applyViewMode();
-          if (lastMetricsData) renderSvgChart(lastMetricsData);
-        });
-      }
-
-      // Setup Accordion toggles
-      document.querySelectorAll(".accordion-toggle").forEach(function (btn) {
-        btn.addEventListener("click", function () {
-          const item = this.parentElement;
-          item.classList.toggle("open");
-        });
-      });
-
-      // Setup Range Selector buttons
-      document.querySelectorAll(".range-toggle button, .range-btn, [data-range]").forEach(function (btn) {
-        btn.addEventListener("click", function () {
-          document.querySelectorAll(".range-toggle button, .range-btn, [data-range]").forEach(function (b) { b.classList.remove("active"); });
-          this.classList.add("active");
-          selectedRange = this.getAttribute("data-range");
-          fetchMetrics();
-        });
-      });
-
-      // Clock update
-      function updateClock() {
-        const now = new Date();
-        const utcStr = now.toISOString().substring(11, 19) + " UTC";
-        const localStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-        clockDisplay.textContent = localStr + " (" + utcStr + ")";
-      }
-      setInterval(updateClock, 1000);
-      updateClock();
-
-      // Main metrics poll
-      async function fetchMetrics() {
-        if (isFetching) return;
-        isFetching = true;
-        try {
-          const res = await fetch("/api/metrics?range=" + encodeURIComponent(selectedRange));
-          if (!res.ok) throw new Error("HTTP " + res.status);
-          const data = await res.json();
-          renderDashboard(data);
-        } catch (err) {
-          // Subtle offline indicator
-          healthBadge.className = "health-pill health-warning";
-          healthBadge.textContent = "OFFLINE";
-        } finally {
-          isFetching = false;
-        }
-      }
-
-      function updateSystemPrimerConstants(cfg) {
-        if (cachedConfig && cachedConfig.burstMaxTurns === cfg.burstMaxTurns && cachedConfig.sustainedMaxTurns === cfg.sustainedMaxTurns) {
-          return;
-        }
-        cachedConfig = cfg;
-
-        const maxTurnsEls = document.querySelectorAll(".cfg-max-turns");
-        maxTurnsEls.forEach(function (el) { el.textContent = String(cfg.maxNumUserMessagesInConversation); });
-
-        const burstMaxEls = document.querySelectorAll(".cfg-burst-max");
-        burstMaxEls.forEach(function (el) { el.textContent = String(cfg.burstMaxTurns); });
-
-        const burstSoftEls = document.querySelectorAll(".cfg-burst-soft");
-        burstSoftEls.forEach(function (el) { el.textContent = String(cfg.burstSoftTurns); });
-
-        const sustainedMaxEls = document.querySelectorAll(".cfg-sustained-max");
-        sustainedMaxEls.forEach(function (el) { el.textContent = String(cfg.sustainedMaxTurns); });
-
-        const sustainedWarnEls = document.querySelectorAll(".cfg-sustained-warn");
-        sustainedWarnEls.forEach(function (el) { el.textContent = String(cfg.sustainedWarnTurns); });
-
-        const spacingSecEls = document.querySelectorAll(".cfg-spacing-sec");
-        const spacingSec = (cfg.newSessionSpacingMs || cfg.minSpacingMs || 0) / 1000;
-        spacingSecEls.forEach(function (el) { el.textContent = String(spacingSec); });
-
-        const bucketCapacityEls = document.querySelectorAll(".cfg-bucket-capacity");
-        bucketCapacityEls.forEach(function (el) { el.textContent = String(cfg.sessionBucketCapacity); });
-
-        const refillSecEls = document.querySelectorAll(".cfg-refill-sec");
-        const refillSec = (cfg.sessionRefillMs || 0) / 1000;
-        refillSecEls.forEach(function (el) { el.textContent = String(refillSec); });
-
-        const cooldownSecEls = document.querySelectorAll(".cfg-throttle-cooldown-sec");
-        cooldownSecEls.forEach(function (el) { el.textContent = String(cfg.throttleCooldownSec); });
-
-        const cooldownMinEls = document.querySelectorAll(".cfg-throttle-cooldown-min");
-        const cooldownMin = Math.round((cfg.throttleCooldownSec || 0) / 60);
-        cooldownMinEls.forEach(function (el) { el.textContent = String(cooldownMin); });
-
-        const maxRetryEls = document.querySelectorAll(".cfg-max-retry");
-        maxRetryEls.forEach(function (el) { el.textContent = String(cfg.maxRetryAfterSec); });
-      }
-
-      function renderDashboard(data) {
-        const cfg = data.config;
-        if (!cfg) return;
-
-        updateSystemPrimerConstants(cfg);
-
-        // 1. Health Status
-        const health = (data.health || "healthy").toLowerCase();
-        healthBadge.className = "health-pill health-" + health;
-        healthBadge.textContent = health.toUpperCase();
-
-        // 2. Thread Creation Rate (10m)
-        const freshSessions = (data.governor && data.governor.tenMinute && data.governor.tenMinute.freshSessions) || 0;
-        const sessionDangerThreshold = cfg.sessionDangerThreshold10m || cfg.sessionDanger10m;
-        const sessionWarnThreshold = cfg.sessionWarnThreshold10m || cfg.sessionWarn10m;
-
-        threadPrimary.textContent = String(freshSessions);
-        threadSecondary.textContent = "/ " + sessionDangerThreshold + " max";
-        threadWarnFooter.textContent = "Warn: " + sessionWarnThreshold;
-
-        const threadRatio = Math.min(1, sessionDangerThreshold > 0 ? freshSessions / sessionDangerThreshold : 0);
-        threadBar.style.width = (threadRatio * 100) + "%";
-
-        if (sessionDangerThreshold > 0) {
-          const warnMarkerPercent = (sessionWarnThreshold / sessionDangerThreshold) * 100;
-          threadWarnMarker.style.left = warnMarkerPercent + "%";
-        }
-
-        if (freshSessions >= sessionDangerThreshold) {
-          threadBar.style.background = "var(--rose)";
-          threadStatusBadge.className = "badge badge-rose";
-          threadStatusBadge.textContent = "Danger";
-        } else if (freshSessions >= sessionWarnThreshold) {
-          threadBar.style.background = "var(--amber)";
-          threadStatusBadge.className = "badge badge-amber";
-          threadStatusBadge.textContent = "Guarded";
-        } else {
-          threadBar.style.background = "var(--emerald)";
-          threadStatusBadge.className = "badge badge-emerald";
-          threadStatusBadge.textContent = "Safe";
-        }
-
-        // 3. Turn Burst (10m)
-        const burstTurns = (data.governor && data.governor.tenMinute && data.governor.tenMinute.turns) || 0;
-        const burstMax = cfg.burstMaxTurns;
-        const burstSoft = cfg.burstSoftTurns;
-
-        burstPrimary.textContent = String(burstTurns);
-        burstSecondary.textContent = "/ " + burstMax + " max";
-        burstSoftFooter.textContent = "Soft: " + burstSoft;
-
-        const burstRatio = Math.min(1, burstMax > 0 ? burstTurns / burstMax : 0);
-        burstBar.style.width = (burstRatio * 100) + "%";
-
-        if (burstMax > 0) {
-          const softMarkerPercent = (burstSoft / burstMax) * 100;
-          burstSoftMarker.style.left = softMarkerPercent + "%";
-        }
-
-        if (burstTurns >= burstMax) {
-          burstBar.style.background = "var(--rose)";
-          burstStatusBadge.className = "badge badge-rose";
-          burstStatusBadge.textContent = "Danger";
-        } else if (burstTurns >= burstSoft) {
-          burstBar.style.background = "var(--amber)";
-          burstStatusBadge.className = "badge badge-amber";
-          burstStatusBadge.textContent = "Guarded";
-        } else {
-          burstBar.style.background = "var(--cyan)";
-          burstStatusBadge.className = "badge badge-emerald";
-          burstStatusBadge.textContent = "Safe";
-        }
-
-        // 4. Sustained Turns (60m)
-        const sustainedTurns = (data.governor && data.governor.sixtyMinute && data.governor.sixtyMinute.turns) || 0;
-        const sustainedMax = cfg.sustainedMaxTurns;
-        const sustainedWarn = cfg.sustainedWarnTurns;
-
-        sustainedPrimary.textContent = String(sustainedTurns);
-        sustainedSecondary.textContent = "/ " + sustainedMax + " max";
-        sustainedWarnFooter.textContent = "Warn: " + sustainedWarn;
-
-        const sustainedRatio = Math.min(1, sustainedMax > 0 ? sustainedTurns / sustainedMax : 0);
-        sustainedBar.style.width = (sustainedRatio * 100) + "%";
-
-        if (sustainedMax > 0) {
-          const sustainedMarkerPercent = (sustainedWarn / sustainedMax) * 100;
-          sustainedWarnMarker.style.left = sustainedMarkerPercent + "%";
-        }
-
-        if (sustainedTurns >= sustainedMax) {
-          sustainedBar.style.background = "var(--rose)";
-          sustainedStatusBadge.className = "badge badge-rose";
-          sustainedStatusBadge.textContent = "Danger";
-        } else if (sustainedTurns >= sustainedWarn) {
-          sustainedBar.style.background = "var(--amber)";
-          sustainedStatusBadge.className = "badge badge-amber";
-          sustainedStatusBadge.textContent = "Guarded";
-        } else {
-          sustainedBar.style.background = "var(--cyan)";
-          sustainedStatusBadge.className = "badge badge-emerald";
-          sustainedStatusBadge.textContent = "Safe";
-        }
-
-        // 5. Circuit Shield & Gatekeeper
-        const isArmed = data.circuitBreaker && data.circuitBreaker.isArmed;
-        const remainingCooldown = (data.circuitBreaker && data.circuitBreaker.remainingCooldownSec) || 0;
-        const throttleReason = (data.circuitBreaker && data.circuitBreaker.reason) || "";
-        const tQueue = data.turnQueue || { depth: 0, priorityCount: 0, minSpacingMs: 1500, isProcessing: false };
-        const queueDelaySec = ((data.staggerQueue && data.staggerQueue.delayMs) || 0) / 1000;
-        const sessionTokens = (data.staggerQueue && data.staggerQueue.sessionTokens) != null ? data.staggerQueue.sessionTokens : 0;
-        const tokenCapacity = (data.staggerQueue && data.staggerQueue.tokenCapacity) != null ? data.staggerQueue.tokenCapacity : cfg.sessionBucketCapacity;
-
-        if (isArmed) {
-          circuitBadge.className = "badge badge-rose";
-          circuitBadge.textContent = throttleReason ? "ARMED (" + throttleReason + ")" : "ARMED";
-          queueDelayPrimary.textContent = remainingCooldown + "s";
-          if (queueDelaySecondary) queueDelaySecondary.textContent = "cooldown remaining";
-          queueBar.style.background = "var(--rose)";
-          const activeCooldownSec = throttleReason === "PerUserThrottled" ? (cfg.userThrottleCooldownSec || 1200) : (cfg.throttleCooldownSec || 1800);
-          const cooldownRatio = Math.min(1, activeCooldownSec > 0 ? remainingCooldown / activeCooldownSec : 1);
-          queueBar.style.width = (cooldownRatio * 100) + "%";
-          queueTokensFooter.textContent = "Shield: Active (" + (throttleReason || "Throttled") + ")";
-          cooldownFooter.textContent = "Queued: " + tQueue.depth + " turns";
-          cooldownFooter.style.color = "var(--rose)";
-        } else {
-          circuitBadge.className = "badge badge-emerald";
-          circuitBadge.textContent = "DISARMED";
-          queueDelayPrimary.textContent = String(tQueue.depth);
-          if (queueDelaySecondary) {
-            queueDelaySecondary.textContent = tQueue.priorityCount > 0
-              ? "queued (" + tQueue.priorityCount + " retries)"
-              : "queued turns (" + (tQueue.minSpacingMs / 1000).toFixed(1) + "s pacing)";
-          }
-          queueBar.style.background = "var(--purple)";
-          const queueFillRatio = Math.min(1, tQueue.depth > 0 ? tQueue.depth / 5 : (data.staggerQueue.delayMs || 0) / 15000);
-          queueBar.style.width = (queueFillRatio * 100) + "%";
-          queueTokensFooter.textContent = "Tokens: " + sessionTokens + " / " + tokenCapacity;
-          cooldownFooter.textContent = "Cooldowns: 30m / 20m";
-          cooldownFooter.style.color = "var(--text-dim)";
-        }
-
-        // 6. Turn Quality & Yield (60m)
-        const quality = data.quality || {
-          clientRequests: 0,
-          wireTurns: 0,
-          cleanTurns: 0,
-          salvagedTurns: 0,
-          refusedTurns: 0,
-          firstPassYieldPercent: 100,
-          salvageRatePercent: 0,
-          refusalRatePercent: 0,
-          wireMultiplier: 1.0,
-        };
-
-        if (fpyPrimary) fpyPrimary.textContent = quality.firstPassYieldPercent.toFixed(0) + "%";
-        if (wireMultiplierSecondary) wireMultiplierSecondary.textContent = "· " + quality.wireMultiplier.toFixed(2) + "x wire";
-
-        if (qualityBar) {
-          qualityBar.style.width = Math.max(5, quality.firstPassYieldPercent) + "%";
-          if (quality.firstPassYieldPercent >= 85) {
-            qualityBar.style.background = "var(--emerald)";
-            if (qualityStatusBadge) {
-              qualityStatusBadge.className = "badge badge-emerald";
-              qualityStatusBadge.textContent = "Optimal";
-            }
-          } else if (quality.firstPassYieldPercent >= 70) {
-            qualityBar.style.background = "var(--amber)";
-            if (qualityStatusBadge) {
-              qualityStatusBadge.className = "badge badge-amber";
-              qualityStatusBadge.textContent = "Guarded";
-            }
-          } else {
-            qualityBar.style.background = "var(--rose)";
-            if (qualityStatusBadge) {
-              qualityStatusBadge.className = "badge badge-rose";
-              qualityStatusBadge.textContent = "Degraded";
-            }
-          }
-        }
-
-        if (qualityBreakdownFooter) {
-          qualityBreakdownFooter.textContent =
-            "Clean: " + quality.cleanTurns + " · Salvaged: " + quality.salvagedTurns + " · Refused: " + quality.refusedTurns;
-        }
-        if (qualityReqsFooter) {
-          qualityReqsFooter.textContent = quality.clientRequests + " reqs (" + quality.wireTurns + " wire)";
-        }
-
-        // 7. Active Sessions Table
-        const sessions = data.activeSessions || [];
-        activeSessionsCount.textContent = sessions.length + " Active";
-
-        if (sessions.length === 0) {
-          sessionsTableBody.innerHTML = '<tr><td colspan="4"><div class="empty-state">' +
-            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>' +
-            '<p>No active conversations in memory. Sessions appear when agent requests arrive.</p>' +
-            '</div></td></tr>';
-        } else {
-          let rowsHtml = "";
-          for (let i = 0; i < sessions.length; i++) {
-            const s = sessions[i];
-            const maxTurns = s.maxTurns || cfg.maxNumUserMessagesInConversation;
-            const turnPercent = Math.min(100, maxTurns > 0 ? (s.turnCount / maxTurns) * 100 : 0);
-
-            let statusBadgeClass = "badge-slate";
-            let statusText = s.status || "idle";
-            if (s.status === "streaming") statusBadgeClass = "badge-cyan";
-            else if (s.status === "governor") statusBadgeClass = "badge-amber";
-            else if (s.status === "stagger") statusBadgeClass = "badge-purple";
-
-            // Relative idle time formatting
-            const idleSec = s.idleSeconds || 0;
-            let idleStr = idleSec + "s ago";
-            if (idleSec >= 60) {
-              const idleMin = Math.floor(idleSec / 60);
-              idleStr = idleMin + "m ago";
-            }
-
-            const cid = s.conversationId || s.sessionId || "—";
-            const shortId = cid.length > 20 ? cid.substring(0, 10) + "..." + cid.substring(cid.length - 8) : cid;
-
-            rowsHtml += '<tr>' +
-              '<td>' +
-                '<div class="conv-id-cell">' +
-                  '<span title="' + escapeHtml(cid) + '">' + escapeHtml(shortId) + '</span>' +
-                  '<button class="copy-btn" data-copy="' + escapeHtml(cid) + '" title="Copy conversation ID">' +
-                    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>' +
-                  '</button>' +
-                '</div>' +
-              '</td>' +
-              '<td>' +
-                '<div class="table-meter">' +
-                  '<div style="display:flex; justify-content:space-between; font-size:0.75rem; font-family:var(--font-mono);">' +
-                    '<span>' + s.turnCount + '</span><span style="color:var(--text-dim);">/ ' + maxTurns + '</span>' +
-                  '</div>' +
-                  '<div class="table-meter-bar">' +
-                    '<div class="table-meter-fill" style="width:' + turnPercent + '%;"></div>' +
-                  '</div>' +
-                '</div>' +
-              '</td>' +
-              '<td class="mono" style="color:var(--text-muted); font-size:0.8rem;">' + idleStr + '</td>' +
-              '<td><span class="badge ' + statusBadgeClass + '">' + escapeHtml(statusText) + '</span></td>' +
-            '</tr>';
-          }
-          sessionsTableBody.innerHTML = rowsHtml;
-
-          // Attach copy event handlers
-          sessionsTableBody.querySelectorAll(".copy-btn").forEach(function (btn) {
-            btn.addEventListener("click", function () {
-              const text = this.getAttribute("data-copy");
-              if (navigator.clipboard) {
-                navigator.clipboard.writeText(text);
-                const originalColor = this.style.color;
-                this.style.color = "var(--emerald)";
-                const self = this;
-                setTimeout(function () { self.style.color = originalColor; }, 1200);
-              }
-            });
-          });
-        }
-
-        lastMetricsData = data;
-        // 7. Render Pure SVG Chart
-        renderSvgChart(data);
-      }
-
-      function escapeHtml(str) {
-        return String(str)
-          .replace(/&/g, '&amp;')
-          .replace(/</g, '&lt;')
-          .replace(/>/g, '&gt;')
-          .replace(/"/g, '&quot;')
-          .replace(/'/g, '&#39;');
-      }
-
-      function renderSvgChart(data) {
-        const history = data.history;
-        const points = (history && history.points) || [];
-        const cfg = data.config;
-        if (!points.length || !cfg) return;
-
-        // 1. Compute rolling 10m window metrics (sum of up to 10 previous 1-minute points)
-        for (let i = 0; i < points.length; i++) {
-          let rTurns = 0;
-          let rSessions = 0;
-          for (let j = Math.max(0, i - 9); j <= i; j++) {
-            rTurns += points[j].turns || 0;
-            rSessions += points[j].newSessions || 0;
-          }
-          points[i].rolling10mTurns = rTurns;
-          points[i].rolling10mSessions = rSessions;
-        }
-
-        // Left Axis: Turns (Cyan)
-        const burstMax = cfg.burstMaxTurns || 35;
-        const burstSoft = cfg.burstSoftTurns || Math.max(1, burstMax - 5); // 30
-        const pinnedMaxTurns = Math.max(burstMax + 5, 40);
-        let maxObservedTurns = 0;
-        for (let i = 0; i < points.length; i++) {
-          if (points[i].rolling10mTurns > maxObservedTurns) maxObservedTurns = points[i].rolling10mTurns;
-          if ((points[i].turns || 0) > maxObservedTurns) maxObservedTurns = points[i].turns;
-        }
-        const maxTurnsY = Math.max(pinnedMaxTurns, Math.ceil(maxObservedTurns * 1.1));
-
-        // Right Axis: Fresh Sessions (Amber)
-        const dangerSessions = cfg.sessionDangerThreshold10m || cfg.sessionDanger10m || 15;
-        const warnSessions = cfg.sessionWarnThreshold10m || cfg.sessionWarn10m || 10;
-        const pinnedMaxSessions = Math.max(dangerSessions + 5, 20);
-        let maxObservedSessions = 0;
-        for (let i = 0; i < points.length; i++) {
-          if (points[i].rolling10mSessions > maxObservedSessions) maxObservedSessions = points[i].rolling10mSessions;
-          if ((points[i].newSessions || 0) > maxObservedSessions) maxObservedSessions = points[i].newSessions;
-        }
-        const maxSessionsY = Math.max(pinnedMaxSessions, Math.ceil(maxObservedSessions * 1.1));
-
-        // Dynamic legend & subtitle labels
-        const legendTurns = document.getElementById("legendTurnsLabel");
-        if (legendTurns) legendTurns.textContent = "Turns Filled Area (Left Axis: 0-" + maxTurnsY + ")";
-        const legendSessions = document.getElementById("legendSessionsLabel");
-        if (legendSessions) legendSessions.textContent = "New Sessions (Turn 0) · Right Axis: 0-" + maxSessionsY + ")";
-        const splitTurnsCeil = document.getElementById("splitTurnsCeiling");
-        if (splitTurnsCeil) splitTurnsCeil.textContent = "Left Axis: 0-" + maxTurnsY + " · Leaky Bucket Burst Ceiling";
-        const splitSessionsCeil = document.getElementById("splitSessionsCeiling");
-        if (splitSessionsCeil) splitSessionsCeil.textContent = "Left Axis: 0-" + maxSessionsY + " · Handshake Rate Limit";
-
-        // Zone Badge Helper: Positions badges strictly INSIDE the plot area with safe margin and dark pill
-        function renderZoneBadge(x, y, text, color) {
-          const charCount = text.length;
-          const pillW = charCount * 6.2 + 12;
-          const pillH = 16;
-          const pillX = x - pillW;
-          const pillY = y - 11;
-          return '<g class="zone-badge" pointer-events="none">' +
-            '<rect x="' + pillX + '" y="' + pillY + '" width="' + pillW + '" height="' + pillH + '" rx="3" fill="rgba(15, 23, 42, 0.72)" stroke="' + color + '" stroke-opacity="0.25" stroke-width="0.5" />' +
-            '<text x="' + (x - 6) + '" y="' + y + '" fill="' + color + '" font-size="9" font-family="monospace" font-weight="600" text-anchor="end">' + text + '</text>' +
-          '</g>';
-        }
-
-        // Shared Tooltip HTML generator
-        function getTooltipHtml(p) {
-          const date = new Date(p.timestamp);
-          const timeUtc = date.toISOString().substring(11, 16) + " UTC";
-          const timeLocal = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-          const delaySec = (p.maxPacingDelayMs > 0 ? (p.maxPacingDelayMs / 1000).toFixed(1) : "0.0") + "s";
-
-          const rTurns = p.rolling10mTurns || 0;
-          const rSessions = p.rolling10mSessions || 0;
-          const iTurns = p.turns || 0;
-          const iSessions = p.newSessions || 0;
-
-          let statusText = "Safe";
-          let statusColor = "var(--emerald)";
-          if (rTurns >= burstMax || rSessions >= dangerSessions) {
-            statusText = "Danger";
-            statusColor = "var(--rose)";
-          } else if (rTurns >= burstSoft || rSessions >= warnSessions) {
-            statusText = "Guarded";
-            statusColor = "var(--amber)";
-          }
-
-          return '<div style="font-weight:700; color:var(--text-main); margin-bottom:6px; font-size:0.8rem;">' + timeLocal + ' (' + timeUtc + ')</div>' +
-            '<div style="display:flex; justify-content:space-between; gap:12px; margin-bottom:2px;"><span style="color:var(--cyan);">Rolling 10m Turns:</span><strong>' + rTurns + ' / ' + burstMax + ' max</strong></div>' +
-            '<div style="display:flex; justify-content:space-between; gap:12px; margin-bottom:2px;"><span style="color:var(--amber);">Rolling 10m Sessions:</span><strong>' + rSessions + ' / ' + dangerSessions + ' danger</strong></div>' +
-            '<div style="font-size:0.72rem; color:var(--text-dim); margin-bottom:4px; padding-left:2px;">(Discrete 1m Delta: +' + iTurns + ' turns, +' + iSessions + ' sessions)</div>' +
-            '<div style="display:flex; justify-content:space-between; gap:12px; margin-bottom:2px;"><span style="color:var(--text-dim);">Pacing Delay:</span><strong>' + delaySec + '</strong></div>' +
-            (p.throttles > 0 ? '<div style="display:flex; justify-content:space-between; gap:12px; color:var(--purple); margin-bottom:2px;"><span>Throttles:</span><strong>' + p.throttles + ' ⚡</strong></div>' : '') +
-            '<div style="display:flex; justify-content:space-between; gap:12px; margin-top:4px; padding-top:4px; border-top:1px solid rgba(255,255,255,0.1);"><span>Status:</span><strong style="color:' + statusColor + ';">' + statusText + '</strong></div>';
-        }
-
-        function positionTooltip(clientX, clientY) {
-          const wrapperRect = chartWrapper.getBoundingClientRect();
-          const tooltipW = chartTooltip.offsetWidth || 240;
-          let leftPx = (clientX - wrapperRect.left) + 14;
-          if (leftPx + tooltipW > wrapperRect.width - 10) {
-            leftPx = (clientX - wrapperRect.left) - tooltipW - 14;
-          }
-          chartTooltip.style.left = Math.max(10, leftPx) + "px";
-
-          if (clientY && wrapperRect) {
-            let topPx = (clientY - wrapperRect.top) - 40;
-            if (topPx < 10) topPx = 15;
-            if (topPx + 160 > wrapperRect.height) topPx = Math.max(10, wrapperRect.height - 170);
-            chartTooltip.style.top = topPx + "px";
-          } else {
-            chartTooltip.style.top = "15px";
-          }
-        }
-
-        /* -------------------------------------------------------------
-         * PART A: SPLIT VIEW (Stacked Synchronized Charts)
-         * ----------------------------------------------------------- */
-        const splitSvgW = 1000;
-        const splitSvgH = 150;
-        const splitPadL = 56;
-        const splitPadR = 24;
-        const splitPadT = 16;
-        const splitPadB = 22;
-        const splitPlotW = splitSvgW - splitPadL - splitPadR;
-        const splitPlotH = splitSvgH - splitPadT - splitPadB;
-        const splitYZero = splitPadT + splitPlotH;
-
-        function getSplitX(index) {
-          if (points.length <= 1) return splitPadL;
-          return splitPadL + (index / (points.length - 1)) * splitPlotW;
-        }
-
-        function getYTurnSplit(val) {
-          const clamped = Math.min(val, maxTurnsY);
-          return splitPadT + splitPlotH - (clamped / maxTurnsY) * splitPlotH;
-        }
-
-        function getYSessionSplit(val) {
-          const clamped = Math.min(val, maxSessionsY);
-          return splitPadT + splitPlotH - (clamped / maxSessionsY) * splitPlotH;
-        }
-
-        // --- Split Top: Turns ---
-        let svgTurns = '<defs>' +
-          '<linearGradient id="areaGradTurns" x1="0" y1="0" x2="0" y2="1">' +
-            '<stop offset="0%" stop-color="#06b6d4" stop-opacity="0.38"/>' +
-            '<stop offset="100%" stop-color="#06b6d4" stop-opacity="0.02"/>' +
-          '</linearGradient>' +
-        '</defs>';
-
-        const yBurstSoftSplit = getYTurnSplit(burstSoft);
-        const yBurstMaxSplit = getYTurnSplit(burstMax);
-
-        // Risk bands
-        const safeHTurns = Math.max(0, splitYZero - yBurstSoftSplit);
-        svgTurns += '<rect x="' + splitPadL + '" y="' + yBurstSoftSplit + '" width="' + splitPlotW + '" height="' + safeHTurns + '" fill="rgba(16, 185, 129, 0.05)" />';
-        const guardedHTurns = Math.max(0, yBurstSoftSplit - yBurstMaxSplit);
-        svgTurns += '<rect x="' + splitPadL + '" y="' + yBurstMaxSplit + '" width="' + splitPlotW + '" height="' + guardedHTurns + '" fill="rgba(245, 158, 11, 0.07)" />';
-        const dangerHTurns = Math.max(0, yBurstMaxSplit - splitPadT);
-        svgTurns += '<rect x="' + splitPadL + '" y="' + splitPadT + '" width="' + splitPlotW + '" height="' + dangerHTurns + '" fill="rgba(244, 63, 94, 0.09)" />';
-
-        // Inside-plot Zone Badges
-        const badgeXSplit = splitPadL + splitPlotW - 12;
-        svgTurns += renderZoneBadge(badgeXSplit, Math.max(splitPadT + 12, splitPadT + dangerHTurns / 2 + 3.5), '🔴 DANGER (≥' + burstMax + ')', 'var(--rose)');
-        svgTurns += renderZoneBadge(badgeXSplit, yBurstMaxSplit + guardedHTurns / 2 + 3.5, '🟡 GUARDED (' + burstSoft + '-' + (burstMax - 1) + ')', 'var(--amber)');
-        svgTurns += renderZoneBadge(badgeXSplit, yBurstSoftSplit + safeHTurns / 2 + 3.5, '🟢 SAFE (0-' + (burstSoft - 1) + ')', 'var(--emerald)');
-
-        // Gridlines & Clean Numeric Ticks (Zero bleed)
-        const leftTicks = [0, 15, burstSoft, burstMax, maxTurnsY];
-        const uniqueLeftTicks = Array.from(new Set(leftTicks)).sort(function (a, b) { return a - b; });
-        for (let i = 0; i < uniqueLeftTicks.length; i++) {
-          const val = uniqueLeftTicks[i];
-          const y = getYTurnSplit(val);
-          svgTurns += '<line x1="' + splitPadL + '" y1="' + y + '" x2="' + (splitPadL + splitPlotW) + '" y2="' + y + '" stroke="rgba(35, 47, 69, 0.45)" stroke-dasharray="3,3" />';
-          let labelFill = "var(--text-dim)";
-          if (val === burstMax) labelFill = "var(--rose)";
-          else if (val === burstSoft) labelFill = "var(--amber)";
-          else if (val === maxTurnsY) labelFill = "var(--cyan)";
-          svgTurns += '<text x="' + (splitPadL - 8) + '" y="' + (y + 3.5) + '" fill="' + labelFill + '" font-size="10" font-family="monospace" text-anchor="end">' + val + '</text>';
-        }
-
-        // Curves
-        let pathDTurns = 'M ' + getSplitX(0) + ' ' + getYTurnSplit(points[0].rolling10mTurns || 0);
-        for (let i = 1; i < points.length; i++) {
-          pathDTurns += ' L ' + getSplitX(i) + ' ' + getYTurnSplit(points[i].rolling10mTurns || 0);
-        }
-        const areaDTurns = pathDTurns + ' L ' + getSplitX(points.length - 1) + ' ' + splitYZero + ' L ' + getSplitX(0) + ' ' + splitYZero + ' Z';
-        svgTurns += '<path d="' + areaDTurns + '" fill="url(#areaGradTurns)" />';
-        svgTurns += '<path d="' + pathDTurns + '" fill="none" stroke="var(--cyan)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />';
-
-        // Crosshair & Hover Dot
-        svgTurns += '<line id="crosshairTurn" x1="0" y1="' + splitPadT + '" x2="0" y2="' + splitYZero + '" stroke="#cbd5e1" stroke-width="1.2" stroke-dasharray="3,3" opacity="0" pointer-events="none" />';
-        svgTurns += '<circle id="dotTurn" cx="0" cy="0" r="4.5" fill="#ffffff" stroke="var(--cyan)" stroke-width="2.5" opacity="0" pointer-events="none" />';
-        svgTurns += '<rect id="overlayTurns" x="' + splitPadL + '" y="' + splitPadT + '" width="' + splitPlotW + '" height="' + splitPlotH + '" fill="transparent" pointer-events="all" style="cursor:crosshair;" />';
-
-        if (chartSvgTurns) chartSvgTurns.innerHTML = svgTurns;
-
-        // --- Split Bottom: Fresh Sessions ---
-        let svgSessions = '<defs>' +
-          '<linearGradient id="areaGradSessions" x1="0" y1="0" x2="0" y2="1">' +
-            '<stop offset="0%" stop-color="#f59e0b" stop-opacity="0.35"/>' +
-            '<stop offset="100%" stop-color="#f59e0b" stop-opacity="0.02"/>' +
-          '</linearGradient>' +
-          '<filter id="glowSplit" x="-20%" y="-20%" width="140%" height="140%">' +
-            '<feDropShadow dx="0" dy="0" stdDeviation="3" flood-color="#a855f7" flood-opacity="0.8"/>' +
-          '</filter>' +
-        '</defs>';
-
-        const yWarnSplit = getYSessionSplit(warnSessions);
-        const yDangerSplit = getYSessionSplit(dangerSessions);
-
-        // Risk bands
-        const safeHSess = Math.max(0, splitYZero - yWarnSplit);
-        svgSessions += '<rect x="' + splitPadL + '" y="' + yWarnSplit + '" width="' + splitPlotW + '" height="' + safeHSess + '" fill="rgba(16, 185, 129, 0.05)" />';
-        const guardedHSess = Math.max(0, yWarnSplit - yDangerSplit);
-        svgSessions += '<rect x="' + splitPadL + '" y="' + yDangerSplit + '" width="' + splitPlotW + '" height="' + guardedHSess + '" fill="rgba(245, 158, 11, 0.07)" />';
-        const dangerHSess = Math.max(0, yDangerSplit - splitPadT);
-        svgSessions += '<rect x="' + splitPadL + '" y="' + splitPadT + '" width="' + splitPlotW + '" height="' + dangerHSess + '" fill="rgba(244, 63, 94, 0.09)" />';
-
-        // Inside-plot Zone Badges
-        svgSessions += renderZoneBadge(badgeXSplit, Math.max(splitPadT + 12, splitPadT + dangerHSess / 2 + 3.5), '🔴 DANGER (≥' + dangerSessions + ')', 'var(--rose)');
-        svgSessions += renderZoneBadge(badgeXSplit, yDangerSplit + guardedHSess / 2 + 3.5, '🟡 GUARDED (' + warnSessions + '-' + (dangerSessions - 1) + ')', 'var(--amber)');
-        svgSessions += renderZoneBadge(badgeXSplit, yWarnSplit + safeHSess / 2 + 3.5, '🟢 SAFE (0-' + (warnSessions - 1) + ')', 'var(--emerald)');
-
-        // Gridlines & Clean Numeric Ticks (Zero bleed)
-        const rightTicks = [0, 5, warnSessions, dangerSessions, maxSessionsY];
-        const uniqueRightTicks = Array.from(new Set(rightTicks)).sort(function (a, b) { return a - b; });
-        for (let i = 0; i < uniqueRightTicks.length; i++) {
-          const val = uniqueRightTicks[i];
-          const y = getYSessionSplit(val);
-          svgSessions += '<line x1="' + splitPadL + '" y1="' + y + '" x2="' + (splitPadL + splitPlotW) + '" y2="' + y + '" stroke="rgba(35, 47, 69, 0.45)" stroke-dasharray="3,3" />';
-          let labelFill = "var(--text-dim)";
-          if (val === dangerSessions) labelFill = "var(--rose)";
-          else if (val === warnSessions) labelFill = "var(--amber)";
-          else if (val === maxSessionsY) labelFill = "var(--amber)";
-          svgSessions += '<text x="' + (splitPadL - 8) + '" y="' + (y + 3.5) + '" fill="' + labelFill + '" font-size="10" font-family="monospace" text-anchor="end">' + val + '</text>';
-        }
-
-        // Curves & Bars
-        let pathDSessions = 'M ' + getSplitX(0) + ' ' + getYSessionSplit(points[0].rolling10mSessions || 0);
-        for (let i = 1; i < points.length; i++) {
-          pathDSessions += ' L ' + getSplitX(i) + ' ' + getYSessionSplit(points[i].rolling10mSessions || 0);
-        }
-        const areaDSessions = pathDSessions + ' L ' + getSplitX(points.length - 1) + ' ' + splitYZero + ' L ' + getSplitX(0) + ' ' + splitYZero + ' Z';
-        svgSessions += '<path d="' + areaDSessions + '" fill="url(#areaGradSessions)" />';
-
-        const barWSplit = Math.max(2.5, (splitPlotW / points.length) * 0.45);
-        for (let i = 0; i < points.length; i++) {
-          const sVal = points[i].rolling10mSessions || 0;
-          if (sVal > 0) {
-            const bx = getSplitX(i) - barWSplit / 2;
-            const by = getYSessionSplit(sVal);
-            const bh = splitYZero - by;
-            svgSessions += '<rect class="bar-session" data-idx="' + i + '" x="' + bx + '" y="' + by + '" width="' + barWSplit + '" height="' + bh + '" fill="var(--amber)" opacity="0.85" rx="1" />';
-          }
-        }
-        svgSessions += '<path d="' + pathDSessions + '" fill="none" stroke="var(--amber)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />';
-
-        // Throttle markers
-        for (let i = 0; i < points.length; i++) {
-          const p = points[i];
-          if (p.throttles > 0) {
-            const tx = getSplitX(i);
-            const ty = splitPadT + 2;
-            svgSessions += '<line x1="' + tx + '" y1="' + (splitPadT + 12) + '" x2="' + tx + '" y2="' + splitYZero + '" stroke="var(--purple)" stroke-dasharray="2,2" stroke-width="1" opacity="0.6" />';
-            svgSessions += '<g transform="translate(' + (tx - 6) + ',' + ty + ')" filter="url(#glowSplit)">' +
-              '<path d="M7 1L1 8h5l-1 7 7-8H7l1-6z" fill="var(--purple)" stroke="#ffffff" stroke-width="0.75" />' +
-            '</g>';
-          }
-        }
-
-        // Crosshair & Hover Dot
-        svgSessions += '<line id="crosshairSession" x1="0" y1="' + splitPadT + '" x2="0" y2="' + splitYZero + '" stroke="#cbd5e1" stroke-width="1.2" stroke-dasharray="3,3" opacity="0" pointer-events="none" />';
-        svgSessions += '<circle id="dotSession" cx="0" cy="0" r="4.5" fill="#ffffff" stroke="var(--amber)" stroke-width="2.5" opacity="0" pointer-events="none" />';
-        svgSessions += '<rect id="overlaySessions" x="' + splitPadL + '" y="' + splitPadT + '" width="' + splitPlotW + '" height="' + splitPlotH + '" fill="transparent" pointer-events="all" style="cursor:crosshair;" />';
-
-        if (chartSvgSessions) chartSvgSessions.innerHTML = svgSessions;
-
-        // --- Synchronized Pointer Handlers for Split View ---
-        function handleSplitPointer(evt, activeSvg) {
-          const rect = activeSvg.getBoundingClientRect();
-          const clientX = evt.clientX || (evt.touches && evt.touches[0] && evt.touches[0].clientX);
-          const clientY = evt.clientY || (evt.touches && evt.touches[0] && evt.touches[0].clientY);
-          if (!clientX) return;
-
-          const mouseSvgX = ((clientX - rect.left) / rect.width) * splitSvgW;
-          const clampedX = Math.max(splitPadL, Math.min(splitPadL + splitPlotW, mouseSvgX));
-          const ratio = (clampedX - splitPadL) / splitPlotW;
-          const index = Math.round(ratio * (points.length - 1));
-          const p = points[index];
-          if (!p) return;
-
-          const pointX = getSplitX(index);
-          const turnY = getYTurnSplit(p.rolling10mTurns || 0);
-          const sessionY = getYSessionSplit(p.rolling10mSessions || 0);
-
-          const crossTurn = document.getElementById("crosshairTurn");
-          const crossSess = document.getElementById("crosshairSession");
-          if (crossTurn) {
-            crossTurn.setAttribute("x1", pointX);
-            crossTurn.setAttribute("x2", pointX);
-            crossTurn.setAttribute("opacity", "0.85");
-          }
-          if (crossSess) {
-            crossSess.setAttribute("x1", pointX);
-            crossSess.setAttribute("x2", pointX);
-            crossSess.setAttribute("opacity", "0.85");
-          }
-
-          const dotT = document.getElementById("dotTurn");
-          const dotS = document.getElementById("dotSession");
-          if (dotT) {
-            dotT.setAttribute("cx", pointX);
-            dotT.setAttribute("cy", turnY);
-            dotT.setAttribute("opacity", "1");
-          }
-          if (dotS) {
-            dotS.setAttribute("cx", pointX);
-            dotS.setAttribute("cy", sessionY);
-            dotS.setAttribute("opacity", (p.rolling10mSessions || 0) > 0 ? "1" : "0.5");
-          }
-
-          chartTooltip.innerHTML = getTooltipHtml(p);
-          chartTooltip.style.opacity = "1";
-          positionTooltip(clientX, clientY);
-        }
-
-        function hideSplitPointer() {
-          const crossTurn = document.getElementById("crosshairTurn");
-          const crossSess = document.getElementById("crosshairSession");
-          if (crossTurn) crossTurn.setAttribute("opacity", "0");
-          if (crossSess) crossSess.setAttribute("opacity", "0");
-          const dotT = document.getElementById("dotTurn");
-          const dotS = document.getElementById("dotSession");
-          if (dotT) dotT.setAttribute("opacity", "0");
-          if (dotS) dotS.setAttribute("opacity", "0");
-          chartTooltip.style.opacity = "0";
-        }
-
-        const oTurns = document.getElementById("overlayTurns");
-        if (oTurns && chartSvgTurns) {
-          oTurns.addEventListener("mousemove", function (e) { handleSplitPointer(e, chartSvgTurns); });
-          oTurns.addEventListener("touchmove", function (e) { handleSplitPointer(e, chartSvgTurns); }, { passive: true });
-          oTurns.addEventListener("mouseleave", hideSplitPointer);
-          oTurns.addEventListener("touchend", hideSplitPointer);
-        }
-
-        const oSessions = document.getElementById("overlaySessions");
-        if (oSessions && chartSvgSessions) {
-          oSessions.addEventListener("mousemove", function (e) { handleSplitPointer(e, chartSvgSessions); });
-          oSessions.addEventListener("touchmove", function (e) { handleSplitPointer(e, chartSvgSessions); }, { passive: true });
-          oSessions.addEventListener("mouseleave", hideSplitPointer);
-          oSessions.addEventListener("touchend", hideSplitPointer);
-        }
-
-        /* -------------------------------------------------------------
-         * PART B: COMBINED VIEW (Single Composite Dual-Axis Chart)
-         * ----------------------------------------------------------- */
-        const combSvgW = 1000;
-        const combSvgH = 240;
-        const combPadL = 56;
-        const combPadR = 56;
-        const combPadT = 24;
-        const combPadB = 26;
-        const combPlotW = combSvgW - combPadL - combPadR;
-        const combPlotH = combSvgH - combPadT - combPadB;
-        const combYZero = combPadT + combPlotH;
-
-        function getCombX(index) {
-          if (points.length <= 1) return combPadL;
-          return combPadL + (index / (points.length - 1)) * combPlotW;
-        }
-
-        function getYTurnComb(val) {
-          const clamped = Math.min(val, maxTurnsY);
-          return combPadT + combPlotH - (clamped / maxTurnsY) * combPlotH;
-        }
-
-        function getYSessionComb(val) {
-          const clamped = Math.min(val, maxSessionsY);
-          return combPadT + combPlotH - (clamped / maxSessionsY) * combPlotH;
-        }
-
-        let svgComb = '<defs>' +
-          '<linearGradient id="areaGradComb" x1="0" y1="0" x2="0" y2="1">' +
-            '<stop offset="0%" stop-color="#06b6d4" stop-opacity="0.35"/>' +
-            '<stop offset="100%" stop-color="#06b6d4" stop-opacity="0.02"/>' +
-          '</linearGradient>' +
-          '<filter id="glowComb" x="-20%" y="-20%" width="140%" height="140%">' +
-            '<feDropShadow dx="0" dy="0" stdDeviation="3" flood-color="#a855f7" flood-opacity="0.8"/>' +
-          '</filter>' +
-        '</defs>';
-
-        const yBurstSoftComb = getYTurnComb(burstSoft);
-        const yBurstMaxComb = getYTurnComb(burstMax);
-
-        // Aligned Background Risk Bands
-        const safeHComb = Math.max(0, combYZero - yBurstSoftComb);
-        svgComb += '<rect x="' + combPadL + '" y="' + yBurstSoftComb + '" width="' + combPlotW + '" height="' + safeHComb + '" fill="rgba(16, 185, 129, 0.05)" />';
-        const guardedHComb = Math.max(0, yBurstSoftComb - yBurstMaxComb);
-        svgComb += '<rect x="' + combPadL + '" y="' + yBurstMaxComb + '" width="' + combPlotW + '" height="' + guardedHComb + '" fill="rgba(245, 158, 11, 0.07)" />';
-        const dangerHComb = Math.max(0, yBurstMaxComb - combPadT);
-        svgComb += '<rect x="' + combPadL + '" y="' + combPadT + '" width="' + combPlotW + '" height="' + dangerHComb + '" fill="rgba(244, 63, 94, 0.09)" />';
-
-        // Inside-plot Zone Badges (Right inside edge of plot area, zero bleed)
-        const badgeXComb = combPadL + combPlotW - 12;
-        svgComb += renderZoneBadge(badgeXComb, Math.max(combPadT + 12, combPadT + dangerHComb / 2 + 4), '🔴 DANGER (≥' + burstMax + ')', 'var(--rose)');
-        svgComb += renderZoneBadge(badgeXComb, yBurstMaxComb + guardedHComb / 2 + 4, '🟡 GUARDED (' + burstSoft + '-' + (burstMax - 1) + ')', 'var(--amber)');
-        svgComb += renderZoneBadge(badgeXComb, yBurstSoftComb + safeHComb / 2 + 4, '🟢 SAFE (0-' + (burstSoft - 1) + ')', 'var(--emerald)');
-
-        // Gridlines & Left Axis Ticks (Turns - Cyan, pure numbers)
-        for (let i = 0; i < uniqueLeftTicks.length; i++) {
-          const val = uniqueLeftTicks[i];
-          const y = getYTurnComb(val);
-          svgComb += '<line x1="' + combPadL + '" y1="' + y + '" x2="' + (combPadL + combPlotW) + '" y2="' + y + '" stroke="rgba(35, 47, 69, 0.45)" stroke-dasharray="3,3" />';
-          let labelFill = "var(--text-dim)";
-          if (val === burstMax) labelFill = "var(--rose)";
-          else if (val === burstSoft) labelFill = "var(--amber)";
-          else if (val === maxTurnsY) labelFill = "var(--cyan)";
-          svgComb += '<text x="' + (combPadL - 8) + '" y="' + (y + 3.5) + '" fill="' + labelFill + '" font-size="10" font-family="monospace" text-anchor="end">' + val + '</text>';
-        }
-
-        // Right Axis Ticks (Fresh Sessions - Amber, pure numbers)
-        for (let i = 0; i < uniqueRightTicks.length; i++) {
-          const val = uniqueRightTicks[i];
-          const y = getYSessionComb(val);
-          svgComb += '<line x1="' + (combPadL + combPlotW) + '" y1="' + y + '" x2="' + (combPadL + combPlotW + 4) + '" y2="' + y + '" stroke="rgba(245, 158, 11, 0.4)" stroke-width="1" />';
-          let labelFill = "var(--text-dim)";
-          if (val === dangerSessions) labelFill = "var(--rose)";
-          else if (val === warnSessions) labelFill = "var(--amber)";
-          else if (val === maxSessionsY) labelFill = "var(--amber)";
-          svgComb += '<text x="' + (combPadL + combPlotW + 8) + '" y="' + (y + 3.5) + '" fill="' + labelFill + '" font-size="10" font-family="monospace" text-anchor="start">' + val + '</text>';
-        }
-
-        // Axis Column Headers
-        svgComb += '<text x="' + combPadL + '" y="' + (combPadT - 8) + '" fill="var(--cyan)" font-size="9.5" font-family="monospace" font-weight="600" text-anchor="start">◀ TURNS (10m · max ' + maxTurnsY + ')</text>';
-        svgComb += '<text x="' + (combPadL + combPlotW) + '" y="' + (combPadT - 8) + '" fill="var(--amber)" font-size="9.5" font-family="monospace" font-weight="600" text-anchor="end">SESSIONS (10m · max ' + maxSessionsY + ') ▶</text>';
-
-        // Turns Filled Area & Stroke
-        let pathDComb = 'M ' + getCombX(0) + ' ' + getYTurnComb(points[0].rolling10mTurns || 0);
-        for (let i = 1; i < points.length; i++) {
-          pathDComb += ' L ' + getCombX(i) + ' ' + getYTurnComb(points[i].rolling10mTurns || 0);
-        }
-        const areaDComb = pathDComb + ' L ' + getCombX(points.length - 1) + ' ' + combYZero + ' L ' + getCombX(0) + ' ' + combYZero + ' Z';
-        svgComb += '<path d="' + areaDComb + '" fill="url(#areaGradComb)" />';
-
-        // Fresh Sessions Pillar Bars
-        const barWComb = Math.max(2.5, (combPlotW / points.length) * 0.45);
-        for (let i = 0; i < points.length; i++) {
-          const sVal = points[i].rolling10mSessions || 0;
-          if (sVal > 0) {
-            const bx = getCombX(i) - barWComb / 2;
-            const by = getYSessionComb(sVal);
-            const bh = combYZero - by;
-            svgComb += '<rect class="bar-session" data-idx="' + i + '" x="' + bx + '" y="' + by + '" width="' + barWComb + '" height="' + bh + '" fill="var(--amber)" opacity="0.85" rx="1" />';
-          }
-        }
-        svgComb += '<path d="' + pathDComb + '" fill="none" stroke="var(--cyan)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />';
-
-        // Throttle Markers
-        for (let i = 0; i < points.length; i++) {
-          const p = points[i];
-          if (p.throttles > 0) {
-            const tx = getCombX(i);
-            const ty = combPadT + 2;
-            svgComb += '<line x1="' + tx + '" y1="' + (combPadT + 12) + '" x2="' + tx + '" y2="' + combYZero + '" stroke="var(--purple)" stroke-dasharray="2,2" stroke-width="1" opacity="0.6" />';
-            svgComb += '<g transform="translate(' + (tx - 6) + ',' + ty + ')" filter="url(#glowComb)">' +
-              '<path d="M7 1L1 8h5l-1 7 7-8H7l1-6z" fill="var(--purple)" stroke="#ffffff" stroke-width="0.75" />' +
-            '</g>';
-          }
-        }
-
-        // Crosshair & Hover Dots
-        svgComb += '<line id="chartCrosshair" x1="0" y1="' + combPadT + '" x2="0" y2="' + combYZero + '" stroke="#cbd5e1" stroke-width="1.2" stroke-dasharray="3,3" opacity="0" pointer-events="none" />';
-        svgComb += '<circle id="chartHoverDotTurn" cx="0" cy="0" r="4.5" fill="#ffffff" stroke="var(--cyan)" stroke-width="2.5" opacity="0" pointer-events="none" />';
-        svgComb += '<circle id="chartHoverDotSession" cx="0" cy="0" r="4" fill="#ffffff" stroke="var(--amber)" stroke-width="2.5" opacity="0" pointer-events="none" />';
-        svgComb += '<rect id="chartEventOverlay" x="' + combPadL + '" y="' + combPadT + '" width="' + combPlotW + '" height="' + combPlotH + '" fill="transparent" pointer-events="all" style="cursor:crosshair;" />';
-
-        if (chartSvg) chartSvg.innerHTML = svgComb;
-
-        // Combined Pointer Handlers
-        const overlayComb = document.getElementById("chartEventOverlay");
-        const crossComb = document.getElementById("chartCrosshair");
-        const dotTurnComb = document.getElementById("chartHoverDotTurn");
-        const dotSessComb = document.getElementById("chartHoverDotSession");
-
-        function handleCombPointer(evt) {
-          const rect = chartSvg.getBoundingClientRect();
-          const clientX = evt.clientX || (evt.touches && evt.touches[0] && evt.touches[0].clientX);
-          const clientY = evt.clientY || (evt.touches && evt.touches[0] && evt.touches[0].clientY);
-          if (!clientX) return;
-
-          const mouseSvgX = ((clientX - rect.left) / rect.width) * combSvgW;
-          const clampedX = Math.max(combPadL, Math.min(combPadL + combPlotW, mouseSvgX));
-          const ratio = (clampedX - combPadL) / combPlotW;
-          const index = Math.round(ratio * (points.length - 1));
-          const p = points[index];
-          if (!p) return;
-
-          const pointX = getCombX(index);
-          const turnY = getYTurnComb(p.rolling10mTurns || 0);
-          const sessionY = getYSessionComb(p.rolling10mSessions || 0);
-
-          if (crossComb) {
-            crossComb.setAttribute("x1", pointX);
-            crossComb.setAttribute("x2", pointX);
-            crossComb.setAttribute("opacity", "0.85");
-          }
-          if (dotTurnComb) {
-            dotTurnComb.setAttribute("cx", pointX);
-            dotTurnComb.setAttribute("cy", turnY);
-            dotTurnComb.setAttribute("opacity", "1");
-          }
-          if (dotSessComb) {
-            dotSessComb.setAttribute("cx", pointX);
-            dotSessComb.setAttribute("cy", sessionY);
-            dotSessComb.setAttribute("opacity", (p.rolling10mSessions || 0) > 0 ? "1" : "0");
-          }
-
-          chartTooltip.innerHTML = getTooltipHtml(p);
-          chartTooltip.style.opacity = "1";
-          positionTooltip(clientX, clientY);
-        }
-
-        function hideCombPointer() {
-          if (crossComb) crossComb.setAttribute("opacity", "0");
-          if (dotTurnComb) dotTurnComb.setAttribute("opacity", "0");
-          if (dotSessComb) dotSessComb.setAttribute("opacity", "0");
-          chartTooltip.style.opacity = "0";
-        }
-
-        if (overlayComb && chartSvg) {
-          overlayComb.addEventListener("mousemove", handleCombPointer);
-          overlayComb.addEventListener("touchmove", handleCombPointer, { passive: true });
-          overlayComb.addEventListener("mouseleave", hideCombPointer);
-          overlayComb.addEventListener("touchend", hideCombPointer);
-        }
-      }
-
-      // Initial fetch immediately on DOM ready
-      document.addEventListener("DOMContentLoaded", function () {
-        fetchMetrics();
-        setInterval(fetchMetrics, 2000);
-      });
-    })();
-  </script>
-</body>
-</html>`;
+  <section class="section">
+    <div class="section-head">
+      <div><div class="section-title">Governor History</div><div class="section-note">Turn and session governing are shown separately. Rolling windows are calculated server-side.</div></div>
+      <div class="controls"><button class="btn active" data-range="1h">1h</button><button class="btn" data-range="6h">6h</button><button class="btn" data-range="24h">24h</button></div>
+    </div>
+    <div class="charts">
+      <div class="chart"><div class="chart-head"><span class="chart-name" style="color:var(--cyan)">Turn governing · 60m</span><span id="turn60Meta" class="chart-meta">—</span></div><svg id="turn60Chart" viewBox="0 0 700 170" preserveAspectRatio="none"></svg></div>
+      <div class="chart"><div class="chart-head"><span class="chart-name" style="color:#67e8f9">Turn governing · 10m</span><span id="turn10Meta" class="chart-meta">—</span></div><svg id="turn10Chart" viewBox="0 0 700 170" preserveAspectRatio="none"></svg></div>
+      <div class="chart"><div class="chart-head"><span class="chart-name" style="color:var(--purple)">Turn dispatch delay</span><span id="delayMeta" class="chart-meta">average per minute</span></div><svg id="delayChart" viewBox="0 0 700 170" preserveAspectRatio="none"></svg></div>
+      <div class="chart"><div class="chart-head"><span class="chart-name" style="color:var(--amber)">Session governing</span><span id="sessionMeta" class="chart-meta">rolling 10m fresh sessions</span></div><svg id="sessionChart" viewBox="0 0 700 170" preserveAspectRatio="none"></svg></div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="section-head"><div><div class="section-title">Recently Active Conversations</div><div class="section-note">Newest activity first. Conversation turns are lifetime use, independent of account-wide rolling limits.</div></div><span id="conversationSummary" class="badge neutral">0 recently active</span></div>
+    <div class="table-wrap"><table><thead><tr><th>Conversation</th><th>Model / route</th><th>Turns</th><th>Upstream</th><th>Activity</th><th>Last active</th></tr></thead><tbody id="conversationRows"></tbody></table></div>
+  </section>
+
+  <section class="section">
+    <div class="section-head"><div><div class="section-title">Operating Notes</div><div class="section-note">Empirical policy and governor behaviour</div></div></div>
+    <details><summary>Turn governing versus session governing</summary><p>Turn governing protects account-wide Microsoft-facing attempts over rolling 10-minute and 60-minute windows. Session governing separately protects fresh conversation creation using a stagger and token bucket. A fresh conversation consumes both a session permit and a turn permit; follow-up turns consume only turn capacity.</p></details>
+    <details><summary>What do the local limits mean?</summary><p>The configured sustained cap is conservative local operating policy, not a confirmed Microsoft quota. Tool-enabled testing sustained 130 and 135 recorded attempts per rolling hour without an explicit throttle. Production selected 130 for margin. A differently shaped high-velocity run triggered <code>PerUserThrottled</code> near 140 recorded attempts/hour, so the exact upstream accounting function remains unknown.</p></details>
+    <details><summary>How are retries counted?</summary><p>Every proxy-managed upstream attempt passes through turn governing, including empty-response retries, forced continuations, transport reconnects, and Disengaged recovery. Disengaged recovery rotates to a fresh conversation, so it also consumes session capacity.</p></details>
+    <details><summary>Which upstream throttle belongs to which governor?</summary><p><code>PerUserThrottled</code> is associated with account-wide turn volume. <code>PerScenarioThrottled</code> is associated with fresh-conversation creation. The circuit breaker locally shields traffic during recovery so no additional Copilot turns are dispatched.</p></details>
+  </section>
+</div>
+<div id="tooltip" class="tooltip"></div>
+<script>
+(function(){
+  let range="1h", fetching=false, latest=null;
+  const $=id=>document.getElementById(id);
+  const fmtMs=ms=>{
+    if(!ms||ms<=0)return "ready";
+    const s=Math.ceil(ms/1000); if(s<60)return s+"s";
+    const m=Math.floor(s/60),r=s%60;return m+"m "+(r?r+"s":"");
+  };
+  const ago=ts=>{
+    if(!ts)return "none";
+    const s=Math.max(0,Math.round((Date.now()-ts)/1000));if(s<60)return s+"s ago";
+    const m=Math.floor(s/60);if(m<60)return m+"m ago";return Math.floor(m/60)+"h ago";
+  };
+  const badge=(el,state,text)=>{
+    el.className="badge "+(state==="safe"||state==="ready"?"ok":state==="guarded"||state==="pacing"?"warn":state==="danger"||state==="armed"?"bad":"neutral");
+    el.textContent=text;
+  };
+  const statusClass=s=>s==="safe"?"ok":s==="guarded"?"warn":"bad";
+  function setCapacity(prefix,g,current,max,threshold){
+    $(prefix+"Value").textContent=current;
+    $(prefix+"Unit").textContent="/ "+max+" attempts";
+    $(prefix+"Remaining").textContent=Math.max(0,max-current);
+    $(prefix+"Delay").textContent=fmtMs(g.currentDelayMs);
+    $(prefix+"Recovery").textContent=fmtMs(g.recoveryMs);
+    $(prefix+(prefix==="burst"?"Soft":"Warn")).textContent=threshold;
+    $(prefix+"Fill").style.width=Math.min(100,current/Math.max(1,max)*100)+"%";
+    $(prefix+"Fill").style.background=g.status==="danger"?"var(--rose)":g.status==="guarded"?"var(--amber)":"var(--cyan)";
+    $(prefix+"Marker").style.left=Math.min(100,threshold/Math.max(1,max)*100)+"%";
+    badge($(prefix+"Badge"),g.status,g.status);
+  }
+  function renderCards(d){
+    const g=d.governor,cfg=d.config,q=d.turnQueue,sq=d.staggerQueue,cb=d.circuitBreaker;
+    setCapacity("sustained",g.sixtyMinute,g.sixtyMinute.turns,cfg.sustainedMaxTurns,cfg.sustainedWarnTurns);
+    setCapacity("burst",g.tenMinute,g.tenMinute.turns,cfg.burstMaxTurns,cfg.burstSoftTurns);
+    $("turnStatus").className="pill "+statusClass(g.sixtyMinute.status);$("turnStatus").textContent="Turns "+g.sixtyMinute.status;
+
+    $("sessionValue").textContent=sq.sessionTokens;$("sessionUnit").textContent="/ "+sq.tokenCapacity+" tokens";
+    $("sessionFill").style.width=Math.min(100,sq.sessionTokens/Math.max(1,sq.tokenCapacity)*100)+"%";
+    $("sessionWindows").textContent=g.tenMinute.freshSessions+" / "+g.sixtyMinute.freshSessions+" (10m/60m)";
+    $("sessionRefill").textContent=fmtMs(sq.nextRefillMs);$("sessionEligible").textContent=fmtMs(sq.nextEligibleMs);$("sessionDelay").textContent=fmtMs(sq.delayMs);
+    const sessState=sq.delayMs>0?"pacing":"ready";badge($("sessionBadge"),sessState,sessState);$("sessionStatus").className="pill "+(sessState==="ready"?"ok":"warn");$("sessionStatus").textContent="Sessions "+sessState;
+
+    if(cb.isArmed){
+      badge($("circuitBadge"),"armed","armed");$("circuitValue").textContent=fmtMs(cb.remainingCooldownSec*1000);$("circuitUnit").textContent="cooldown";
+      $("circuitReason").textContent=cb.reason||"throttled";$("circuitRecovery").textContent=new Date(Date.now()+cb.remainingCooldownSec*1000).toLocaleTimeString();
+      $("circuitFill").style.width="100%";$("upstreamStatus").className="pill bad";$("upstreamStatus").textContent="Upstream recovering";
+    }else{
+      badge($("circuitBadge"),"safe","available");$("circuitValue").textContent="Available";$("circuitUnit").textContent="upstream";
+      $("circuitReason").textContent="none";$("circuitRecovery").textContent="not armed";$("circuitFill").style.width="0";
+      $("upstreamStatus").className="pill ok";$("upstreamStatus").textContent="Upstream available";
+    }
+    $("lastThrottle").textContent=ago(cb.lastThrottleAt);$("throttleCount").textContent=cb.throttleCount;
+
+    const next=cb.isArmed?cb.remainingCooldownSec*1000:q.nextDispatchMs;
+    $("queueValue").textContent=fmtMs(next);$("queueCause").textContent=cb.isArmed?"circuit cooldown":String(q.delayCause||"ready").replace(/-/g," ");
+    $("queueDepth").textContent=q.depth;$("queueRetries").textContent=q.priorityCount;$("queueOldest").textContent=fmtMs(q.oldestWaitMs);
+    badge($("queueBadge"),next>0?"pacing":"ready",next>0?"waiting":"ready");
+
+    const c=d.consumption||{};$("consumptionValue").textContent=c.upstreamAttempts||0;$("clientRequests").textContent=c.clientRequests||0;
+    $("retryAttempts").textContent=c.retryAttempts||0;$("reconnectAttempts").textContent=c.transportReconnects||0;$("disengagedAttempts").textContent=c.disengagedRecoveries||0;
+    $("consumptionUnit").textContent="upstream attempts";
+
+    const hourly=g.tenMinute.turns*6,active=g.tenMinute.turns>0;
+    $("throughputValue").textContent=active?hourly:"—";$("throughput10").textContent=g.tenMinute.turns+" attempts";$("throughput60").textContent=g.sixtyMinute.turns+" attempts";
+    $("throughputUsed").textContent=Math.round(g.sixtyMinute.turns/cfg.sustainedMaxTurns*100)+"%";$("flowState").textContent=active?"active":"no active flow";
+    badge($("throughputBadge"),active?"safe":"neutral",active?"active":"idle");
+
+    const dd=d.dispatchDelay||{};$("delayValue").textContent=fmtMs(dd.p95DelayMs);$("delayP50").textContent=fmtMs(dd.p50DelayMs);$("delayMax").textContent=fmtMs(dd.maxDelayMs);
+    $("delayedTurns").textContent=dd.delayedTurns||0;$("delayedSessions").textContent=(dd.delayedSessions||0)+" ("+fmtMs(dd.sessionDelayMs||0)+" total)";
+    badge($("delayBadge"),dd.p95DelayMs>15000?"danger":dd.p95DelayMs>3000?"guarded":"safe",dd.p95DelayMs>0?"measured":"clear");
+  }
+  function path(vals,max,w,h,pad){
+    if(!vals.length)return "";return vals.map((v,i)=>(i?"L":"M")+" "+(pad+i*(w-2*pad)/Math.max(1,vals.length-1)).toFixed(1)+" "+(h-pad-Math.min(max,v)/Math.max(1,max)*(h-2*pad)).toFixed(1)).join(" ");
+  }
+  function chart(id,points,key,max,threshold,color,tooltipLabel){
+    const svg=$(id),w=700,h=170,pad=25,vals=points.map(p=>p[key]||0),d=path(vals,max,w,h,pad);
+    const ty=h-pad-threshold/Math.max(1,max)*(h-2*pad);
+    let html='<line class="axis" x1="'+pad+'" y1="'+(h-pad)+'" x2="'+(w-pad)+'" y2="'+(h-pad)+'"/>'+
+      '<line class="threshold" x1="'+pad+'" y1="'+ty+'" x2="'+(w-pad)+'" y2="'+ty+'" stroke="var(--amber)"/>'+
+      '<text class="tick" x="3" y="'+(ty+3)+'">'+threshold+'</text>'+
+      '<path class="series" d="'+d+'" stroke="'+color+'"/>';
+    points.forEach((p,i)=>{if((p.throttles||0)>0){const x=pad+i*(w-2*pad)/Math.max(1,points.length-1);html+='<line x1="'+x+'" y1="'+pad+'" x2="'+x+'" y2="'+(h-pad)+'" stroke="var(--purple)" stroke-dasharray="3 3"/>'}});
+    html+='<rect data-overlay="'+key+'" x="'+pad+'" y="'+pad+'" width="'+(w-2*pad)+'" height="'+(h-2*pad)+'" fill="transparent"/>';
+    svg.innerHTML=html;
+    const overlay=svg.querySelector("rect[data-overlay]");
+    overlay.onmousemove=e=>{
+      const r=svg.getBoundingClientRect(),ratio=Math.max(0,Math.min(1,(e.clientX-r.left)/r.width)),i=Math.round(ratio*(points.length-1)),p=points[i],tip=$("tooltip");
+      tip.innerHTML='<strong>'+new Date(p.timestamp).toLocaleString()+'</strong><br>'+tooltipLabel+': <strong>'+(p[key]||0)+'</strong><br>1m attempts: <strong>'+(p.turns||0)+'</strong><br>Turn delay: <strong>'+fmtMs(p.averageTurnDelayMs||0)+'</strong><br>Session delay: <strong>'+fmtMs(p.averageSessionDelayMs||0)+'</strong>';
+      tip.style.left=(e.clientX+12)+"px";tip.style.top=(e.clientY+12)+"px";tip.style.opacity="1";
+    };overlay.onmouseleave=()=>{$("tooltip").style.opacity="0"};
+  }
+  function renderCharts(d){
+    const p=d.history.points,c=d.config;
+    chart("turn60Chart",p,"rolling60mTurns",Math.max(c.sustainedMaxTurns+10,...p.map(x=>x.rolling60mTurns||0)),c.sustainedWarnTurns,"var(--cyan)","Rolling 60m attempts");
+    chart("turn10Chart",p,"rolling10mTurns",Math.max(c.burstMaxTurns+5,...p.map(x=>x.rolling10mTurns||0)),c.burstSoftTurns,"#67e8f9","Rolling 10m attempts");
+    const maxDelay=Math.max(1000,...p.map(x=>x.averageTurnDelayMs||0));chart("delayChart",p,"averageTurnDelayMs",maxDelay,Math.min(3000,maxDelay),"var(--purple)","Average turn delay ms");
+    chart("sessionChart",p,"rolling10mSessions",Math.max(c.sessionDangerThreshold10m+5,...p.map(x=>x.rolling10mSessions||0)),c.sessionWarnThreshold10m,"var(--amber)","Rolling 10m sessions");
+    $("turn60Meta").textContent="warn "+c.sustainedWarnTurns+" · max "+c.sustainedMaxTurns;$("turn10Meta").textContent="soft "+c.burstSoftTurns+" · max "+c.burstMaxTurns;
+    $("sessionMeta").textContent="warn "+c.sessionWarnThreshold10m+" · danger "+c.sessionDangerThreshold10m;
+  }
+  function renderConversations(d){
+    const rows=$("conversationRows"),ss=(d.activeSessions||[]).slice().sort((a,b)=>b.lastAccessedAt-a.lastAccessedAt);
+    let running=0,waiting=0;ss.forEach(s=>{if(s.status==="streaming")running++;if(s.status==="governor"||s.status==="stagger")waiting++});
+    $("conversationSummary").textContent=running+" running · "+waiting+" waiting · "+ss.length+" recent";
+    if(!ss.length){rows.innerHTML='<tr><td colspan="6" class="empty">No conversations are currently resident in memory.</td></tr>';return}
+    rows.innerHTML=ss.map(s=>{
+      const id=s.conversationId||s.sessionId||"—",short=id.length>20?id.slice(0,10)+"…"+id.slice(-7):id;
+      const route=(s.requestedModel||"unknown")+(s.resolvedTone?" · "+s.resolvedTone:"")+(s.agentAttached?" · attached":" · agent-less");
+      const activity=s.status==="streaming"?"Running":s.status==="governor"?"Waiting for turn capacity":s.status==="stagger"?"Waiting for session capacity":"Recently active";
+      const cls=s.status==="streaming"?"ok":s.status==="governor"||s.status==="stagger"?"warn":"neutral";
+      return '<tr><td class="mono id" title="'+esc(id)+'">'+esc(short)+'</td><td>'+esc(route)+'</td><td class="mono turns">Turns: '+s.turnCount+' / '+s.maxTurns+'</td><td class="mono">'+(s.upstreamAttempts||0)+' attempts · '+(s.retryAttempts||0)+' retries</td><td class="activity"><span class="badge '+cls+'">'+activity+'</span></td><td class="mono">'+ago(s.lastAccessedAt)+'</td></tr>';
+    }).join("");
+  }
+  function esc(v){return String(v).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
+  function render(d){latest=d;renderCards(d);renderCharts(d);renderConversations(d)}
+  async function fetchMetrics(){if(fetching)return;fetching=true;try{const r=await fetch("/api/metrics?range="+range);if(!r.ok)throw Error(r.status);render(await r.json());$("serviceStatus").className="pill ok";$("serviceStatus").textContent="Service online"}catch(e){$("serviceStatus").className="pill bad";$("serviceStatus").textContent="Dashboard offline"}finally{fetching=false}}
+  document.querySelectorAll("[data-range]").forEach(b=>b.onclick=()=>{document.querySelectorAll("[data-range]").forEach(x=>x.classList.remove("active"));b.classList.add("active");range=b.dataset.range;fetchMetrics()});
+  setInterval(()=>{$("clock").textContent=new Date().toLocaleTimeString()+" · "+new Date().toISOString().slice(11,19)+" UTC"},1000);
+  setInterval(fetchMetrics,2000);fetchMetrics();
+})();
+</script>
+</body></html>`;
 }

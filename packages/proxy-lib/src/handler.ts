@@ -34,6 +34,7 @@ import {
   recordNewSession,
   recordThrottle,
   recordRequestQuality,
+  recordRequestConsumption,
   getNewSessionsInWindow,
   getTurnsInWindow,
   type SessionItemSnapshot,
@@ -122,6 +123,11 @@ interface ConversationState {
   fingerprint?: string;
   turnCount?: number;
   status?: "streaming" | "governor" | "stagger" | "idle";
+  requestedModel?: string;
+  resolvedTone?: string;
+  agentAttached?: boolean;
+  upstreamAttempts: number;
+  retryAttempts: number;
 }
 
 // --- Session pool: maps conversation fingerprint → M365 session ---
@@ -167,6 +173,8 @@ export class SessionPool {
       sessionId: sessionId?.trim() || fingerprint,
       fingerprint,
       status: "idle",
+      upstreamAttempts: 0,
+      retryAttempts: 0,
     };
     this.conversations.set(fingerprint, state);
     return state;
@@ -187,9 +195,14 @@ export class SessionPool {
         lastAccessedAt: state.lastAccessedAt,
         idleSeconds: Math.round((now - state.lastAccessedAt) / 1000),
         status: state.status ?? "idle",
+        requestedModel: state.requestedModel,
+        resolvedTone: state.resolvedTone,
+        agentAttached: state.agentAttached,
+        upstreamAttempts: state.upstreamAttempts,
+        retryAttempts: state.retryAttempts,
       });
     }
-    return snapshots;
+    return snapshots.sort((a, b) => b.lastAccessedAt - a.lastAccessedAt);
   }
 
   private fingerprint(messages: ParsedMessage[], tools?: ChatBody["tools"], sessionId?: string): string {
@@ -335,6 +348,8 @@ export function getStaggerQueueState(): {
   sessionTokens: number;
   tokenCapacity: number;
   minSpacingMs: number;
+  nextRefillMs: number;
+  nextEligibleMs: number;
 } {
   const capacity = Number(process.env.M365_SESSION_BUCKET_CAPACITY ?? 10);
   const refillMs = Number(process.env.M365_SESSION_REFILL_MS ?? 150_000);
@@ -365,6 +380,10 @@ export function getStaggerQueueState(): {
     sessionTokens: currentTokens,
     tokenCapacity: capacity,
     minSpacingMs,
+    nextRefillMs: capacity > 0 && refillMs > 0 && currentTokens < capacity
+      ? Math.max(0, refillMs - (now - lastTokenRefillAt))
+      : 0,
+    nextEligibleMs: Math.max(0, nextNewSessionAllowedAt - now),
   };
 }
 
@@ -444,6 +463,7 @@ interface QueuedTurn {
   resolve: () => void;
   reject: (err: Error) => void;
   waitedMs?: number;
+  enqueuedAt: number;
   softDelayServed?: boolean;
 }
 
@@ -481,6 +501,7 @@ export function getGovernorState(): {
     freshSessions: number;
     dangerSessions: number;
     currentDelayMs: number;
+    recoveryMs: number;
     status: "safe" | "guarded" | "danger";
   };
   sixtyMinute: {
@@ -490,6 +511,7 @@ export function getGovernorState(): {
     freshSessions: number;
     dangerSessions: number;
     currentDelayMs: number;
+    recoveryMs: number;
     status: "safe" | "guarded" | "danger";
   };
 } {
@@ -559,6 +581,7 @@ export function getGovernorState(): {
       freshSessions: freshSessions10m,
       dangerSessions: dangerSessions10m,
       currentDelayMs: burstDelayMs,
+      recoveryMs: burstEntries.length ? Math.max(0, burstEntries[0] + burstWindowMs - now) : 0,
       status: status10m,
     },
     sixtyMinute: {
@@ -568,6 +591,7 @@ export function getGovernorState(): {
       freshSessions: freshSessions60m,
       dangerSessions: dangerSessions60m,
       currentDelayMs: sustainedDelayMs,
+      recoveryMs: recentTurnTimestamps.length ? Math.max(0, recentTurnTimestamps[0] + sustainedWindowMs - now) : 0,
       status: status60m,
     },
   };
@@ -578,13 +602,32 @@ export function getTurnQueueState(): {
   priorityCount: number;
   minSpacingMs: number;
   isProcessing: boolean;
+  oldestWaitMs: number;
+  nextDispatchMs: number;
+  delayCause: string;
 } {
   const minSpacingMs = Number(process.env.M365_MIN_TURN_SPACING_MS ?? 1500);
+  const now = Date.now();
+  const governor = getGovernorState();
+  const spacingRemaining = Math.max(0, minSpacingMs - (lastTurnDispatchedAt > 0 ? now - lastTurnDispatchedAt : minSpacingMs));
+  const burstDelay = governor.tenMinute.currentDelayMs;
+  const sustainedDelay = governor.sixtyMinute.currentDelayMs;
+  const nextDispatchMs = Math.max(spacingRemaining, burstDelay, sustainedDelay);
+  const delayCause = sustainedDelay >= burstDelay && sustainedDelay >= spacingRemaining && sustainedDelay > 0
+    ? "sustained"
+    : burstDelay >= spacingRemaining && burstDelay > 0
+      ? "burst"
+      : spacingRemaining > 0
+        ? "minimum-spacing"
+        : "ready";
   return {
     depth: turnQueue.length,
     priorityCount: turnQueue.filter((q) => q.priority).length,
     minSpacingMs,
     isProcessing: isProcessingTurnQueue,
+    oldestWaitMs: turnQueue.length ? Math.max(0, now - Math.min(...turnQueue.map((q) => q.enqueuedAt))) : 0,
+    nextDispatchMs,
+    delayCause,
   };
 }
 
@@ -705,7 +748,15 @@ async function processTurnQueue(): Promise<void> {
       const dispatchTime = Date.now();
       recentTurnTimestamps.push(dispatchTime);
       lastTurnDispatchedAt = dispatchTime;
-      recordTurn(dispatchTime, head.waitedMs ?? totalWaitMs);
+      const recordedDelay = head.waitedMs ?? totalWaitMs;
+      const delayCause = sustainedDelayMs >= burstDelayMs && sustainedDelayMs >= spacingDelayMs && sustainedDelayMs > 0
+        ? "sustained"
+        : burstDelayMs >= spacingDelayMs && burstDelayMs > 0
+          ? "burst"
+          : spacingDelayMs > 0
+            ? "minimum-spacing"
+            : "none";
+      recordTurn(dispatchTime, recordedDelay, delayCause);
       scheduleStateSave();
       head.resolve();
     }
@@ -752,6 +803,7 @@ export async function paceTurnVelocity(
       id: crypto.randomUUID(),
       priority: opts?.priority ?? false,
       signal,
+      enqueuedAt: Date.now(),
       resolve: () => {
         signal?.removeEventListener("abort", onAbort);
         resolve(item.waitedMs ?? 0);
@@ -873,6 +925,12 @@ export async function handleChatCompletion(
   const MAX_RETRIES = 2;
   const SHORT_RETRY_DELAY_MS = 2_000;
   let requestWireTurns = 0;
+  let retryAttempts = 0;
+  let transportReconnects = 0;
+  let disengagedRecoveries = 0;
+  conv.requestedModel = model;
+  conv.resolvedTone = tone;
+  conv.agentAttached = useToolAgent;
 
   // Captured from the final attempt — surfaced through the OpenAI `usage` block
   // so clients can see M365's conversation-quota % (the closest proxy we have
@@ -931,6 +989,8 @@ export async function handleChatCompletion(
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       if (attempt > 0) {
+        retryAttempts++;
+        conv.retryAttempts++;
         try {
           conv.status = "governor";
           await paceTurnVelocity(opts.signal, { priority: true });
@@ -947,11 +1007,16 @@ export async function handleChatCompletion(
         // skip it to reach the model the tone selects (e.g. Claude). See
         // ModelSession.run / docs H8.6.
         requestWireTurns++;
+        conv.upstreamAttempts++;
         copilotStream = await session.run(text, model, opts.signal, useToolAgent, {
           onReasoning,
           beforeReconnectAttempt: async () => {
             await paceTurnVelocity(opts.signal, { priority: true });
             requestWireTurns++;
+            transportReconnects++;
+            retryAttempts++;
+            conv.upstreamAttempts++;
+            conv.retryAttempts++;
           },
         });
       } catch (err: any) {
@@ -992,8 +1057,8 @@ export async function handleChatCompletion(
       lastTurnCount = copilotStream.turnCount;
 
       if (copilotStream.isThrottled) {
-        recordThrottle(Date.now());
         const errCode = copilotStream.result?.errorCode ?? copilotStream.result?.value ?? "Throttled";
+        recordThrottle(Date.now(), errCode);
         const throttleSec =
           errCode === "PerUserThrottled"
             ? Number(process.env.M365_USER_THROTTLE_COOLDOWN_SEC ?? 1200)
@@ -1024,6 +1089,7 @@ export async function handleChatCompletion(
         // M365_NO_DISENGAGE_RETRY.
         if (hasTools && !disengageRetried && !process.env.M365_NO_DISENGAGE_RETRY) {
           disengageRetried = true;
+          disengagedRecoveries++;
           try {
             conv.status = "stagger";
             await paceNewSessionStart(opts.signal);
@@ -1343,6 +1409,12 @@ export async function handleChatCompletion(
   } // end produceInternal()
 
   async function recordOutcome(p: Produced): Promise<void> {
+    recordRequestConsumption({
+      wireTurns: requestWireTurns,
+      retryAttempts,
+      transportReconnects,
+      disengagedRecoveries,
+    });
     if (p.kind === "error") {
       let isRefusal = p.resp.status === 400;
       if (!isRefusal && p.resp.status === 502) {

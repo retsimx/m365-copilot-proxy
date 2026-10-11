@@ -17,6 +17,24 @@ export interface TimeBucketPoint {
   newSessions: number;
   throttles: number;
   maxPacingDelayMs: number;
+  turnDelayTotalMs?: number;
+  turnDelayedCount?: number;
+  turnDelaySamplesMs?: number[];
+  turnDelayCauses?: Record<string, number>;
+  sessionDelayTotalMs?: number;
+  sessionDelayedCount?: number;
+  sessionDelaySamplesMs?: number[];
+  clientRequests?: number;
+  retryAttempts?: number;
+  transportReconnects?: number;
+  disengagedRecoveries?: number;
+  throttleReasons?: Record<string, number>;
+  rolling10mTurns?: number;
+  rolling60mTurns?: number;
+  rolling10mSessions?: number;
+  rolling60mSessions?: number;
+  averageTurnDelayMs?: number;
+  averageSessionDelayMs?: number;
   cleanTurns?: number;
   salvagedTurns?: number;
   refusedTurns?: number;
@@ -34,6 +52,27 @@ export interface TurnQualityMetrics {
   wireMultiplier: number;
 }
 
+export interface RequestConsumptionMetrics {
+  clientRequests: number;
+  upstreamAttempts: number;
+  retryAttempts: number;
+  transportReconnects: number;
+  disengagedRecoveries: number;
+}
+
+export interface DispatchDelayMetrics {
+  delayedTurns: number;
+  totalDelayMs: number;
+  averageDelayMs: number;
+  p50DelayMs: number;
+  p95DelayMs: number;
+  maxDelayMs: number;
+  byCause: Record<string, number>;
+  delayedSessions: number;
+  sessionDelayMs: number;
+}
+
+
 export interface SessionItemSnapshot {
   fingerprint: string;
   sessionId: string;
@@ -43,6 +82,11 @@ export interface SessionItemSnapshot {
   lastAccessedAt: number;
   idleSeconds: number;
   status: "streaming" | "governor" | "stagger" | "idle";
+  requestedModel?: string;
+  resolvedTone?: string;
+  agentAttached?: boolean;
+  upstreamAttempts?: number;
+  retryAttempts?: number;
 }
 
 export interface SystemMetricsConfig {
@@ -115,18 +159,25 @@ export interface MetricsSnapshot {
     remainingCooldownSec: number;
     throttleCount: number;
     reason?: string;
+    lastThrottleAt?: number;
+    shieldedRequests: number;
   };
   turnQueue: {
     depth: number;
     priorityCount: number;
     minSpacingMs: number;
     isProcessing: boolean;
+    oldestWaitMs: number;
+    nextDispatchMs: number;
+    delayCause: string;
   };
   staggerQueue: {
     delayMs: number;
     sessionTokens: number;
     tokenCapacity: number;
     minSpacingMs: number;
+    nextRefillMs: number;
+    nextEligibleMs: number;
   };
   governor: {
     tenMinute: {
@@ -136,6 +187,7 @@ export interface MetricsSnapshot {
       freshSessions: number;
       dangerSessions: number;
       currentDelayMs: number;
+      recoveryMs: number;
       status: "safe" | "guarded" | "danger";
     };
     sixtyMinute: {
@@ -145,6 +197,7 @@ export interface MetricsSnapshot {
       freshSessions: number;
       dangerSessions: number;
       currentDelayMs: number;
+      recoveryMs: number;
       status: "safe" | "guarded" | "danger";
     };
   };
@@ -163,6 +216,8 @@ export interface MetricsSnapshot {
     lifetimeRefusedTurns: number;
   };
   quality: TurnQualityMetrics;
+  consumption: RequestConsumptionMetrics;
+  dispatchDelay: DispatchDelayMetrics;
   config: SystemMetricsConfig;
 }
 
@@ -200,6 +255,18 @@ export class MetricsCollector {
         newSessions: 0,
         throttles: 0,
         maxPacingDelayMs: 0,
+        turnDelayTotalMs: 0,
+        turnDelayedCount: 0,
+        turnDelaySamplesMs: [],
+        turnDelayCauses: {},
+        sessionDelayTotalMs: 0,
+        sessionDelayedCount: 0,
+        sessionDelaySamplesMs: [],
+        clientRequests: 0,
+        retryAttempts: 0,
+        transportReconnects: 0,
+        disengagedRecoveries: 0,
+        throttleReasons: {},
         cleanTurns: 0,
         salvagedTurns: 0,
         refusedTurns: 0,
@@ -209,13 +276,20 @@ export class MetricsCollector {
     return bucket;
   }
 
-  recordTurn(timestamp = Date.now(), delayMs = 0): void {
+  recordTurn(timestamp = Date.now(), delayMs = 0, delayCause = "none"): void {
     this.lifetimeTurns += 1;
     const key = this.alignToMinute(timestamp);
     const bucket = this.getOrCreateBucket(key);
     bucket.turns += 1;
     if (delayMs > bucket.maxPacingDelayMs) {
       bucket.maxPacingDelayMs = delayMs;
+    }
+    if (delayMs > 0) {
+      bucket.turnDelayTotalMs = (bucket.turnDelayTotalMs ?? 0) + delayMs;
+      bucket.turnDelayedCount = (bucket.turnDelayedCount ?? 0) + 1;
+      (bucket.turnDelaySamplesMs ??= []).push(delayMs);
+      const causes = (bucket.turnDelayCauses ??= {});
+      causes[delayCause] = (causes[delayCause] ?? 0) + 1;
     }
     this.prune(timestamp);
   }
@@ -228,15 +302,87 @@ export class MetricsCollector {
     if (delayMs > bucket.maxPacingDelayMs) {
       bucket.maxPacingDelayMs = delayMs;
     }
+    if (delayMs > 0) {
+      bucket.sessionDelayTotalMs = (bucket.sessionDelayTotalMs ?? 0) + delayMs;
+      bucket.sessionDelayedCount = (bucket.sessionDelayedCount ?? 0) + 1;
+      (bucket.sessionDelaySamplesMs ??= []).push(delayMs);
+    }
     this.prune(timestamp);
   }
 
-  recordThrottle(timestamp = Date.now()): void {
+  recordThrottle(timestamp = Date.now(), reason = "Throttled"): void {
     this.lifetimeThrottles += 1;
     const key = this.alignToMinute(timestamp);
     const bucket = this.getOrCreateBucket(key);
     bucket.throttles += 1;
+    const reasons = (bucket.throttleReasons ??= {});
+    reasons[reason] = (reasons[reason] ?? 0) + 1;
     this.prune(timestamp);
+  }
+
+  recordRequestConsumption(
+    outcome: { wireTurns: number; retryAttempts?: number; transportReconnects?: number; disengagedRecoveries?: number },
+    timestamp = Date.now(),
+  ): void {
+    const bucket = this.getOrCreateBucket(this.alignToMinute(timestamp));
+    bucket.clientRequests = (bucket.clientRequests ?? 0) + 1;
+    bucket.retryAttempts = (bucket.retryAttempts ?? 0) + (outcome.retryAttempts ?? 0);
+    bucket.transportReconnects = (bucket.transportReconnects ?? 0) + (outcome.transportReconnects ?? 0);
+    bucket.disengagedRecoveries = (bucket.disengagedRecoveries ?? 0) + (outcome.disengagedRecoveries ?? 0);
+  }
+
+  getRequestConsumption(windowMs = 3_600_000, now = Date.now()): RequestConsumptionMetrics {
+    this.prune(now);
+    const cutoff = now - windowMs;
+    let clientRequests = 0;
+    let retryAttempts = 0;
+    let transportReconnects = 0;
+    let disengagedRecoveries = 0;
+    let upstreamAttempts = 0;
+    for (const bucket of this.buckets.values()) {
+      if (bucket.timestamp < cutoff) continue;
+      clientRequests += bucket.clientRequests ?? 0;
+      retryAttempts += bucket.retryAttempts ?? 0;
+      transportReconnects += bucket.transportReconnects ?? 0;
+      disengagedRecoveries += bucket.disengagedRecoveries ?? 0;
+      upstreamAttempts += bucket.turns;
+    }
+    return { clientRequests, upstreamAttempts, retryAttempts, transportReconnects, disengagedRecoveries };
+  }
+
+  getDispatchDelayMetrics(windowMs = 3_600_000, now = Date.now()): DispatchDelayMetrics {
+    this.prune(now);
+    const cutoff = now - windowMs;
+    const samples: number[] = [];
+    const byCause: Record<string, number> = {};
+    let delayedTurns = 0;
+    let totalDelayMs = 0;
+    let delayedSessions = 0;
+    let sessionDelayMs = 0;
+    for (const bucket of this.buckets.values()) {
+      if (bucket.timestamp < cutoff) continue;
+      delayedTurns += bucket.turnDelayedCount ?? 0;
+      totalDelayMs += bucket.turnDelayTotalMs ?? 0;
+      samples.push(...(bucket.turnDelaySamplesMs ?? []));
+      delayedSessions += bucket.sessionDelayedCount ?? 0;
+      sessionDelayMs += bucket.sessionDelayTotalMs ?? 0;
+      for (const [cause, count] of Object.entries(bucket.turnDelayCauses ?? {})) {
+        byCause[cause] = (byCause[cause] ?? 0) + count;
+      }
+    }
+    samples.sort((a, b) => a - b);
+    const percentile = (p: number) => samples.length ? samples[Math.min(samples.length - 1, Math.ceil(samples.length * p) - 1)] : 0;
+    return {
+      delayedTurns,
+      totalDelayMs,
+      averageDelayMs: delayedTurns ? Math.round(totalDelayMs / delayedTurns) : 0,
+      p50DelayMs: percentile(0.5),
+      p95DelayMs: percentile(0.95),
+      maxDelayMs: samples.at(-1) ?? 0,
+      byCause,
+      delayedSessions,
+      sessionDelayMs,
+    };
   }
 
   recordRequestQuality(outcome: { kind: "clean" | "salvaged" | "refused"; wireTurns: number }, timestamp = Date.now()): void {
@@ -339,15 +485,46 @@ export class MetricsCollector {
     const points: TimeBucketPoint[] = [];
     for (let t = startMinute; t <= currentMinute; t += 60_000) {
       const b = this.buckets.get(t);
+      let rolling10mTurns = 0;
+      let rolling60mTurns = 0;
+      let rolling10mSessions = 0;
+      let rolling60mSessions = 0;
+      for (let h = t - 59 * 60_000; h <= t; h += 60_000) {
+        const hb = this.buckets.get(h);
+        if (!hb) continue;
+        rolling60mTurns += hb.turns;
+        rolling60mSessions += hb.newSessions;
+        if (h >= t - 9 * 60_000) {
+          rolling10mTurns += hb.turns;
+          rolling10mSessions += hb.newSessions;
+        }
+      }
+      const turnDelayedCount = b?.turnDelayedCount ?? 0;
+      const sessionDelayedCount = b?.sessionDelayedCount ?? 0;
       points.push({
         timestamp: t,
         turns: b?.turns ?? 0,
         newSessions: b?.newSessions ?? 0,
         throttles: b?.throttles ?? 0,
         maxPacingDelayMs: b?.maxPacingDelayMs ?? 0,
-        cleanTurns: b?.cleanTurns ?? 0,
-        salvagedTurns: b?.salvagedTurns ?? 0,
-        refusedTurns: b?.refusedTurns ?? 0,
+        turnDelayTotalMs: b?.turnDelayTotalMs ?? 0,
+        turnDelayedCount,
+        turnDelaySamplesMs: b?.turnDelaySamplesMs ?? [],
+        turnDelayCauses: b?.turnDelayCauses ?? {},
+        sessionDelayTotalMs: b?.sessionDelayTotalMs ?? 0,
+        sessionDelayedCount,
+        sessionDelaySamplesMs: b?.sessionDelaySamplesMs ?? [],
+        clientRequests: b?.clientRequests ?? 0,
+        retryAttempts: b?.retryAttempts ?? 0,
+        transportReconnects: b?.transportReconnects ?? 0,
+        disengagedRecoveries: b?.disengagedRecoveries ?? 0,
+        throttleReasons: b?.throttleReasons ?? {},
+        rolling10mTurns,
+        rolling60mTurns,
+        rolling10mSessions,
+        rolling60mSessions,
+        averageTurnDelayMs: turnDelayedCount ? Math.round((b?.turnDelayTotalMs ?? 0) / turnDelayedCount) : 0,
+        averageSessionDelayMs: sessionDelayedCount ? Math.round((b?.sessionDelayTotalMs ?? 0) / sessionDelayedCount) : 0,
       });
     }
     return points;
@@ -363,6 +540,14 @@ export class MetricsCollector {
 
   getLifetimeThrottles(): number {
     return this.lifetimeThrottles;
+  }
+
+  getLastThrottleAt(): number | undefined {
+    let latest: number | undefined;
+    for (const bucket of this.buckets.values()) {
+      if (bucket.throttles > 0 && (latest === undefined || bucket.timestamp > latest)) latest = bucket.timestamp;
+    }
+    return latest;
   }
 
   getLifetimeClientRequests(): number {
@@ -447,8 +632,8 @@ export class MetricsCollector {
 
 export const defaultMetricsCollector = new MetricsCollector();
 
-export function recordTurn(timestamp?: number, delayMs?: number): void {
-  defaultMetricsCollector.recordTurn(timestamp, delayMs);
+export function recordTurn(timestamp?: number, delayMs?: number, delayCause?: string): void {
+  defaultMetricsCollector.recordTurn(timestamp, delayMs, delayCause);
   scheduleStateSave();
 }
 
@@ -457,8 +642,8 @@ export function recordNewSession(timestamp?: number, delayMs?: number): void {
   scheduleStateSave();
 }
 
-export function recordThrottle(timestamp?: number): void {
-  defaultMetricsCollector.recordThrottle(timestamp);
+export function recordThrottle(timestamp?: number, reason?: string): void {
+  defaultMetricsCollector.recordThrottle(timestamp, reason);
   scheduleStateSave();
 }
 
@@ -468,6 +653,22 @@ export function recordRequestQuality(
 ): void {
   defaultMetricsCollector.recordRequestQuality(outcome, timestamp);
   scheduleStateSave();
+}
+
+export function recordRequestConsumption(
+  outcome: { wireTurns: number; retryAttempts?: number; transportReconnects?: number; disengagedRecoveries?: number },
+  timestamp = Date.now(),
+): void {
+  defaultMetricsCollector.recordRequestConsumption(outcome, timestamp);
+  scheduleStateSave();
+}
+
+export function getRequestConsumption(windowMs = 3_600_000, now = Date.now()): RequestConsumptionMetrics {
+  return defaultMetricsCollector.getRequestConsumption(windowMs, now);
+}
+
+export function getDispatchDelayMetrics(windowMs = 3_600_000, now = Date.now()): DispatchDelayMetrics {
+  return defaultMetricsCollector.getDispatchDelayMetrics(windowMs, now);
 }
 
 export function getQualityMetrics(windowMs = 3_600_000, now = Date.now()): TurnQualityMetrics {
@@ -572,6 +773,8 @@ export function getMetricsSnapshot(
       remainingCooldownSec,
       throttleCount,
       reason: getDegradationBackoffReason(),
+      lastThrottleAt: defaultMetricsCollector.getLastThrottleAt(),
+      shieldedRequests: 0,
     },
     turnQueue: getTurnQueueState(),
     staggerQueue,
@@ -580,6 +783,8 @@ export function getMetricsSnapshot(
     history,
     totals,
     quality: defaultMetricsCollector.getQualityMetrics(3_600_000, serverTime),
+    consumption: defaultMetricsCollector.getRequestConsumption(3_600_000, serverTime),
+    dispatchDelay: defaultMetricsCollector.getDispatchDelayMetrics(3_600_000, serverTime),
     config,
   };
 }

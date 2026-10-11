@@ -36,7 +36,10 @@ export {
   recordNewSession,
   recordThrottle,
   recordRequestQuality,
+  recordRequestConsumption,
   getQualityMetrics,
+  getRequestConsumption,
+  getDispatchDelayMetrics,
   resetMetrics,
   getMetricsBuckets,
   setMetricsBuckets,
@@ -52,6 +55,8 @@ export {
   type SessionItemSnapshot,
   type SystemMetricsConfig,
   type TurnQualityMetrics,
+  type RequestConsumptionMetrics,
+  type DispatchDelayMetrics,
 } from "./metrics.js";
 export {
   loadProxyState,
