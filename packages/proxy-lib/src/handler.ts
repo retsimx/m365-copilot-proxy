@@ -292,25 +292,32 @@ function annotateToolOutput(content: string): { attrs: string; text: string } {
  *  optional prose + ONE complete tool-call fence + whitespace. Anything non-whitespace
  *  after the fence, or a self-authored result opener, means the model is simulating the
  *  harness (the token-prediction "call → result" prior) — the turn is aborted.
- *  Fence-aware: text INSIDE a fence is call data (a command may legitimately contain the
- *  literal `<tool_output>` string), so it is never flagged. */
+ *  Fence-aware AND heredoc-aware, mirroring the parser: a ```<tool> line inside a fence is
+ *  body content (e.g. a bash heredoc writing a file that contains a fenced code block), and
+ *  only a BARE closing fence (3+ backticks, no tool name) ends the block. */
 export function hasPostFenceContamination(text: string): boolean {
   let inFence = false;
   let fencesClosed = 0;
+  let heredoc: string | null = null;
   for (const line of text.split(/\r?\n/)) {
-    if (/^\s*```/.test(line)) {
-      if (inFence) {
-        inFence = false;
-        fencesClosed++;
-      } else {
-        // A SECOND fence opening — we run at most one call per turn, so the rest is
-        // unexecutable anyway; abort rather than let it continue into simulation.
-        if (fencesClosed >= 1) return true;
-        inFence = true;
-      }
+    if (heredoc) {
+      if (line.trim() === heredoc) heredoc = null;
+      continue; // heredoc body — opaque, may contain ``` fences
+    }
+    if (inFence) {
+      const h = line.match(/(?:^|[^<])<<-?\s*['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?/);
+      if (h) { heredoc = h[1]; continue; }
+      // Only a BARE closing fence ends the block — a ```<tool> line is body.
+      if (/^ {0,3}`{3,}([ \t].*)?$/.test(line)) { inFence = false; fencesClosed++; }
       continue;
     }
-    if (inFence) continue; // inside a call body — call data, not contamination
+    if (/^\s*```/.test(line)) {
+      // A SECOND fence opening — we run at most one call per turn, so the rest is
+      // unexecutable anyway; abort rather than let it continue into simulation.
+      if (fencesClosed >= 1) return true;
+      inFence = true;
+      continue;
+    }
     if (/<(?:tool_output|tool_response)\b/i.test(line)) return true;
     if (fencesClosed >= 1 && line.trim().length > 0) return true; // non-whitespace after the fence
   }

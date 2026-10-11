@@ -1479,6 +1479,15 @@ describe("hasPostFenceContamination (post-fence abort guard)", () => {
     expect(hasPostFenceContamination("```bash\nls\n```\n\n```bash\ncat x\n```\n")).toBe(true);
   });
 
+  it("does NOT flag a bash heredoc writing a file that contains a code fence", () => {
+    const text = "```bash\ncat > /tmp/r.md <<'EOF'\n# Report\n\n```ts\np = 1\n```\nEOF\n```\n";
+    expect(hasPostFenceContamination(text)).toBe(false);
+  });
+
+  it("does NOT flag a ```<tool> line inside a fence body (opaque body)", () => {
+    expect(hasPostFenceContamination("```bash\ncat > f <<'EOF'\n```bash\nnpm start\n```\nEOF\n```\n")).toBe(false);
+  });
+
   it("does not flag prose before the fence", () => {
     expect(hasPostFenceContamination("Let me ground myself first.\n\n```bash\npwd\n```")).toBe(false);
   });
