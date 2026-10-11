@@ -1425,6 +1425,14 @@ export async function handleChatCompletion(
         log.info(`One-call-per-turn: keeping ${parsed.toolCalls[0].function.name}, dropping ${parsed.toolCalls.length - 1} batched call(s)`);
         parsed.toolCalls = [parsed.toolCalls[0]];
       }
+
+      // Turn 0 is the grounding turn: the framing requires the grounding call to be the
+      // ONLY call, and bundling calls on turn 0 is where the model starts hallucinating
+      // (live 2026-10-11). Keep just the first call.
+      if (session.turnCount === 0 && parsed.toolCalls.length > 1) {
+        log.info(`Grounding turn: keeping ${parsed.toolCalls[0].function.name}, dropping ${parsed.toolCalls.length - 1} bundled call(s)`);
+        parsed.toolCalls = [parsed.toolCalls[0]];
+      }
     }
 
     // If the model produced a hallucinated simulation with a fake result tag
