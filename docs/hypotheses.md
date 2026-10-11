@@ -3039,3 +3039,66 @@ with production bursts layered on sustained volume; whether any per-model allowa
 
 **Evidence paths.** `scripts/bench/throughput-out/mt2-20261010T1847Z/`; runner
 `scripts/bench/throughput_threshold.py`; patch `proxy-experiment-mode-and-telemetry.patch` (applies to `a9b154f`).
+
+
+
+---
+
+## 24. October 11 2026 — The token-prediction prior: one-call-per-turn + a post-fence abort guard (Claude agent path) 🟢
+
+**Headline.** The Claude agent path's failures are driven by a **token-prediction prior**, not a
+missing rule: after a tool-call fence the model predicts that tool output follows, so it writes its
+own `<tool_output>` — and no semantic prohibition stops it. The fixes that work are **structural**
+(one call per turn; abort generation past the fence), not more wording.
+
+**F24a — the model's own diagnosis (the headline).** In a live transcript the model attributed its
+fabrication to the learned "call → result → call" continuation: *"the strongest learned pattern in my
+training data is: after a tool call fence, tool output follows… I do not 'decide' to fabricate; I
+predict the next likely tokens."* It ranked the effective levers (1) a decoding-level stop at the
+fence, (2) few-shot fence→silence examples, (3) restructuring the format — and said semantic rules are
+the weakest. **Consequence: stop trying to wordsmith the model out of it; enforce structurally.**
+
+**F24b — multi-call batching re-creates the failure.** Enabling batching on the Claude path
+(`1dab70a`) let the model emit a 2nd call and fabricate the observations *between* calls — exactly the
+"later steps on guessed state" the docs warned about ([`tool-calling.md`](tool-calling.md):135).
+Reverting to one call per turn on **both** paths (`f490dfb`) stabilized it. The 2nd fence
+re-activates the continuation prior, so even "independent" reads are not safe to batch.
+
+**F24c — the v5.2 "cleaner" rewrite regressed two load-bearing anchors.** Replacing the concrete
+anti-malformation sentence ("Never omit the backticks, never write the tool name inline with a
+sentence") with a positive grammar rule — and the concrete per-tool fences with indented "not calls"
+docs — produced `prose.bash` (label glued to prose, backticks omitted) → no parseable call. Restoring
+the exact sentence + the concrete first-turn fence (`99d0524`) fixed it. Likewise the concrete
+anti-fabrication wording ("You have run nothing yet… do not assume a file's contents or a command's
+result") had been replaced by an abstract "requires a real harness observation" rule → fabrication
+resumed; restoring the concrete wording (`ba8d31a`) helped. **Lesson: positive grammar is not
+behaviourally equivalent; the duplication was load-bearing.**
+
+**F24d — reset-on-contamination caused an endless full-replay loop.** Resetting the M365 session when
+the model authored a `<tool_output>` made the next turn `turn=0, mode=full`; because the model kept
+fabricating, EVERY turn reset → full replay → re-fabricate (live 2026-10-11). Removed (`b3e49c5`);
+replaced with **in-place correction**: execute only the complete calls *before* the fabrication and
+prepend a `PROTOCOL CORRECTION` before their real results (no reset). Pure-transcript hallucinations
+(no valid call) get a corrective retry instead.
+
+**F24e — structural fix: the post-fence abort guard.** With one call per turn a valid assistant
+message is optional prose + ONE complete fence + whitespace. The handler now aborts generation (Stop
+frame, per-turn `AbortController`) the moment the model continues past the fence, emits a
+`<tool_output>`/`<tool_response>` opener **outside** a fence, or opens a **second** fence. It is
+fence-aware (text inside a fence is call data — a command may legitimately contain the literal
+`<tool_output>`). This is the only lever that does not depend on the model cooperating.
+
+**F24f — execution-agent opener.** "You write assistant messages" (a message-writer identity, which
+naturally includes design docs/plans) → prose-document drift; "You are an execution agent working
+toward the user's whole objective…" improves action persistence. It does **not** by itself stop
+fabrication. Agent path only.
+
+**Evidence.** Live proxy `10.0.1.15`, 2026-10-11. Commits `ee4962b..a7025da`. After the fixes, session
+`cd7c1ab1` ran **70 turns** (turn 0 full + 69 delta), **one tool call each, zero contamination, zero
+resets** (n=1). Transcript self-diagnosis quoted above. Framings `packages/core/src/fenced.ts`; guard +
+correction in `packages/proxy-lib/src/handler.ts`; tests `fenced.test.ts`, `tools.test.ts`,
+`handler-agent.test.ts`, `handler-shielding.test.ts`.
+
+**Falsification.** Show the model reliably batching independent calls without fabricating between them
+(then batching could return), or show a semantic-only rule (no structural guard) eliminating the
+self-authored `<tool_output>` rate over a long session.

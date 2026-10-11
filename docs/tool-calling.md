@@ -121,9 +121,17 @@ prompt is tuned. The layers, in handler order:
   `!everActed`, so it won't misfire on a genuine post-write summary.
 - **Delta Turn `<tools>` Injection:** Follow-up turns in `formatDeltaMessages` proactively re-inject
   the `<tools>` block to prevent M365 reasoning models (`DeepLeo`) from forgetting tool availability.
-- **Assistant-simulated `<tool_response>` rejection & context flush:** When a model produces fake
-  `<tool_response>` tags in its output, the proxy strips them and resets the session to force a clean
-  full-history replay on the next turn.
+- **Assistant-simulated `<tool_output>`/`<tool_response>` rejection (correct-in-place, NO reset):** the
+  model drifts into authoring its own result blocks — the token-prediction prior
+  ([`hypotheses.md`](hypotheses.md) §24). The proxy strips the fabricated suffix, executes only the
+  complete calls *before* it, and prepends a `PROTOCOL CORRECTION` before their real results on the
+  next turn. It does **not** reset the session — resetting made every turn a full replay (an endless
+  re-grounding loop). A pure-transcript hallucination with no valid call gets a corrective retry.
+- **Post-fence abort guard:** with one call per turn, a valid assistant message is optional prose +
+  ONE complete fence + whitespace. Generation is aborted (Stop frame, per-turn `AbortController`) the
+  moment the model continues past the fence, emits a `<tool_output>`/`<tool_response>` opener **outside**
+  a fence, or opens a **second** fence. Fence-aware: text inside a fence is call data (a command may
+  legitimately contain the literal `<tool_output>`). ([`hypotheses.md`](hypotheses.md) §24 F24e.)
 - **Tool-result labelling:** each `<tool_response>` is tagged with the command that produced
   it (`<tool_response tool="bash" command="ls -la">`) by correlating `tool_call_id` back to
   the call — so the model reads output in context (a listing vs file contents vs stdout)
@@ -132,8 +140,10 @@ prompt is tuned. The layers, in handler order:
   the client gets only `tool_calls` with `content: null` (stripped text is logged).
 - **Invented JSON:** `parseToolCalls()` removes `{"confidence":N}`, **drops** a `{"final":…}`
   riding alongside tool calls (premature success), and **unwraps** a lone `{"final":"…"}`.
-- **One call per turn:** keeps only the **first** tool call; M365 batches its whole plan into
-  one response, running later steps on guessed state. Override with `M365_ALLOW_MULTI_TOOL`.
+- **One call per turn (both paths):** keeps only the **first** tool call. M365 batches its whole plan
+  into one response, and the model then fabricates the observations between calls — the "later steps
+  on guessed state" hazard. A batching experiment on the Claude path (`1dab70a`) reproduced exactly
+  that; reverted (`f490dfb`). `M365_ALLOW_MULTI_TOOL` is the explicit experimental opt-out.
 - **New Session Stagger Queue (`paceNewSessionStart`):** Fresh conversations (`turn === 0`) are
   paced through a 15-second spacing queue (`M365_NEW_SESSION_SPACING_MS = 15000`), capping new session
   starts at 4 per minute to avoid burst thread-rate throttling across parallel workers or subagents,

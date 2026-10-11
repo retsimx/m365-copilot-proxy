@@ -137,28 +137,38 @@ makes them structurally immune to the F17/F22 Disengage class. That immunity buy
 `framingVariantForTone`). GPT tones keep the bash-only advisor framing, unchanged.
 
 **Agent framing (Claude) — the levers.** The model is declared the tools directly — `read`,
-`write`, `edit`, `bash` — each with a fenced template and a worked **call** example. In
-order of importance:
+`write`, `edit`, `bash` — and (Oct 11) the framing was hardened after a long-session regression
+([`hypotheses.md`](hypotheses.md) §24). In order of importance:
 
-1. **Positive execution contract, not prohibition.** *"You propose tool calls; the external
-   harness alone executes them … emitting a call does not execute it and provides no evidence
-   of its result."* Prohibition-heavy rewrites **made it worse** — the model reasoned about
-   the rules instead of acting.
-2. **Terminal tool-call boundary.** *"End your message immediately after the closing fence —
-   no expected result, no simulated exchange, no conclusion."* A chat completion otherwise
-   keeps writing past the fence.
-3. **No return-side examples.** Showing *"the harness then returns: `<tool_output>`…"* taught
-   the model to **author `<tool_output>` blocks itself** (fabricated results). Examples now
-   end at the call and state the result arrives in a separate message.
-4. **Grounding-first rule.** The first action MUST be a grounding command (`pwd && ls -la .`)
-   before describing the environment. This is what killed the "`/home/claude` / sandboxed
-   container / project doesn't exist" confabulation — the model no longer establishes an
-   environment before touching reality.
-5. **`workdir:` in the bash example** (generic placeholder) so commands run in the project
-   directory, not the harness default.
-6. **Persistence / truncation framing.** A failed, empty, or truncated result is
-   *information*; a truncated result is a size cap — fetch the remainder with a narrower read.
-   Reinforced by the delta-envelope annotation (below).
+1. **Execution-agent identity, not a message-writer.** The opener is *"You are an execution agent
+   working toward the user's whole objective…"*. The earlier *"You write assistant messages…"* gave a
+   message-writer identity (which includes design docs/plans) and drifted into prose-document output
+   instead of acting.
+2. **Exactly one tool call per turn.** *"Emit exactly ONE tool-call fence per turn… never emit a
+   second tool fence in the same turn."* Multi-call batching re-activates the model's
+   "call → result → call" continuation prior, so it fabricates the observations *between* calls
+   ([`hypotheses.md`](hypotheses.md) §24 F24b). Density lives *inside* one `bash` call instead.
+3. **Concrete fence-hygiene anchors are load-bearing.** *"Never omit the backticks, never write the
+   tool name inline with a sentence, and never embed the block mid-paragraph."* A "cleaner" positive
+   grammar rewrite lost this and produced `prose.bash` (label glued to prose, backticks omitted).
+   Positive grammar is **not** behaviourally equivalent — keep the concrete, lexical,
+   failure-matched wording.
+4. **Concrete anti-fabrication wording.** *"You know nothing about the user's machine until the
+   harness shows it to you… do not assume a file's contents or a command's result… a path named in the
+   task is not evidence… to learn something, call a tool and read the real observation."* An abstract
+   *"requires a real harness observation"* rule was **weaker** and fabrication resumed.
+5. **Terminal tool-call boundary.** *"End your message immediately after the closing fence."* A chat
+   completion otherwise keeps writing past the fence. Backed structurally by the **post-fence abort
+   guard** ([`tool-calling.md`](tool-calling.md)).
+6. **Grounding-first rule.** The first action MUST be a grounding command — now
+   `pwd && whoami && uname -srm && ls -la .` (the `whoami`/`uname` output is direct counter-evidence
+   to the M365 `oai` sandbox) — before describing the environment. With a real command as first
+   contact there is nothing to invent.
+7. **No return-side examples.** Showing *"the harness then returns: `<tool_output>`…"* taught the
+   model to **author `<tool_output>` blocks itself**. Examples end at the call and state the result
+   arrives in a separate message.
+8. **Persistence / truncation framing.** A failed, empty, or truncated result is *information*; a
+   truncated result is a size cap — fetch the remainder with a narrower read.
 
 **Two competing tool surfaces — the agent-less trap** ([api §5](m365-copilot-api.md)). On the
 agent-less (Claude) path M365 gives the model **its own tool set** — `bash_tool` (a *container*
@@ -174,12 +184,14 @@ so the fix is prompt-level: the framing **names Microsoft's tools *and* the XML 
 the model to the fenced calls only (Claude: imperative *"ignore them"*; GPT/advisor: the same fact
 stated **descriptively**, since that framing is shape-frozen).
 
-**Self-authored `<tool_output>` simulation — rejected.** A Claude run fabricated git output: it
-emitted a real `git log` fence, then wrote its **own** `<tool_output>` blocks with invented
-SHAs/subjects (lifted from this repo's `AGENTS.md` feature names). The proxy's self-simulation
-stripper matched only the legacy `<tool_response>` tag; it now matches `<tool_output>` too —
-salvage the real call, drop the fabricated suffix, reset the session
-([`tool-calling.md`](tool-calling.md)).
+**Self-authored `<tool_output>` simulation — rejected, corrected in place.** A Claude run fabricated
+git output: it emitted a real `git log` fence, then wrote its **own** `<tool_output>` blocks with
+invented SHAs/subjects (lifted from this repo's `AGENTS.md` feature names). The self-simulation
+stripper matches `<tool_output>` as well as the legacy `<tool_response>` — salvage the real call, drop
+the fabricated suffix. It now **corrects in place** (a `PROTOCOL CORRECTION` before the real results;
+**no session reset** — resetting made every turn a full replay, [`hypotheses.md`](hypotheses.md) §24
+F24d), and the **post-fence abort guard** stops generation the moment the model continues past the
+fence ([`tool-calling.md`](tool-calling.md)).
 
 ### Production findings & confabulation bypass (`docs/hypotheses.md` §21)
 
