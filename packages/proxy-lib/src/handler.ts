@@ -946,8 +946,14 @@ export async function handleChatCompletion(
         // The agent overrides `tone` (forces GPT-5), so tool-less requests must
         // skip it to reach the model the tone selects (e.g. Claude). See
         // ModelSession.run / docs H8.6.
-        copilotStream = await session.run(text, model, opts.signal, useToolAgent, { onReasoning });
         requestWireTurns++;
+        copilotStream = await session.run(text, model, opts.signal, useToolAgent, {
+          onReasoning,
+          beforeReconnectAttempt: async () => {
+            await paceTurnVelocity(opts.signal, { priority: true });
+            requestWireTurns++;
+          },
+        });
       } catch (err: any) {
         return { error: jsonResponse(502, { error: { message: err.message, type: "upstream_error" } }) };
       }
@@ -1018,10 +1024,19 @@ export async function handleChatCompletion(
         // M365_NO_DISENGAGE_RETRY.
         if (hasTools && !disengageRetried && !process.env.M365_NO_DISENGAGE_RETRY) {
           disengageRetried = true;
+          try {
+            conv.status = "stagger";
+            await paceNewSessionStart(opts.signal);
+            conv.status = "governor";
+            await paceTurnVelocity(opts.signal, { priority: true });
+          } catch (err: any) {
+            conv.status = "idle";
+            return { error: jsonResponse(499, { error: { message: err.message, type: "client_closed_request" } }) };
+          }
           session.newConversation();
           text = formatMessages(body.messages, body.tools, body.tool_choice, session.conversationId);
           log.info("Upstream Disengaged — retrying once with 'advisor' framing in a fresh conversation (F22)");
-          attempt--; // free retry; bounded — disengageRetried flips once
+          attempt--; // free retry; bounded — the fresh attempt was explicitly paced above
           continue;
         }
         log.info("Upstream Disengaged — failing fast (no retry) to preserve quota");

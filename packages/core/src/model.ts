@@ -13,6 +13,10 @@ export interface ModelSessionOptions {
   useAgent?: boolean;
 }
 
+export interface ModelRunOptions extends ChatTurnOptions {
+  beforeReconnectAttempt?: () => Promise<void>;
+}
+
 /**
  * A stateful session for running M365 Copilot.
  * Manages auth, agent resolution, and conversation continuity.
@@ -84,7 +88,7 @@ export class ModelSession {
     model: string = "m365-copilot",
     signal?: AbortSignal,
     useAgent: boolean = true,
-    turnOptions?: ChatTurnOptions,
+    turnOptions?: ModelRunOptions,
   ): Promise<CopilotStream> {
     const token = await this.resolveToken();
     const wantAgent = this.useAgent && useAgent;
@@ -116,9 +120,10 @@ export class ModelSession {
     // the tool-calling agent path — image optionsSets are agent-less, and we don't
     // want the image tool competing with fenced tool-call emission. Opt out with
     // M365_NO_IMAGE_GEN for a pure-text agent-less turn.
+    const { beforeReconnectAttempt, ...chatTurnOptions } = turnOptions ?? {};
     const turnOpts: ChatTurnOptions = {
       generateImages: !agentForTurn && !process.env.M365_NO_IMAGE_GEN,
-      ...turnOptions,
+      ...chatTurnOptions,
     };
 
     try {
@@ -126,6 +131,7 @@ export class ModelSession {
     } catch (err: any) {
       // Session might be stale — reconnect with same IDs
       log.info("Session error, reconnecting:", err.message);
+      await beforeReconnectAttempt?.();
       this.copilotSession = this.createCopilotSession(agentForTurn);
       this.currentAgentId = agentForTurn;
       return await this.copilotSession.chat(token, text, model, signal, turnOpts);

@@ -66,6 +66,7 @@ export {
 export {
   ModelSession,
   type ModelSessionOptions,
+  type ModelRunOptions,
 } from "./model.js";
 
 export {

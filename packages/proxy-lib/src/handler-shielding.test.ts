@@ -10,6 +10,7 @@ import {
   TRUNCATION_SURRENDER_FORCE_PROMPT,
 } from "./handler.js";
 import * as core from "@m365-copilot/core";
+import { getNewSessionsInWindow, getTurnsInWindow, resetMetrics } from "./metrics.js";
 
 describe("Handler Degradation Circuit Breaker & 429 Retry-After Shielding", () => {
   beforeEach(() => {
@@ -723,6 +724,114 @@ describe("New Session Pacing Queue", () => {
 
 });
 
+
+describe("Hidden upstream attempt accounting", () => {
+  const originalEnv = {
+    minTurnSpacing: process.env.M365_MIN_TURN_SPACING_MS,
+    newSessionSpacing: process.env.M365_NEW_SESSION_SPACING_MS,
+    sessionCapacity: process.env.M365_SESSION_BUCKET_CAPACITY,
+  };
+
+  beforeEach(() => {
+    process.env.M365_MIN_TURN_SPACING_MS = "0";
+    process.env.M365_NEW_SESSION_SPACING_MS = "0";
+    process.env.M365_SESSION_BUCKET_CAPACITY = "10";
+    resetNewSessionPacing();
+    resetTurnVelocityPacing();
+    resetMetrics();
+    vi.restoreAllMocks();
+  });
+
+  afterEach(() => {
+    if (originalEnv.minTurnSpacing === undefined) delete process.env.M365_MIN_TURN_SPACING_MS;
+    else process.env.M365_MIN_TURN_SPACING_MS = originalEnv.minTurnSpacing;
+    if (originalEnv.newSessionSpacing === undefined) delete process.env.M365_NEW_SESSION_SPACING_MS;
+    else process.env.M365_NEW_SESSION_SPACING_MS = originalEnv.newSessionSpacing;
+    if (originalEnv.sessionCapacity === undefined) delete process.env.M365_SESSION_BUCKET_CAPACITY;
+    else process.env.M365_SESSION_BUCKET_CAPACITY = originalEnv.sessionCapacity;
+    vi.restoreAllMocks();
+  });
+
+  it("charges a turn and fresh-session permit for a Disengaged recovery attempt", async () => {
+    const streams = [
+      {
+        async *[Symbol.asyncIterator]() {},
+        fullText: "",
+        hasContent: false,
+        images: [],
+        isThrottled: false,
+        messageType: "Disengaged",
+        contentOrigin: "DeepLeo",
+        scores: {},
+        turnCount: 1,
+        throttle: null,
+      },
+      {
+        async *[Symbol.asyncIterator]() { yield ["```bash", "pwd", "```"].join("\n"); },
+        fullText: ["```bash", "pwd", "```"].join("\n"),
+        hasContent: true,
+        images: [],
+        isThrottled: false,
+        messageType: undefined,
+        contentOrigin: "DeepLeo",
+        scores: {},
+        turnCount: 1,
+        throttle: null,
+      },
+    ] as any[];
+    vi.spyOn(core, "isDegradationBackoff").mockReturnValue(false);
+    const runSpy = vi.spyOn(core.ModelSession.prototype, "run")
+      .mockImplementation(async () => streams.shift() as any);
+
+    const response = await handleChatCompletion({
+      model: "gpt-5.6-think-deeper",
+      messages: [{ role: "user" as const, content: "inspect the project" }],
+      stream: false,
+      tools: [{
+        type: "function",
+        function: {
+          name: "bash",
+          description: "Run a command",
+          parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] },
+        },
+      }],
+    } as any, new SessionPool());
+
+    expect(response.status).toBe(200);
+    expect(runSpy).toHaveBeenCalledTimes(2);
+    expect(getTurnsInWindow(3_600_000)).toBe(2);
+    expect(getNewSessionsInWindow(3_600_000)).toBe(2);
+  });
+
+  it("charges an additional governed turn when ModelSession requests a transport reconnect", async () => {
+    vi.spyOn(core, "isDegradationBackoff").mockReturnValue(false);
+    vi.spyOn(core.ModelSession.prototype, "run").mockImplementation(async (_text, _model, _signal, _agent, options: any) => {
+      await options.beforeReconnectAttempt();
+      return {
+        async *[Symbol.asyncIterator]() { yield "ok"; },
+        fullText: "ok",
+        hasContent: true,
+        images: [],
+        isThrottled: false,
+        messageType: undefined,
+        contentOrigin: "DeepLeo",
+        scores: {},
+        turnCount: 1,
+        throttle: null,
+      } as any;
+    });
+
+    const response = await handleChatCompletion({
+      model: "gpt-5.6-think-deeper",
+      messages: [{ role: "user" as const, content: "hello" }],
+      stream: false,
+    }, new SessionPool());
+
+    expect(response.status).toBe(200);
+    expect(getTurnsInWindow(3_600_000)).toBe(2);
+    expect(getNewSessionsInWindow(3_600_000)).toBe(1);
+  });
+});
 
 describe("Sliding-Window Velocity Governor (paceTurnVelocity)", () => {
   let origSpacing: string | undefined;
