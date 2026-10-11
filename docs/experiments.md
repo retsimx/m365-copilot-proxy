@@ -252,6 +252,24 @@ See `hypotheses.md` §23.
 
 ---
 
+### E-T5 — Sustained-cap threshold campaign (tool-enabled) (2026-10-10)
+
+- **Hypothesis (F36):** can the shared sustained-turn cap be raised above 120/hr without upstream throttling?
+- **Prerequisites:** experiment build = `a9b154f` + `proxy-experiment-mode-and-telemetry.diff` (campaign dir);
+  drop-in `experiment.conf` (`runtime-config/experiment.conf.template`); runner `scripts/bench/throughput_threshold.py`.
+- **Exact configuration:** `runtime-config/tb130-config.json` — model `gpt-5.6-think-deeper`, `targets [130,135]`,
+  `profile tool`, `durationSec 5400`, `maxAttempts 220`, `burst10mCap 35`, one fixture dir.
+- **Session handling:** one persistent conversation per condition; verify the upstream conversation ID is stable.
+- **Pacing:** uniform sequential; each dispatch no earlier than its target monotonic deadline; no concurrency,
+  no catch-up bursts; rolling-10m held ≤ 35 (actual ≤ 23).
+- **Run:** `python3 scripts/bench/throughput_threshold.py run --campaign <id> --config <cfg>` (detached; 1-h quiet
+  before each condition; **stops escalating** on any throttle or invalid run).
+- **Read:** `report.md` per-target outcome + rolling-60m/10m + tool-call count; `attempts.ndjson` for telemetry.
+- **Result (2026-10-10):** 130/hr and 135/hr both passed (196 / 204 attempts, all 200, no throttle). Production cap
+  raised to **135**. **Rollback:** set `M365_SUSTAINED_MAX_TURNS=130` (or delete `limits.conf`) + restart.
+
+---
+
 ## Adding an experiment
 
 1. State the hypothesis + falsification criterion in `hypotheses.md`.

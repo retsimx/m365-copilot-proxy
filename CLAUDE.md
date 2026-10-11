@@ -5,9 +5,11 @@ Working guidance for this repo lives in **[AGENTS.md](AGENTS.md)** — read it f
 Start with the **Operating principles (read first)** and **How we work —
 hypothesis-driven** sections. In short:
 
-1. Always run sequentially — one thread at a time; the rate limit tracks
-   threads-started, not messages (upstream returns explicit `PerScenarioThrottled`).
-   Shielded by a 30m circuit-breaker cooldown baseline and 15s new-session pacing queue.
+1. Always run sequentially — one thread at a time. Two upstream horizons: thread
+   creation (`PerScenarioThrottled`; 30m cooldown, 15s new-session pacing) and an
+   account-wide **turn-volume** ceiling (`PerUserThrottled`; shared across models, exact
+   value unpinned — see hypotheses F35/F36). Shielded locally by the circuit breaker +
+   velocity governor.
 2. Chase all hunches — tangents to test any idea are encouraged; test, don't guess.
 3. The end goal is always a usable agent in **pi or openclaw**.
 4. Be scientific: hypothesize → predict → test → conclude (log it in

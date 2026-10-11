@@ -3008,3 +3008,34 @@ succeeds upstream on **both** an existing and a fresh conversation within the co
 **Evidence paths.** `scripts/bench/throughput-out/mt-20261010T0719Z/FINAL_REPORT.md`, `report.md`,
 `attempts.ndjson`, `EVIDENCE_VALIDATION.md`, `smoke/smoke2.json`; runner `scripts/bench/throughput_bench.py`;
 tested proxy patch `proxy-experiment-mode.patch` (applies to `e09b2a0`).
+
+
+---
+
+### F36 — Tool-enabled sustained threshold: 130 and 135 turns/hr both supported; prod cap raised to 135 🟢 (2026-10-10)
+
+**Claim.** On the production-representative **tool-enabled** path (agent attached), the account
+sustained **130 and 135 recorded turns per rolling hour** with **no upstream throttle**. The local
+120/hr cap was therefore conservative and materially delayed real work (~16–20 min stalls at ~124/hr).
+
+**Evidence (campaign `mt2-20261010T1847Z`, build `178893f`).**
+- One persistent conversation per condition; single `bash` tool → a real fenced tool-call loop (agent
+  attached, tone `Gpt_5_6_Reasoning`); uniform sequential pacing; rolling-10m held ≤ 23 (cap 35).
+- **130/hr:** 196 attempts, 100% HTTP 200, rolling-60m held at **130** for the ~90-min cap; 98 tool calls.
+- **135/hr:** 204 attempts, 100% HTTP 200, rolling-60m held at **135**; 102 tool calls.
+- Step-0 telemetry: production reached **~124 turns/60m** (2026-10-09) with no throttle; the 120 cap
+  injected **~16–20 min** stalls. The only observed upstream trip remains the tool-less smoke at ~140
+  account turns/60m (F35).
+
+**Confidence.** Medium — two clean tool-enabled conditions on one account; upstream accounting unknown;
+boundary only bounded to roughly **(124, 140]/hr**.
+
+**Decision (2026-10-11).** Production `M365_SUSTAINED_MAX_TURNS` raised **120 → 135** (operator choice;
+local policy, reversible). 135 sits ~5 below the one observed trip — an accepted risk with a one-line
+rollback (set 135→130, or delete `limits.conf`).
+
+**Unresolved.** Whether tool-enabled turns cost the same upstream as tool-less; whether 135 stays safe
+with production bursts layered on sustained volume; whether any per-model allowance exists.
+
+**Evidence paths.** `scripts/bench/throughput-out/mt2-20261010T1847Z/`; runner
+`scripts/bench/throughput_threshold.py`; patch `proxy-experiment-mode-and-telemetry.patch` (applies to `a9b154f`).

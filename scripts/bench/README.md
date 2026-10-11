@@ -51,7 +51,7 @@ Example: `--label json` then `--label fenced` → compare `pct` and the
 
 - Each task = several M365 messages (multi-turn). Full suite ≈ 25–40 messages,
   spread across fresh conversations. Use `--tasks` / `--repeat 1` to stay cheap;
-  if the account is throttling (lots of `ERROR`), wait ~10 min.
+  if the account is throttling (lots of `ERROR`), check `circuitBreaker.reason` and wait ~20–30 min (an empty/`Disengaged` 502 is not always a throttle).
 - `n=1` by default — LLM output varies. Use `--repeat 3+` before trusting small
   differences.
 - Tasks live in `tasks.mjs` (objective, python3+bash only). Add your own.

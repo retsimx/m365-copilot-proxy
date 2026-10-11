@@ -44,8 +44,9 @@ grid via `run-cell.mjs`, and cleans up. Each cell writes a JSON to `out/`.
 Each cell = `#tasks × REPEAT` multi-turn tool loops → several M365 messages. Total ≈
 `#models × #prompts × #presets` cells. The default is deliberately small. The driver
 paces between cells; a fresh nonce per task means each task is its own M365 conversation
-(so per-conversation quota isn't the limit — the thread-rate throttle is, if you sweep
-very wide). Scale deliberately; run on a rested account for a big sweep.
+(so per-conversation quota isn't the limit — the thread-rate throttle and the
+account-wide turn-volume ceiling are, if you sweep wide; see hypotheses F35/F36).
+Scale deliberately; run on a rested account for a big sweep.
 
 ## Prerequisites
 
