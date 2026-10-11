@@ -3093,10 +3093,26 @@ naturally includes design docs/plans) → prose-document drift; "You are an exec
 toward the user's whole objective…" improves action persistence. It does **not** by itself stop
 fabrication. Agent path only.
 
-**Evidence.** Live proxy `10.0.1.15`, 2026-10-11. Commits `ee4962b..a7025da`. After the fixes, session
-`cd7c1ab1` ran **70 turns** (turn 0 full + 69 delta), **one tool call each, zero contamination, zero
-resets** (n=1). Transcript self-diagnosis quoted above. Framings `packages/core/src/fenced.ts`; guard +
-correction in `packages/proxy-lib/src/handler.ts`; tests `fenced.test.ts`, `tools.test.ts`,
+**F24g — the model simulates a role-tagged transcript.** The fabrication is not only a
+`<tool_output>` block: in the legacy (`<tool_response>`) era the model emitted full simulated
+exchanges — `<tool_response>Wrote file successfully.</tool_response>` + `<assistant>` + the next
+call. **Root cause: the proxy's own envelopes (`<system>`, `<user>`, `<tool_output>`) teach a
+role-tag convention**, so the model completes the pattern with the missing role (`<assistant>`,
+and the result tag of the day). The result tag merely tracks our envelope
+(`<tool_response>` → `<tool_output>`); `<assistant>` is the turn marker in both. 22 `<assistant>`
+occurrences, all 2026-10-10 (legacy era); none since the fixes. Open: extend the abort guard to
+also trip on a self-authored `<assistant>`/`<tool_response>` (the current guard only names
+`<tool_output>`/`<tool_response>`).
+
+**Evidence.** Live proxy `10.0.1.15`, 2026-10-11. Commits `ee4962b..eac359f`. After the fixes
+(one-call + exec-agent opener + post-fence abort guard + opaque parser body + heredoc-aware
+guard): session `cd7c1ab1` ran **70 turns** (turn 0 full + 69 delta), **one tool call each, zero
+contamination, zero resets**; and **multiple further 50+ turn sonnet sessions completed
+correctly** with the guard firing repeatedly (each firing = one fabricated `<tool_output>` cut off
+before it reached the parser/history/client). Confidence upgraded from n=1 to reproduced. The
+**termination rate is the residual fabrication rate** — contained, but the number to watch
+(proposed metric: aborts/turn on `/api/metrics`). Framings `packages/core/src/fenced.ts`; guard +
+correction + ramp in `packages/proxy-lib/src/handler.ts`; tests `fenced.test.ts`, `tools.test.ts`,
 `handler-agent.test.ts`, `handler-shielding.test.ts`.
 
 **Falsification.** Show the model reliably batching independent calls without fabricating between them
