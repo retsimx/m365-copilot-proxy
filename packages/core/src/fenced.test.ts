@@ -611,7 +611,7 @@ describe("formatFencedToolDefinitions", () => {
     expect(out).toContain("You write assistant messages; the external harness writes observations");
     expect(out).toContain("MESSAGE BOUNDARY");
     expect(out).toContain("A `<tool_output>` block is written only by the harness");
-    expect(out).toContain("Choose the simplest tool for the operation");
+    expect(out).toContain("Choose the tool that performs the step most safely and clearly");
     expect(out).toContain("they are NOT calls");
     expect(out).not.toContain("ENTIRE filesystem");
     expect(out).not.toContain("anthropic_function_calls"); // full native-XML example removed

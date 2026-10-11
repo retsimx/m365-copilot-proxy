@@ -1422,16 +1422,13 @@ export async function handleChatCompletion(
       // previous tool_response. Set M365_ALLOW_MULTI_TOOL to restore batching.
       // One-call-per-turn is a GPT/advisor-path safety default (batches run later steps on
       // guessed state). The Claude agent path may batch independent calls, so allow multi there.
-      if (!process.env.M365_ALLOW_MULTI_TOOL && framingVariant === "advisor" && parsed.toolCalls.length > 1) {
+      // One call per turn — BOTH paths. M365 batches its whole plan into one response and
+      // the model then fabricates the observations between calls (live 2026-10-11) — exactly
+      // the "later steps on guessed state" the docs warned about (docs/tool-calling.md:135).
+      // Emitting a 2nd fence re-activates the learned "call → result → call" continuation.
+      // Keep only the first call; M365_ALLOW_MULTI_TOOL is an explicit experimental opt-out.
+      if (!process.env.M365_ALLOW_MULTI_TOOL && parsed.toolCalls.length > 1) {
         log.info(`One-call-per-turn: keeping ${parsed.toolCalls[0].function.name}, dropping ${parsed.toolCalls.length - 1} batched call(s)`);
-        parsed.toolCalls = [parsed.toolCalls[0]];
-      }
-
-      // Turn 0 is the grounding turn (agent/Claude path ONLY — the GPT/advisor path is
-      // unchanged): the framing requires the grounding call to be the ONLY call, and
-      // bundling calls on turn 0 is where the model starts hallucinating (live 2026-10-11).
-      if (framingVariant === "agent" && session.turnCount === 0 && parsed.toolCalls.length > 1) {
-        log.info(`Grounding turn: keeping ${parsed.toolCalls[0].function.name}, dropping ${parsed.toolCalls.length - 1} bundled call(s)`);
         parsed.toolCalls = [parsed.toolCalls[0]];
       }
     }
