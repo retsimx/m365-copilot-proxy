@@ -932,7 +932,7 @@ export async function handleChatCompletion(
         : "";
       // If the previous turn fabricated its own `<tool_output>`, prepend the correction
       // IMMEDIATELY BEFORE the real tool results so it frames them as authoritative.
-      const correction = conv.pendingHallucinationCorrection ? `${HALLUCINATION_CORRECTION_PROMPT}\n\n` : "";
+      const correction = framingVariant === "agent" && conv.pendingHallucinationCorrection ? `${HALLUCINATION_CORRECTION_PROMPT}\n\n` : "";
       conv.pendingHallucinationCorrection = false;
       text = `${framing}${prohibition}${correction}${delta}`;
       log.info(`Chat completion: model=${model}, stream=${body.stream}, messages=${body.messages.length}, new=${newMessages.length}, turn=${session.turnCount}, mode=delta, cid=${convId}`);
@@ -1226,7 +1226,7 @@ export async function handleChatCompletion(
 
     // Document guard: if model returned an instructional document full of fences,
     // convert it to plain text before evaluating confabulation/retries.
-    if (isProseDocument(parsed)) {
+    if (isProseDocument(parsed, framingVariant)) {
       log.info(`Response is a prose document (${parsed.toolCalls.length} embedded fences), returning as text instead of executing`);
       parsed = { hasToolCalls: false, toolCalls: [], textContent: fullText };
     }
@@ -1317,18 +1317,19 @@ export async function handleChatCompletion(
       conv.sentMessageCount = body.messages.length;
       fullText = restoreM365Fences(retry.fullText, specs ?? new Map());
       parsed = parseToolCalls(fullText, body.tools);
-      if (isProseDocument(parsed)) {
+      if (isProseDocument(parsed, framingVariant)) {
         log.info(`Response is a prose document (${parsed.toolCalls.length} embedded fences), returning as text instead of executing`);
         parsed = { hasToolCalls: false, toolCalls: [], textContent: fullText };
       }
       log.info(`After forcing retry: hasToolCalls=${parsed.hasToolCalls}, count=${parsed.toolCalls.length}`);
     }
 
-    // Pure-transcript hallucination: the model fabricated machine output (a `<tool_output>`
-    // block or a shell transcript) but produced NO valid call, so nothing ran and there is
-    // no real result to attach a correction to. Force a corrective retry in the SAME live
-    // session — do not reset (that looped; live 2026-10-11).
-    for (let attempt = 0; attempt < maxConfabRetries && !parsed.hasToolCalls && /<(?:tool_response|tool_output)\b/i.test(fullText); attempt++) {
+    // Pure-transcript hallucination (agent/Claude path ONLY — the GPT/advisor path is
+    // unchanged): the model fabricated machine output (a `<tool_output>` block or a shell
+    // transcript) but produced NO valid call, so nothing ran and there is no real result to
+    // attach a correction to. Force a corrective retry in the SAME live session — do not
+    // reset (that looped; live 2026-10-11).
+    for (let attempt = 0; framingVariant === "agent" && attempt < maxConfabRetries && !parsed.hasToolCalls && /<(?:tool_response|tool_output)\b/i.test(fullText); attempt++) {
       log.info(`Hallucinated tool output with no valid call — forcing corrective retry ${attempt + 1}/${maxConfabRetries}`);
       const toolsBlock = hasTools ? `${formatSessionFraming(framingVariant, body.tools ?? [])}\n\n` : "";
       text = `${toolsBlock}${HALLUCINATION_NO_CALL_CORRECTION_PROMPT}`;
@@ -1337,7 +1338,7 @@ export async function handleChatCompletion(
       conv.sentMessageCount = body.messages.length;
       fullText = restoreM365Fences(retry.fullText, specs ?? new Map());
       parsed = parseToolCalls(fullText, body.tools);
-      if (isProseDocument(parsed)) {
+      if (isProseDocument(parsed, framingVariant)) {
         parsed = { hasToolCalls: false, toolCalls: [], textContent: fullText };
       }
       log.info(`After corrective retry: hasToolCalls=${parsed.hasToolCalls}, count=${parsed.toolCalls.length}`);
@@ -1426,10 +1427,10 @@ export async function handleChatCompletion(
         parsed.toolCalls = [parsed.toolCalls[0]];
       }
 
-      // Turn 0 is the grounding turn: the framing requires the grounding call to be the
-      // ONLY call, and bundling calls on turn 0 is where the model starts hallucinating
-      // (live 2026-10-11). Keep just the first call.
-      if (session.turnCount === 0 && parsed.toolCalls.length > 1) {
+      // Turn 0 is the grounding turn (agent/Claude path ONLY — the GPT/advisor path is
+      // unchanged): the framing requires the grounding call to be the ONLY call, and
+      // bundling calls on turn 0 is where the model starts hallucinating (live 2026-10-11).
+      if (framingVariant === "agent" && session.turnCount === 0 && parsed.toolCalls.length > 1) {
         log.info(`Grounding turn: keeping ${parsed.toolCalls[0].function.name}, dropping ${parsed.toolCalls.length - 1} bundled call(s)`);
         parsed.toolCalls = [parsed.toolCalls[0]];
       }
@@ -1440,9 +1441,8 @@ export async function handleChatCompletion(
     // reset the session: that caused an endless full-replay loop (the model re-grounded
     // and re-simulated every turn; live 2026-10-11). The parser already discarded the
     // fabricated suffix; if valid calls came before it, flag a correction to be prepended
-    // to their real results next turn. A no-call transcript is handled by the corrective
-    // retry loop above.
-    if (/<(?:tool_response|tool_output)\b/i.test(fullText) && parsed.hasToolCalls) {
+    // to their real results next turn. Agent/Claude path ONLY — GPT is unchanged.
+    if (framingVariant === "agent" && /<(?:tool_response|tool_output)\b/i.test(fullText) && parsed.hasToolCalls) {
       log.info("Hallucinated tool output (self-authored result block) discarded — will attach a correction before the real results");
       conv.pendingHallucinationCorrection = true;
     }

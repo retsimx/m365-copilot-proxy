@@ -557,7 +557,7 @@ export function looksLikeConfabulation(text: string | null): boolean {
  * 2. If ALL tool calls are generic shell blocks (bash/sh) AND surrounded by
  *    substantial prose or markdown headings, it is treated as a tutorial document.
  */
-export function isProseDocument(parsed: ParseResult): boolean {
+export function isProseDocument(parsed: ParseResult, framingVariant?: string): boolean {
   if (!parsed.hasToolCalls || parsed.toolCalls.length < 2) return false;
 
   // Refusals or confabulations claiming inability to act are never instructional tutorial documents.
@@ -577,10 +577,10 @@ export function isProseDocument(parsed: ParseResult): boolean {
   // many fences, or tutorial headings.
   const hasDocHeaders = /(?:^|\n)#{1,3}\s+(?:readme|install|usage|run|getting started|build|setup|example|overview|configuration|documentation)\b/i.test(prose)
     || /(?:^|\n)#\s+[^\n]+/m.test(prose);
-  // Multi-call batching is now allowed on the Claude path, so a high fence COUNT is no
-  // longer a document signal — it swallowed 4 batched reads (live 2026-10-11). Only
-  // document-level structure (markdown headings) downgrades a turn to prose now.
-  return hasDocHeaders;
+  // The Claude/agent path allows multi-call batching, so a high fence COUNT is no longer a
+  // document signal there — it swallowed 4 batched reads (live 2026-10-11). The GPT/advisor
+  // path is unchanged: keep the legacy count rule there.
+  return (framingVariant !== "agent" && parsed.toolCalls.length >= 4) || hasDocHeaders;
 }
 
 export function parseToolCalls(text: string, tools?: ToolDef[]): ParseResult {
