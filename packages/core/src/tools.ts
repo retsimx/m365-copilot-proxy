@@ -55,12 +55,13 @@ export type ToolChoice =
 // --- Tool call format ---
 
 // Fenced Markdown is the format we instruct and primarily parse (see fenced.ts).
-// The two regexes below are tolerance-only FALLBACKS: M365 occasionally ignores the
-// fenced contract and emits a stray `{"tool":...,"arguments":{...}}` object, or wraps
-// it in a legacy ```tool_call fence. We parse those if they show up but never teach
-// the model to produce them — the JSON format scored 0/5 and was removed (§9).
+// The regex below is a tolerance-only FALLBACK: M365 occasionally ignores the
+// fenced contract and emits a stray `{"tool":...,"arguments":{...}}` object. We
+// parse it if it shows up but never teach the model to produce it — the JSON
+// format scored 0/5 and was removed (§9). (The legacy ```tool_call fence wrapper
+// was removed too: TOOL_CALL_REGEX already matches the JSON inside it, and the
+// leftover fence markers are stripped below.)
 const TOOL_CALL_REGEX = /\{\s*"tool"\s*:\s*"[^"]+"\s*,\s*"arguments"\s*:\s*\{[\s\S]*?\}\s*\}/g;
-const FENCED_TOOL_CALL_REGEX = /```tool_call\s*\n(\{[\s\S]*?\})\s*\n\s*```/g;
 
 // M365 invents bookkeeping objects ({"confidence": 0.5}) and wraps its answer in
 // {"final": "..."} — neither is a real tool call. Strip confidence everywhere;
@@ -645,31 +646,6 @@ export function parseToolCalls(text: string, tools?: ToolDef[]): ParseResult {
     }
   }
 
-  // Fallback: try legacy fenced format
-  if (toolCalls.length === 0) {
-    const fencedRegex = new RegExp(FENCED_TOOL_CALL_REGEX.source, "g");
-    while ((match = fencedRegex.exec(text)) !== null) {
-      try {
-        const parsed = JSON.parse(match[1]);
-        const name = resolveName(parsed.tool || parsed.name);
-        if (name) {
-          toolCalls.push({
-            id: `call_${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`,
-            type: "function",
-            function: {
-              name,
-              arguments: typeof parsed.arguments === "string"
-                ? parsed.arguments
-                : JSON.stringify(parsed.arguments ?? {}),
-            },
-          });
-        }
-      } catch {
-        log.error("Failed to parse fenced tool call JSON:", match[1]);
-      }
-    }
-  }
-
   if (toolCalls.length === 0) {
     return { hasToolCalls: false, toolCalls: [], textContent: cleanLooseText(text) };
   }
@@ -682,7 +658,6 @@ export function parseToolCalls(text: string, tools?: ToolDef[]): ParseResult {
   // the client and a junk-only leftover isn't flagged as mixed output.
   let remaining = text
     .replace(jsonRegex, "")
-    .replace(new RegExp(FENCED_TOOL_CALL_REGEX.source, "g"), "")
     .replace(CONFIDENCE_REGEX, "")
     .replace(FINAL_OBJECT_REGEX, "")
     .replace(/```(?:json|tool_call)?\s*```/g, "") // empty fence pair

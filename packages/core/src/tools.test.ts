@@ -70,7 +70,9 @@ describe("parseToolCalls", () => {
     expect(result.toolCalls).toHaveLength(2);
   });
 
-  it("should parse legacy fenced format", () => {
+  it("should parse a JSON tool call wrapped in a ```tool_call fence (tolerance)", () => {
+    // The legacy ```tool_call fence wrapper is no longer taught (JSON scored 0/5, §9),
+    // but a stray one is still tolerated: TOOL_CALL_REGEX matches the JSON inside it.
     const input = '```tool_call\n{"tool": "bash", "arguments": {"command": "ls"}}\n```';
     const result = parseToolCalls(input);
 
