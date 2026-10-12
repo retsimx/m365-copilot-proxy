@@ -597,7 +597,7 @@ export function getGovernorState(): {
   const burstSoft = Number(process.env.M365_BURST_SOFT_TURNS ?? Math.max(1, burstMax - 5));
 
   const sustainedWindowMs = Number(process.env.M365_SUSTAINED_WINDOW_MS ?? 3_600_000); // 60 minutes
-  const sustainedMax = Number(process.env.M365_SUSTAINED_MAX_TURNS ?? 120);
+  const sustainedMax = Number(process.env.M365_SUSTAINED_MAX_TURNS ?? 115);
   const sustainedWarn = Number(process.env.M365_SUSTAINED_WARN_TURNS ?? 90);
 
   const dangerSessions10m = Number(process.env.M365_10M_DANGER_SESSIONS ?? 15);
@@ -703,7 +703,7 @@ async function processTurnQueue(): Promise<void> {
     const burstSoft = Number(process.env.M365_BURST_SOFT_TURNS ?? Math.max(1, burstMax - 5));
 
     const sustainedWindowMs = Number(process.env.M365_SUSTAINED_WINDOW_MS ?? 3_600_000); // 60 minutes
-    const sustainedMax = Number(process.env.M365_SUSTAINED_MAX_TURNS ?? 120);
+    const sustainedMax = Number(process.env.M365_SUSTAINED_MAX_TURNS ?? 115);
     const sustainedWarn = Number(process.env.M365_SUSTAINED_WARN_TURNS ?? 90);
 
     while (turnQueue.length > 0) {
@@ -843,7 +843,7 @@ export async function paceTurnVelocity(
   opts?: { priority?: boolean },
 ): Promise<number> {
   const burstMax = Number(process.env.M365_BURST_MAX_TURNS ?? 35);
-  const sustainedMax = Number(process.env.M365_SUSTAINED_MAX_TURNS ?? 120);
+  const sustainedMax = Number(process.env.M365_SUSTAINED_MAX_TURNS ?? 115);
 
   if (burstMax <= 0 && sustainedMax <= 0) {
     const now = Date.now();

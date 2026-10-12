@@ -117,7 +117,7 @@ export interface SystemMetricsConfig {
 export function getSystemMetricsConfig(): SystemMetricsConfig {
   const burstMaxTurns = Number(process.env.M365_BURST_MAX_TURNS ?? 35);
   const burstSoftTurns = Number(process.env.M365_BURST_SOFT_TURNS ?? Math.max(1, burstMaxTurns - 5));
-  const sustainedMaxTurns = Number(process.env.M365_SUSTAINED_MAX_TURNS ?? 120);
+  const sustainedMaxTurns = Number(process.env.M365_SUSTAINED_MAX_TURNS ?? 115);
   const sustainedWarnTurns = Number(process.env.M365_SUSTAINED_WARN_TURNS ?? 90);
   const sessionDanger10m = Number(process.env.M365_10M_DANGER_SESSIONS ?? 15);
   const sessionWarn10m = Number(process.env.M365_10M_WARN_SESSIONS ?? 10);

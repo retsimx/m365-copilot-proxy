@@ -41,8 +41,8 @@ Hard-won defaults for working on this proxy. Internalize these before touching a
      a 30-minute (1800s) cooldown. The proxy enforces a continuous token bucket + 15s stagger queue for
      fresh conversations (`turn === 0`) to cap thread creation at 4/min.
    - **Hourly turn volume (`PerUserThrottled`):** Tracks total turns dispatched across the account.
-     The proxy's local ~120 turns / 60-minute rolling cap is **conservative local policy, not a
-     confirmed Microsoft threshold** (see hypotheses F35/F36; deployed cap is now **120** — the conservative default; 125 and 135 both tripped upstream on 2026-10-11/12): a 2026-10 campaign ran 151 turns
+    The proxy's local ~115 turns / 60-minute rolling cap is **conservative local policy, not a
+    confirmed Microsoft threshold** (see hypotheses F35/F36; deployed cap is now **115** — the conservative default; 125 and 135 both tripped upstream on 2026-10-11/12): a 2026-10 campaign ran 151 turns
      (~120/hr) per model for 75 min with no throttle, while a separate smoke tripped `PerUserThrottled`
      at ~140 account turns/60m and blocked **both** models (existing and fresh conversations). Tripping
      it arms a 20-minute (1200s) cooldown (`M365_USER_THROTTLE_COOLDOWN_SEC`). The proxy protects this
@@ -196,7 +196,7 @@ pnpm test:live      # M365_LIVE=1; live tests that hit real M365 (uses quota)
   - **Hourly turn volume (`PerUserThrottled`, docs/hypotheses.md §17 F31/F34; F35):** Microsoft
     enforces an **account-wide** turn-volume ceiling shared by all models (observed 2026-10: throttling
     Sonnet blocked GPT-5.6 on both existing and fresh conversations). The exact ceiling is **not pinned**;
-    the sustained cap is **conservative local policy** (currently deployed at **120** turns/60m — the code default; 125 and 135 both tripped upstream on 2026-10-11/12; F36), not a confirmed upstream number.
+    the sustained cap is **conservative local policy** (currently deployed at **115** turns/60m — the code default; 125 and 135 both tripped upstream on 2026-10-11/12; F36), not a confirmed upstream number.
   - **Before raising local burst/sustained caps:** monitor queue delay, achieved turn rate, retries and
     explicit throttles on `/api/metrics`, ideally split by model and agent attachment, and only raise
     limits if pacing materially delays real work — validating on the tool-enabled path. See

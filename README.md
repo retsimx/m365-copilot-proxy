@@ -157,7 +157,7 @@ local protections**, informed by observation but **not confirmed universal Micro
   - Exceeding the rate trips an upstream `PerScenarioThrottled` completion frame and arms a 30-minute cooldown (`M365_THROTTLE_COOLDOWN_SEC = 1800`).
   - **Protection**: A local token bucket (`M365_SESSION_BUCKET_CAPACITY = 10`, refilling every 150s) combined with a 15-second stagger queue (`M365_NEW_SESSION_SPACING_MS = 15000`) restricts fresh conversation starts (`turn === 0`) to 4/minute. Follow-up turns (`turn > 0`) bypass this queue entirely.
 - **Hourly Turn Volume Protection (`PerUserThrottled`)**:
-  - Microsoft enforces an account-wide turn-volume ceiling shared across models. The exact value is not pinned; a 2026-10 campaign completed **151 turns (~120/hr) per model for 75 min with no throttle**, while a separate smoke tripped `PerUserThrottled` at **~140 account turns/60m** (blocking both models). A **tool-enabled** follow-up then sustained **130 and 135 turns/hr** with no throttle; the local cap is therefore **conservative policy**, not a confirmed upstream ceiling, and is currently deployed at **135**.
+  - Microsoft enforces an account-wide turn-volume ceiling shared across models. The exact value is not pinned; a 2026-10 campaign completed **151 turns (~120/hr) per model for 75 min with no throttle**, while a separate smoke tripped `PerUserThrottled` at **~140 account turns/60m** (blocking both models). A **tool-enabled** follow-up then sustained **130 and 135 turns/hr** with no throttle; the local cap is therefore **conservative policy**, not a confirmed upstream ceiling, and is currently deployed at **115**.
   - Tripping this limit arms a 20-minute cooldown (`M365_USER_THROTTLE_COOLDOWN_SEC = 1200`).
   - **Protection**: A serialized Priority FIFO Turn Gatekeeper (`paceTurnVelocity`) enforces a minimum 1500ms wire pacing (`M365_MIN_TURN_SPACING_MS = 1500`) to eliminate thundering herd bursts. A local burst cap of 35 turns per 10 minutes (`M365_BURST_MAX_TURNS = 35`, soft warning at 30) is likewise conservative policy. Forcing retries (`attempt > 0`) queue with priority to jump ahead of normal turns while preserving FIFO order among retries.
 - **Local Circuit Breaker Shield**:
@@ -392,7 +392,7 @@ All configuration and cache files reside in `~/.config/opencode-m365/`:
 | `M365_BURST_MAX_TURNS` | `35` | Local conservative cap for the 10-minute burst window (policy, not a confirmed upstream threshold). |
 | `M365_BURST_SOFT_TURNS` | `30` | Turn threshold in 10-minute burst window where soft pacing resistance begins. |
 | `M365_BURST_WINDOW_MS` | `600000` | Burst window duration (ms) (10 minutes). |
-| `M365_SUSTAINED_MAX_TURNS` | `120` | Local conservative cap for the 60-minute macro-window (code default `120`; **deployed `135`**; policy, not a confirmed upstream threshold; see F35/F36). |
+| `M365_SUSTAINED_MAX_TURNS` | `115` | Local conservative cap for the 60-minute macro-window (code default `115`; **deployed `115`**; policy, not a confirmed upstream threshold; see F35/F36). |
 | `M365_SUSTAINED_WARN_TURNS` | `90` | Turn threshold in 60-minute window where progressive 5s–25s pacing resistance begins. |
 | `M365_SUSTAINED_WINDOW_MS` | `3600000` | Sustained window duration (ms) (60 minutes). |
 | **State & Context Limits** | | |
