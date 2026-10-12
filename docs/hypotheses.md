@@ -3121,6 +3121,28 @@ occurrences, all 2026-10-10 (legacy era); none since the fixes. Open: extend the
 also trip on a self-authored `<assistant>`/`<tool_response>` (the current guard only names
 `<tool_output>`/`<tool_response>`).
 
+**F24h — turn efficiency: sonnet did one command per call; reframing fixed it.** Per-model log
+measurement (bash commands/call, heredoc bodies + headers excluded): `claude-sonnet-5.5` was
+**median 1 command/call (59% single-command)** — one `cat`/`grep` per turn — while
+`gpt-5.6-think-deeper` was already at median 9. Two clauses biased sonnet toward one inspection per
+turn: *"if the next decision requires **interpreting** new output, end the turn and wait"* (every
+investigation is later interpreted, so it reads as "one inspection/turn") and *"combine operations
+only when **every** command is already determined"* (reads as "don't batch"). Replaced (`9bedc3b`,
+agent path only) with an explicit turn-efficiency bullet (*"Minimise unnecessary turns. Gather a
+complete evidence set for the next decision in each read-only investigation call…"*) plus a concrete
+dependency test (*"if a later command's selection, arguments, target, content, or safety depends on
+unseen output, end the turn and wait"*). **Result: sonnet median 1 → 5 commands/call, single-command
+59% → 32%** (n=28 post-deploy, phase-confounded). One tool call per turn is unchanged (sonnet 98%
+≤1). GPT review: `/tmp/opencode/gpt-turn-efficiency.md`.
+
+> **Measurement pitfall (recorded so we don't repeat it).** Two errors stacked while measuring this:
+> (1) `grep -A8` truncated multi-line raw responses before their closing fence, so only the *short*
+> (single-command) calls matched — a biased sample; (2) parsing *all* models blended in
+> `gpt-5.6-think-deeper` (median 9 commands/call), masking sonnet's one-command habit. Correct
+> method: stream the whole log, extract the fence body, **exclude heredoc bodies**, and **attribute
+> each response to its `Chat completion: model=…`**. Tool-calls/turn is authoritative from
+> `Parse result: count=N`.
+
 **Evidence.** Live proxy `10.0.1.15`, 2026-10-11. Commits `ee4962b..eac359f`. After the fixes
 (one-call + exec-agent opener + post-fence abort guard + opaque parser body + heredoc-aware
 guard): session `cd7c1ab1` ran **70 turns** (turn 0 full + 69 delta), **one tool call each, zero

@@ -169,6 +169,17 @@ makes them structurally immune to the F17/F22 Disengage class. That immunity buy
    arrives in a separate message.
 8. **Persistence / truncation framing.** A failed, empty, or truncated result is *information*; a
    truncated result is a size cap — fetch the remainder with a narrower read.
+9. **Turn efficiency — gather a complete evidence set per read-only call.** Sonnet's bash calls were
+   **median 1 command** (one `cat`/`grep` per turn) because *"if the next decision requires
+   interpreting new output, end the turn and wait"* reads as "one inspection per turn" (every
+   investigation is later interpreted), and *"combine only when every command is already determined"*
+   reads as "don't batch". The framing now says *"Minimise unnecessary turns. Gather a complete
+   evidence set for the next decision in each read-only investigation call… combine them in ONE
+   `bash` call…"* and replaces the wait trigger with a concrete dependency test (selection /
+   arguments / target / content / safety). **Result: sonnet median 1 → 5 commands/call, single-command
+   59% → 32%** ([`hypotheses.md`](hypotheses.md) §24 F24h). Keep the one-call rule visually separate;
+   avoid the word "batch" (reactivates the removed multi-fence concept) and "always safe"/"never needs
+   its own turn" (too absolute).
 
 **Two competing tool surfaces — the agent-less trap** ([api §5](m365-copilot-api.md)). On the
 agent-less (Claude) path M365 gives the model **its own tool set** — `bash_tool` (a *container*
