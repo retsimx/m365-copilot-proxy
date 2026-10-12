@@ -1403,6 +1403,22 @@ describe("hasPostFenceContamination (post-fence abort guard)", () => {
     expect(hasPostFenceContamination("```bash\ncat > f <<'EOF'\n```bash\nnpm start\n```\nEOF\n```\n")).toBe(false);
   });
 
+  it("does NOT flag a ``` inside a quoted shell argument (data, not a glued closing fence)", () => {
+    // Regression (2026-10-12 19:07:43Z, cid c3f86119): the model verified a report with
+    // `grep -q '```suggestion' "$OUT"`. Pass 2 of restoreM365Fences split the quoted
+    // backticks out as M365's glued closing fence, so the guard saw a spurious close
+    // followed by `suggestion' "$OUT"` and aborted a legitimate verification turn.
+    const text = [
+      "I'll verify the complete artefact before finalising.",
+      "```bash",
+      "OUT=/tmp/report.md",
+      "grep -q '```suggestion' \"$OUT\"",
+      "printf 'ok\\n'",
+      "```",
+    ].join("\n");
+    expect(hasPostFenceContamination(text, guardSpecs)).toBe(false);
+  });
+
   it("does NOT flag a write body containing a nested code fence (all tools)", () => {
     const text = [
       "```write_file",

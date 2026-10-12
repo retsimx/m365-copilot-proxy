@@ -379,6 +379,38 @@ function hasClosingFenceAfter(lines: string[], i: number): boolean {
   return false;
 }
 
+/** Index of the first ``` in `line` that is NOT inside a single- or double-quoted
+ *  shell argument, or -1 if every ``` on the line is quoted.
+ *
+ *  Used by restoreM365Fences Pass 2: a ``` inside a quoted argument is DATA (e.g.
+ *  `grep -q '```suggestion' "$OUT"`), not M365's glued closing fence. Splitting there
+ *  corrupts the command and trips the post-fence guard (log 2026-10-12 19:07:43Z,
+ *  cid c3f86119 — the harness ran a command truncated at `grep -q '`).
+ *
+ *  Quote state is tracked WITHIN the line only. Carrying it across lines would mis-scan
+ *  the common stray apostrophe in a comment/prose (`# don't`), while multi-line quoted
+ *  strings are vanishingly rare in model output. */
+function indexOfUnquotedBackticks(line: string): number {
+  let state: 0 | 1 | 2 = 0; // 0 = none, 1 = single-quoted, 2 = double-quoted
+  for (let k = 0; k < line.length; k++) {
+    const ch = line[k];
+    if (state === 1) {
+      if (ch === "'") state = 0; // single quotes: no escaping
+      continue;
+    }
+    if (state === 2) {
+      if (ch === "\\") { k++; continue; } // double quotes: \ escapes the next char
+      if (ch === '"') state = 0;
+      continue;
+    }
+    if (ch === "'") { state = 1; continue; }
+    if (ch === '"') { state = 2; continue; }
+    if (ch === "\\") { k++; continue; }
+    if (line.startsWith("```", k)) return k;
+  }
+  return -1;
+}
+
 export function restoreM365Fences(text: string, specs: Map<string, FencedToolSpec>): string {
   // Pass 0: M365 escapes `]` as `\]` when it looks like a Markdown link reference
   // (`…]:`), leaking a backslash into code the harness then runs — bash "bad
@@ -412,6 +444,7 @@ export function restoreM365Fences(text: string, specs: Map<string, FencedToolSpe
   // Pass 2: M365 can drop the opening fence entirely, leaving a bare language
   // label line (`bash\n<code>\n``` `). Restore the ``` before the label.
   let inBlock = false;
+  let blockIsShell = false;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (inBlock) {
@@ -420,8 +453,12 @@ export function restoreM365Fences(text: string, specs: Map<string, FencedToolSpe
       // (`head -n 500```STATUS: …`) OR at line start with no space (` ```STATUS: …`).
       // Split the fence onto its own line and keep any trailing text as prose, so the
       // command isn't corrupted and the block actually closes.
+      //
+      // In a SHELL body a ``` inside a quoted argument is DATA, not a fence, so skip
+      // quoted backticks (see indexOfUnquotedBackticks). Non-shell bodies keep the
+      // original whole-line scan.
       if (!OPEN_FENCE_REGEX.test(line)) {
-        const tick = line.indexOf("```");
+        const tick = blockIsShell ? indexOfUnquotedBackticks(line) : line.indexOf("```");
         if (tick >= 0) {
           const before = line.slice(0, tick);
           const after = line.slice(tick + 3);
@@ -432,13 +469,15 @@ export function restoreM365Fences(text: string, specs: Map<string, FencedToolSpe
       }
       continue;
     }
-    if (OPEN_FENCE_REGEX.test(line)) { inBlock = true; continue; }
+    const open = line.match(OPEN_FENCE_REGEX);
+    if (open) { inBlock = true; blockIsShell = SHELL_LANGS.has(open[3]); continue; }
     const label = line.trim();
     if (!label || !isLabelToken(label, specs)) continue;
     if (hasClosingFenceAfter(lines, i)) {
       const indent = line.slice(0, line.length - line.trimStart().length);
       lines[i] = `${indent}\`\`\`${label}`;
       inBlock = true;
+      blockIsShell = SHELL_LANGS.has(label);
     }
   }
   return lines.join("\n");

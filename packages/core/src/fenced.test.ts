@@ -261,6 +261,46 @@ describe("parseFencedToolCalls", () => {
     expect(leftover).toContain("STATUS: no files written");
   });
 
+  // Regression: the mid-line "glued closing fence" fix-up (restoreM365Fences Pass 2)
+  // must not mistake a ``` INSIDE a quoted shell argument for a closing fence. Live
+  // 2026-10-12 19:07:43Z (cid c3f86119): the model verified a report with
+  // `grep -q '```suggestion' "$OUT"`. Pass 2 split the line at the quoted backticks,
+  // the parser closed the block there, and the post-fence guard aborted the turn —
+  // the harness ran a command truncated at `grep -q '` and bash reported
+  // "unexpected EOF while looking for matching `'`".
+  it("does not treat ``` inside a quoted shell argument as a closing fence", () => {
+    const text = [
+      "I'll verify the complete artefact before finalising.",
+      "```bash",
+      "set -euo pipefail",
+      "OUT='/tmp/report.md'",
+      "grep -q 'src/apps/registry/models/contributors.py:8' \"$OUT\"",
+      "grep -q '```suggestion' \"$OUT\"",
+      "printf 'verified: %s bytes\\n' \"$(wc -c < \"$OUT\")\"",
+      "```",
+    ].join("\n");
+    const { calls, leftover } = parseFencedToolCalls(text, specs);
+    expect(calls).toHaveLength(1);
+    const args = JSON.parse(calls[0].function.arguments);
+    expect(args.command).toContain("grep -q '```suggestion' \"$OUT\"");
+    expect(args.command).toContain("printf 'verified: %s bytes");
+    expect(leftover).not.toContain("suggestion");
+  });
+
+  // Same class, double-quoted argument: a ``` inside "…" is data too.
+  it("does not treat ``` inside a double-quoted shell argument as a closing fence", () => {
+    const text = [
+      "```bash",
+      "grep -q \"```lang\" file.txt",
+      "test -s file.txt",
+      "```",
+    ].join("\n");
+    const { calls } = parseFencedToolCalls(text, specs);
+    expect(calls).toHaveLength(1);
+    const args = JSON.parse(calls[0].function.arguments);
+    expect(args.command).toBe("grep -q \"```lang\" file.txt\ntest -s file.txt");
+  });
+
   it("round-trips a write_file with a multi-line body", () => {
     const content = "def f():\n    return 1\n\nprint(f())";
     const rendered = renderFencedCall(deriveFencedSpec(writeFile), { path: "f.py", content });
