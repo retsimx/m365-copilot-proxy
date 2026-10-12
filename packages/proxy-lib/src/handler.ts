@@ -1288,7 +1288,7 @@ export async function handleChatCompletion(
 
     // Document guard: if model returned an instructional document full of fences,
     // convert it to plain text before evaluating confabulation/retries.
-    if (isProseDocument(parsed, framingVariant)) {
+    if (isProseDocument(parsed)) {
       log.info(`Response is a prose document (${parsed.toolCalls.length} embedded fences), returning as text instead of executing`);
       parsed = { hasToolCalls: false, toolCalls: [], textContent: fullText };
     }
@@ -1379,7 +1379,7 @@ export async function handleChatCompletion(
       conv.sentMessageCount = body.messages.length;
       fullText = restoreM365Fences(retry.fullText, specs ?? new Map());
       parsed = parseToolCalls(fullText, body.tools);
-      if (isProseDocument(parsed, framingVariant)) {
+      if (isProseDocument(parsed)) {
         log.info(`Response is a prose document (${parsed.toolCalls.length} embedded fences), returning as text instead of executing`);
         parsed = { hasToolCalls: false, toolCalls: [], textContent: fullText };
       }
@@ -1400,7 +1400,7 @@ export async function handleChatCompletion(
       conv.sentMessageCount = body.messages.length;
       fullText = restoreM365Fences(retry.fullText, specs ?? new Map());
       parsed = parseToolCalls(fullText, body.tools);
-      if (isProseDocument(parsed, framingVariant)) {
+      if (isProseDocument(parsed)) {
         parsed = { hasToolCalls: false, toolCalls: [], textContent: fullText };
       }
       log.info(`After corrective retry: hasToolCalls=${parsed.hasToolCalls}, count=${parsed.toolCalls.length}`);
@@ -1476,20 +1476,12 @@ export async function handleChatCompletion(
         parsed.toolCalls = realToolCalls;
       }
 
-      // Enforce one tool call per turn unless explicitly opted out. M365 — the
-      // reasoning tones especially — batches its whole plan into a single
-      // response. Executing a batch runs later steps on guessed state and lets a
-      // premature success claim ride along at the end. Keeping only the first
-      // call forces a real step-by-step loop where each call reacts to the
-      // previous tool_response. Set M365_ALLOW_MULTI_TOOL to restore batching.
-      // One-call-per-turn is a GPT/advisor-path safety default (batches run later steps on
-      // guessed state). The Claude agent path may batch independent calls, so allow multi there.
-      // One call per turn — BOTH paths. M365 batches its whole plan into one response and
-      // the model then fabricates the observations between calls (live 2026-10-11) — exactly
-      // the "later steps on guessed state" the docs warned about (docs/tool-calling.md:135).
-      // Emitting a 2nd fence re-activates the learned "call → result → call" continuation.
-      // Keep only the first call; M365_ALLOW_MULTI_TOOL is an explicit experimental opt-out.
-      if (!process.env.M365_ALLOW_MULTI_TOOL && parsed.toolCalls.length > 1) {
+      // Enforce one tool call per turn. M365 — the reasoning tones especially —
+      // batches its whole plan into a single response. Executing a batch runs later
+      // steps on guessed state and lets a premature success claim ride along at the
+      // end. Keeping only the first call forces a real step-by-step loop where each
+      // call reacts to the previous tool_response.
+      if (parsed.toolCalls.length > 1) {
         log.info(`One-call-per-turn: keeping ${parsed.toolCalls[0].function.name}, dropping ${parsed.toolCalls.length - 1} batched call(s)`);
         parsed.toolCalls = [parsed.toolCalls[0]];
       }

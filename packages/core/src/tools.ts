@@ -558,7 +558,7 @@ export function looksLikeConfabulation(text: string | null): boolean {
  * 2. If ALL tool calls are generic shell blocks (bash/sh) AND surrounded by
  *    substantial prose or markdown headings, it is treated as a tutorial document.
  */
-export function isProseDocument(parsed: ParseResult, framingVariant?: string): boolean {
+export function isProseDocument(parsed: ParseResult): boolean {
   if (!parsed.hasToolCalls || parsed.toolCalls.length < 2) return false;
 
   // Refusals or confabulations claiming inability to act are never instructional tutorial documents.
@@ -574,14 +574,12 @@ export function isProseDocument(parsed: ParseResult, framingVariant?: string): b
   // A valid shell call between two prose runs is an ACTION, not a document. Do NOT
   // downgrade on prose *length* — that swallowed real tool calls (e.g. sonnet's
   // "read the file ```bash cat … ``` — then I'll update it" was returned as text
-  // because the surrounding prose was long). Only document-level signals downgrade:
-  // many fences, or tutorial headings.
-  const hasDocHeaders = /(?:^|\n)#{1,3}\s+(?:readme|install|usage|run|getting started|build|setup|example|overview|configuration|documentation)\b/i.test(prose)
+  // because the surrounding prose was long). Only document-level structure — a
+  // markdown tutorial heading — downgrades a turn to prose. (A high fence COUNT is
+  // not a document signal: it also matches batched actions, which one-call-per-turn
+  // now truncates to the first call rather than reclassifying as a document.)
+  return /(?:^|\n)#{1,3}\s+(?:readme|install|usage|run|getting started|build|setup|example|overview|configuration|documentation)\b/i.test(prose)
     || /(?:^|\n)#\s+[^\n]+/m.test(prose);
-  // The Claude/agent path allows multi-call batching, so a high fence COUNT is no longer a
-  // document signal there — it swallowed 4 batched reads (live 2026-10-11). The GPT/advisor
-  // path is unchanged: keep the legacy count rule there.
-  return (framingVariant !== "agent" && parsed.toolCalls.length >= 4) || hasDocHeaders;
 }
 
 export function parseToolCalls(text: string, tools?: ToolDef[]): ParseResult {

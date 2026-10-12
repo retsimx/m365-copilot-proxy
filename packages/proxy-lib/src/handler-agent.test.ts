@@ -48,13 +48,11 @@ describe("agent path: framing selection, one call per turn, hallucination correc
     resetNewSessionPacing();
     resetTurnVelocityPacing();
     vi.restoreAllMocks();
-    delete process.env.M365_ALLOW_MULTI_TOOL;
   });
 
   afterEach(() => {
     delete process.env.M365_NEW_SESSION_SPACING_MS;
     delete process.env.M365_SESSION_BUCKET_CAPACITY;
-    delete process.env.M365_ALLOW_MULTI_TOOL;
     vi.restoreAllMocks();
   });
 
@@ -92,18 +90,6 @@ describe("agent path: framing selection, one call per turn, hallucination correc
       const json: any = await res.json();
       expect(json.choices[0].message.tool_calls.length).toBe(1);
     }
-  });
-
-  it("M365_ALLOW_MULTI_TOOL is the only override that keeps both calls", async () => {
-    process.env.M365_ALLOW_MULTI_TOOL = "1";
-    vi.spyOn(core.ModelSession.prototype, "run").mockImplementation(async (t: string) => {
-      captured.push(t);
-      return stream("```bash\nls\n```\n\n```bash\ncat x\n```");
-    });
-    const pool = new SessionPool();
-    const res = await handleChatCompletion(body("claude-sonnet-5.5", [{ role: "user", content: "go" }]) as any, pool);
-    const json: any = await res.json();
-    expect(json.choices[0].message.tool_calls.length).toBe(2);
   });
 
   // NOTE: the two-turn "correction is prepended on the next turn" behaviour is driven

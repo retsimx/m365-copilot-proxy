@@ -253,11 +253,9 @@ That should be everything you need to get going quickly.`;
     expect(isProseDocument(parse("```bash\nls\n```\n```bash\ncat calc.py\n```"))).toBe(false);
   });
 
-  it("does NOT flag 4+ batched shell calls as a document on the agent path (multi-call batching regression)", () => {
+  it("does NOT flag 4+ batched shell calls as a document (one-call-per-turn truncates, not reclassifies)", () => {
     const batched = "Now I need to see the implementations.\n\n```bash\nsed -n '450,480p' sys/vm/vm_phys.c\n```\n\n```bash\nsed -n '840,960p' sys/vm/vm_phys.c\n```\n\n```bash\ngrep -n 'foo' sys/vm/vm_phys.c\n```\n\n```bash\ngrep -n 'bar' sys/vm/vm_page.h\n```";
-    expect(isProseDocument(parse(batched), "agent")).toBe(false);
-    // The GPT/advisor path is unchanged: the legacy count rule still downgrades 4+ fences.
-    expect(isProseDocument(parse(batched))).toBe(true);
+    expect(isProseDocument(parse(batched))).toBe(false);
   });
 
   it("does NOT flag Claude's 'preamble + a couple command fences' action style (F23)", () => {
