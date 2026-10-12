@@ -85,15 +85,6 @@ export function findShellTool(tools: ToolDef[]): ToolDef | undefined {
     });
 }
 
-/** Shell tools are covered entirely by the advisor prompt's built-in shell
- *  example. Strip them from the <tools> block to eliminate token bloat and
- *  contradictory harness descriptions that tell the model not to use cat/sed/grep. */
-export function nonShellTools(tools: ToolDef[]): ToolDef[] {
-  return tools.filter(
-    (t) => !SHELL_LANGS.has(t.function.name) && !SHELL_TOOL_NAME.test(t.function.name),
-  );
-}
-
 export interface FencedToolSpec {
   name: string;
   description?: string;
@@ -101,12 +92,6 @@ export interface FencedToolSpec {
   headerParams: string[];
   /** The free-form param carried as the fence body (mutually exclusive with editPair). */
   bodyParam?: string;
-  /** Schema of the body parameter if available */
-  bodyParamSchema?: any;
-  /** Override the rendered body placeholder. `null` omits the placeholder line entirely
-   *  (used for the shell, where a copied placeholder like `<command>` ends up prefixed
-   *  to the real command and breaks it). */
-  bodyPlaceholder?: string | null;
   /** An (old → new) pair rendered as a SEARCH/REPLACE diff. */
   editPair?: { search: string; replace: string };
   /** A worked example for the Claude agent <tools> block: the call the model emits
@@ -135,13 +120,11 @@ export function deriveFencedSpec(tool: ToolDef): FencedToolSpec {
   const bodyParam =
     props.find((p) => BODY_PARAM_NAMES.includes(p)) ??
     (props.length === 1 ? props[0] : undefined);
-  const bodyParamSchema = bodyParam ? properties[bodyParam] : undefined;
 
   return {
     name,
     description,
     bodyParam,
-    bodyParamSchema,
     headerParams: props.filter((p) => p !== bodyParam),
   };
 }
@@ -170,37 +153,6 @@ function scalarToString(v: unknown): string {
   return JSON.stringify(v);
 }
 
-/** Render a skeleton for a JSON parameter schema */
-function renderSchemaSkeleton(name: string, schema?: any): string {
-  if (!schema) return `<${name}>`;
-  if (name === "questions" || (schema.type === "array" && schema.items?.properties?.question)) {
-    return `[
-  {
-    "header": "<category/title: string>",
-    "question": "<question prompt: string>",
-    "options": [
-      { "label": "<option A: string>", "description": "<description A: string>" },
-      { "label": "<option B: string>", "description": "<description B: string>" }
-    ],
-    "multiple": false
-  }
-]`;
-  }
-  if (name === "todos" || (schema.type === "array" && schema.items?.properties?.content)) {
-    return `[
-  {
-    "id": "<id: string>",
-    "content": "<task description: string>",
-    "status": "pending",
-    "priority": "medium"
-  }
-]`;
-  }
-  if (schema.type === "array") return `[<${name} item>]`;
-  if (schema.type === "object") return `{\n  /* ${name} object fields */\n}`;
-  return `<${name}>`;
-}
-
 /** Render one concrete tool call (name + args object) as a fenced block. */
 export function renderFencedCall(spec: FencedToolSpec, args: Record<string, unknown>): string {
   const lines: string[] = [];
@@ -220,24 +172,6 @@ export function renderFencedCall(spec: FencedToolSpec, args: Record<string, unkn
   }
 
   return "```" + spec.name + "\n" + lines.join("\n") + "\n```";
-}
-
-/** A self-documenting template shown in the per-request <tools> block. */
-function renderFencedTemplate(spec: FencedToolSpec): string {
-  const lines: string[] = [];
-  for (const h of spec.headerParams) lines.push(`${h}: <${h}>`);
-  if (spec.editPair) {
-    lines.push("<<<<<<< SEARCH");
-    lines.push(`<${spec.editPair.search}>`);
-    lines.push("=======");
-    lines.push(`<${spec.editPair.replace}>`);
-    lines.push(">>>>>>> REPLACE");
-  } else if (spec.bodyParam !== undefined && spec.bodyPlaceholder !== null) {
-    if (lines.length) lines.push("");
-    lines.push(spec.bodyPlaceholder ?? renderSchemaSkeleton(spec.bodyParam, spec.bodyParamSchema));
-  }
-  const header = spec.description ? `${spec.name} — ${spec.description}` : spec.name;
-  return `${header}\n\`\`\`${spec.name}\n${lines.join("\n")}\n\`\`\``;
 }
 
 // Bash-only advisor framing: the model writes shell commands in a ```bash / ```shell fence;
@@ -404,8 +338,6 @@ export function isAdvisorTone(tone?: string): boolean {
 export function framingVariantForTone(tone?: string): string {
   return isAdvisorTone(tone) ? "advisor" : "agent";
 }
-
-export const FRAMING_VARIANT_NAMES = ["advisor", "agent"];
 
 // --- Parsing -----------------------------------------------------------------
 

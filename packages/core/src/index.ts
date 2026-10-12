@@ -23,7 +23,6 @@ export {
 
 export {
   noteRequestOutcome,
-  awaitDegradationBackoff,
   isDegradationBackoff,
   getRemainingDegradationCooldownMs,
   getDegradationLevel,
@@ -93,10 +92,8 @@ export {
   currentFramingVariant,
   framingVariantForTone,
   isAdvisorTone,
-  nonShellTools,
   restoreM365Fences,
   agentTurnProhibition,
-  FRAMING_VARIANT_NAMES,
   buildSpecMap,
   createProseStreamGate,
   createFenceBodyState,

@@ -8,9 +8,7 @@ import {
   formatFencedToolDefinitions,
   framingVariantForTone,
   isAdvisorTone,
-  FRAMING_VARIANT_NAMES,
   findShellTool,
-  nonShellTools,
   hostPlatformNote,
 } from "./fenced.js";
 import { parseToolCalls } from "./tools.js";
@@ -489,48 +487,6 @@ describe("shell routing (Tier 1)", () => {
   });
 });
 
-describe("nonShellTools", () => {
-  const runCommand: ToolDef = {
-    type: "function",
-    function: {
-      name: "run_command",
-      description: "Run a shell command.",
-      parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] },
-    },
-  };
-  const shell: ToolDef = {
-    type: "function",
-    function: {
-      name: "shell",
-      description: "Run a shell command.",
-      parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] },
-    },
-  };
-  const task: ToolDef = {
-    type: "function",
-    function: {
-      name: "task",
-      description: "Spawn a subagent.",
-      parameters: { type: "object", properties: { prompt: { type: "string" } }, required: ["prompt"] },
-    },
-  };
-
-  it("filters shell aliases and passes non-shell tools through without mutating input", () => {
-    const input = [bash, runCommand, shell, readFile, writeFile, task];
-    const out = nonShellTools(input);
-    expect(out.map((t) => t.function.name)).toEqual(["read_file", "write_file", "task"]);
-    expect(input.map((t) => t.function.name)).toEqual([
-      "bash",
-      "run_command",
-      "shell",
-      "read_file",
-      "write_file",
-      "task",
-    ]);
-    expect(out).not.toBe(input);
-  });
-});
-
 describe("hostPlatformNote", () => {
   it("is empty off Windows, so POSIX framing stays byte-for-byte", () => {
     expect(hostPlatformNote("linux")).toBe("");
@@ -995,10 +951,6 @@ describe("advisor framing", () => {
     ]) {
       expect(out, `advisor must not contain "${banned}"`).not.toContain(banned);
     }
-  });
-
-  it("registers the advisor + Claude agent variants", () => {
-    expect(FRAMING_VARIANT_NAMES).toEqual(["advisor", "agent"]);
   });
 });
 

@@ -524,7 +524,7 @@ Instead of `plugins`, set on the chat message:
 ```
 
 ### Versioning the agent by instructions hash
-The agent's instructions are **baked in at create time** and can't be cheaply updated in place (the update API needs a `changeToken` only returned by *create*; `updateBotInstructions()` is dead code). So instead of editing in place, the agent is **versioned by name**:
+The agent's instructions are **baked in at create time** and can't be cheaply updated in place (the update API needs a `changeToken` only returned by *create*). So instead of editing in place, the agent is **versioned by name**:
 
 - Name = `m365-tool-agent-<hash>`, where `<hash>` = first 8 hex of `sha256(getAgentInstructions())`.
 - `getOrCreateAgent()` computes the wanted name, looks for it via `listBots`, and **creates a fresh agent** if absent (instructions are baked into `createBot`). The local cache (`agent-id.json`) stores `instructionsHash`; a mismatch forces a rebuild.
@@ -626,7 +626,6 @@ Evidence (`scripts/dataverse-bot-probe.mjs`, with a `<org>.crm4.dynamics.com/.de
 | `tool-compliance-experiment.mjs` | A/B harness over prompt variants × prompts. Scores tool-call compliance and Disengaged rate per variant. Burns ~30 messages. |
 | `usage-endpoint-hunt.mjs` | Sweeps Sydney/Power Platform/BAP REST endpoints looking for token-usage / context-window data outside the WebSocket. |
 | `variants-bisect.mjs` | Bisects the 40-flag `VARIANTS` query-string list to find which flag controls Disengaged / streaming routing. ~10 messages per target. |
-| `toolformat-experiment.mjs` | Older tool-format A/B (bare JSON vs ```` ```json ```` vs ```` ```tool_call ````); kept around for reference. |
 
 Run unsandboxed with `CHROMIUM_PATH` set and `M365_NO_INTERACTIVE=1`. They reuse the stored MSAL cache / automated login. Output (screenshots, captured network) lands in `scripts/*-out/` (gitignored).
 

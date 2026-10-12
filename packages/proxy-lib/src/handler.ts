@@ -23,7 +23,6 @@ import {
   createFenceBodyState,
   feedToolBodyLine,
   noteRequestOutcome,
-  awaitDegradationBackoff,
   isDegradationBackoff,
   getRemainingDegradationCooldownMs,
   triggerDegradationBackoff,
@@ -88,11 +87,6 @@ export const TRUNCATION_SURRENDER_FORCE_PROMPT =
   "CORRECTION: The session has not ended. The previous command output was simply truncated for length. " +
   "Do not surrender or assume the session ended. " +
   "Please write the next ```bash block containing the commands for me to run (e.g. inspecting smaller chunks with grep, head, sed or continuing the task). Output only the ```bash block, nothing else.";
-
-export const ADVISOR_CONFAB_FORCE_PROMPT = CONFAB_FORCE_PROMPT;
-export const ADVISOR_HALLUCINATION_FORCE_PROMPT = HALLUCINATION_FORCE_PROMPT;
-export const ADVISOR_REMOTE_ARTIFACT_FORCE_PROMPT = REMOTE_ARTIFACT_FORCE_PROMPT;
-export const ADVISOR_TRUNCATION_SURRENDER_FORCE_PROMPT = TRUNCATION_SURRENDER_FORCE_PROMPT;
 
 // The model authored its own `<tool_output>` block (a fabricated result). We no longer
 // reset the session for this (that caused an endless full-replay loop — the model
@@ -920,7 +914,7 @@ export async function paceTurnVelocity(
 export async function handleChatCompletion(
   body: ChatBody,
   pool: SessionPool,
-  opts: { signal?: AbortSignal; sessionId?: string; framingVariant?: string } = {},
+  opts: { signal?: AbortSignal; sessionId?: string } = {},
 ): Promise<Response> {
   if (isDegradationBackoff()) {
     const remainingMs = getRemainingDegradationCooldownMs();

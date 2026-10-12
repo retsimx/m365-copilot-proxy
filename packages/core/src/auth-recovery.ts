@@ -180,14 +180,6 @@ export function noteRequestOutcome(empty: boolean, conversationId: string): void
   defaultController.note(empty, conversationId);
 }
 
-/** Await a paced slot before a backend turn (self-imposed rate limit while degraded).
- *  Resolves immediately when healthy or when backoff is disabled. */
-export async function awaitDegradationBackoff(): Promise<void> {
-  if (disabled()) return;
-  const slept = await defaultController.waitForSlot();
-  if (slept > 0) log.info(`Backoff: paced this turn by ${Math.round(slept / 1000)}s (account degraded)`);
-}
-
 /** Whether the global policy is currently backing off. */
 export function isDegradationBackoff(): boolean {
   return !disabled() && defaultController.isBackingOff();

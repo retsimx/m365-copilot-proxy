@@ -176,8 +176,8 @@ pnpm test:live      # M365_LIVE=1; live tests that hit real M365 (uses quota)
   provisions a fresh agent on the next request. Stale versions are **always left in place**
   (we never delete agents), which avoids the multi-host footgun where a host on new code
   would delete the agent another host/PC is still using mid-conversation. A few orphaned
-  lightweight bots are harmless. `updateBotInstructions()` is still dead code — we re-create
-  rather than update in place. See API doc §10.
+  lightweight bots are harmless. We re-create rather than update in place (the update API
+  needs a `changeToken` only returned by *create*). See API doc §10.
 - **Reasoning tones are recommended for tool calling.** Reasoning tones
   (`gpt-5.5-think-deeper`, `gpt-5.6-think-deeper`) are the recommended engines for
   tool-calling when paired with fenced/shell-routing and delta turn tool re-injection.
