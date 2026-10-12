@@ -611,7 +611,7 @@ describe("formatFencedToolDefinitions", () => {
     expect(out).toContain("You are an execution agent working toward the user's whole objective");
     expect(out).toContain("MESSAGE BOUNDARY");
     expect(out).toContain("A `<tool_output>` block is written only by the harness");
-    expect(out).toContain("Choose the tool that performs the step most safely and clearly");
+    expect(out).toContain("Choose the tool that performs the step safely and clearly");
     expect(out).toContain("they are NOT calls");
     expect(out).not.toContain("ENTIRE filesystem");
     expect(out).not.toContain("anthropic_function_calls"); // full native-XML example removed
@@ -634,6 +634,8 @@ describe("formatFencedToolDefinitions", () => {
     expect(out).toContain("Emit exactly ONE tool-call fence per turn");
     expect(out).toContain("Never emit a second tool fence in the same turn");
     expect(out).toContain("Make the single call substantial but coherent");
+    // turn efficiency (gather a complete evidence set per read-only call)
+    expect(out).toContain("Minimise unnecessary turns. Gather a complete evidence set");
     // fence hygiene (the anti-malformation anchors)
     expect(out).toContain("Never omit the backticks, never write the tool name inline with a sentence");
     // turn-zero epistemic statement + grounding
