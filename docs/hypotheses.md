@@ -3034,10 +3034,22 @@ boundary only bounded to roughly **(124, 140]/hr**.
 local policy, reversible). 135 sits ~5 below the one observed trip — an accepted risk with a one-line
 rollback (set 135→130, or delete `limits.conf`).
 
-**Update (2026-10-11, same day).** 135 **DID trip** the upstream `PerUserThrottled` under real
-tool-enabled production load (multiple concurrent long sessions). **Wound back to 130.** This narrows
-the safe ceiling to **≤ 130/hr** and brackets the trip between 130 and ~140. F35's shared-account-bucket
-reading holds.
+**Update (2026-10-11/12).** 135 **DID trip** the upstream `PerUserThrottled` under real tool-enabled
+production load, and **125 tripped again** the next day. **Wound back to 120** (the code default).
+The safe sustained ceiling is now bounded to **≤ 120/hr** (conservatively); 125 and 135 are both
+confirmed too high.
+
+**Wider-window analysis (2026-10-12).** Log analysis of the 5 fresh `PerUserThrottled` episodes
+(excluding same-episode re-trips within 2 h) suggests the binding horizon is **NOT** the 60 m window:
+- Trigger 10-07 07:26 fired at only **92 turns/60 m** (but 140/90 m) — a 60 m ceiling cannot explain it.
+- Same-episode re-trips fired at near-zero recent load (10-11 10:05: **1 turn/60 m**; 10-07 08:14:
+  14/60 m) after ~48–61 min idle — so the bucket does **not** refill in ≤ 60 min.
+- Rates at the triggers hover **~1.5–2.3/min** across windows — consistent with a **token bucket
+  (capacity + slow refill)**, not a hard rolling cap.
+- Candidate wider horizon: **~140 turns / ~70–90 min** (10-07: 140/90 m, 112/75 m). Rolling-max across
+  the log: 60 m→139, 90 m→218, 120 m→271, 180 m→365.
+
+Pinning it needs a **controlled throughput experiment** (fixed rate, long duration), not more history.
 
 **Unresolved.** Whether tool-enabled turns cost the same upstream as tool-less; whether 135 stays safe
 with production bursts layered on sustained volume; whether any per-model allowance exists.
