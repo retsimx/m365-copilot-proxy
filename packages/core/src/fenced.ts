@@ -653,6 +653,81 @@ export interface FencedParseResult {
 }
 
 /**
+ * Shared state for walking the body of a single tool-call fence. Used by both the
+ * parser (`parseFencedToolCalls`) and the post-fence contamination guard
+ * (`hasPostFenceContamination` in the proxy) so nested-fence and heredoc handling
+ * live in exactly one place rather than being duplicated.
+ */
+export interface FenceBodyState {
+  /** Backtick-lengths of open nested code fences inside the body. */
+  inner: number[];
+  /** Active bash heredoc delimiters inside the body. */
+  heredocs: string[];
+  /** True while inside an edit tool's SEARCH/REPLACE region. */
+  inSearchReplace: boolean;
+}
+
+export function createFenceBodyState(): FenceBodyState {
+  return { inner: [], heredocs: [], inSearchReplace: false };
+}
+
+/**
+ * Feed one line of a tool-call fence body and decide whether it closes the OUTER
+ * tool fence. Shared by the parser and the post-fence contamination guard so
+ * nested-fence and heredoc handling live in exactly one place.
+ *
+ * A tool-call fence's BODY is OPAQUE: only a bare closing fence (3+ backticks
+ * with no tool name) with no open inner fence or heredoc ends the tool block.
+ * Everything else is body content:
+ * - a line inside an active heredoc is opaque (may contain ``` fences);
+ * - a ```lang line opens a nested code fence (e.g. a `write` whose content is a
+ *   Markdown doc embedding ```python), and the following bare ``` closes the INNER
+ *   fence rather than the tool (honouring CommonMark's variable-length rule);
+ * - inside an edit's SEARCH/REPLACE region, ``` lines are body content.
+ *
+ * Returns true when `line` closes the outer tool fence; false otherwise (the line
+ * is body content and any relevant state has been updated).
+ */
+export function feedToolBodyLine(
+  line: string,
+  state: FenceBodyState,
+  outerFenceLen: number,
+  isEdit: boolean,
+): boolean {
+  if (state.heredocs.length > 0) {
+    if (line.trim() === state.heredocs[state.heredocs.length - 1]) state.heredocs.pop();
+    return false;
+  }
+  const h = line.match(HEREDOC_OPEN_REGEX);
+  if (h) state.heredocs.push(h[1]);
+
+  if (isEdit) {
+    if (line.includes("<<<<<<< SEARCH")) state.inSearchReplace = true;
+    if (state.inSearchReplace) {
+      if (line.includes(">>>>>>> REPLACE")) state.inSearchReplace = false;
+      return false;
+    }
+  }
+
+  const open = line.match(OPEN_FENCE_REGEX);
+  if (open) {
+    state.inner.push(open[2].length);
+    return false;
+  }
+
+  const close = line.match(/^( {0,3})(`{3,})([ \t].*)?$/);
+  if (close) {
+    const n = close[2].length;
+    if (state.inner.length > 0 && n >= state.inner[state.inner.length - 1]) {
+      state.inner.pop();
+      return false;
+    }
+    return n >= outerFenceLen;
+  }
+  return false;
+}
+
+/**
  * Parse all fenced tool calls whose info-string matches a known tool name.
  * 
  * Supports:
@@ -660,6 +735,8 @@ export interface FencedParseResult {
  *   ```` ````tool ```` closed by at least 4 backticks.
  * - Shell heredoc awareness: when inside a bash/shell block with an active heredoc
  *   (e.g. `cat <<'END'`), nested ```` ``` ```` lines do not prematurely close the tool fence.
+ * - Nested code fences inside a tool body (e.g. a `write` whose content is a Markdown
+ *   doc embedding ```python): the inner fence is body content, not the tool's closer.
  * - Consecutive fence transitions without closing backticks (e.g. ```` ```bash ... ```bash ````).
  * - EOF flush for streams ending without a decorative closing fence.
  */
@@ -676,11 +753,9 @@ export function parseFencedToolCalls(
   let blockLines: string[] = [];
   let matchedIndices: { start: number; end: number }[] = [];
   let blockStartIndex = 0;
-  let heredocStack: string[] = [];
-  // True while inside an edit tool's <<<<<<< SEARCH / >>>>>>> REPLACE region, where a
-  // ``` line is body content (an oldString/newString may contain a fenced block) and must
-  // NOT terminate the tool block.
-  let inSearchReplace = false;
+  // Nested-fence + heredoc + SEARCH/REPLACE tracking for the tool body, shared with
+  // the post-fence contamination guard (see feedToolBodyLine).
+  let bodyState = createFenceBodyState();
   // Prose glued to the end of a closing-fence line (`… ``` — next I'll …`) is valid
   // content that FOLLOWS the tool call. Keep it, so a fence between two prose runs is
   // emitted as (leading prose) + tool_call + (trailing prose).
@@ -699,48 +774,15 @@ export function parseFencedToolCalls(
           toolSpec = spec;
           blockLines = [];
           blockStartIndex = i;
-          heredocStack = [];
-          inSearchReplace = false;
+          bodyState = createFenceBodyState();
         }
       }
     } else {
-      // Check if we are inside a heredoc for shell tools
-      if (heredocStack.length > 0) {
-        const currentDelim = heredocStack[heredocStack.length - 1];
-        if (line.trim() === currentDelim) {
-          heredocStack.pop();
-        }
-        blockLines.push(line);
-        continue;
-      }
-
-      // A tool-call fence's BODY is OPAQUE: once a ```<tool> fence is open, only a bare
-      // closing fence (3+ backticks with no tool name) ends it. A ```<tool> line inside the
-      // body is body content — e.g. a bash call that writes a file containing a fenced code
-      // block — NOT a new tool call. (Previously an inner ```<tool> line was treated as a new
-      // call, so any tool call whose body contained a fence mis-parsed; since we run at most
-      // one call per turn, that recovery heuristic is no longer needed.)
-
-      // Check for opening a heredoc in the current line
-      const hMatch = line.match(HEREDOC_OPEN_REGEX);
-      if (hMatch) {
-        heredocStack.push(hMatch[1]);
-      }
-
-      // Inside an edit's SEARCH/REPLACE region, ``` lines are body — an oldString/newString
-      // may itself contain a fenced block, and must not terminate the tool block.
-      if (toolSpec?.editPair) {
-        if (line.includes("<<<<<<< SEARCH")) inSearchReplace = true;
-        if (inSearchReplace) {
-          blockLines.push(line);
-          if (line.includes(">>>>>>> REPLACE")) inSearchReplace = false;
-          continue;
-        }
-      }
-
-      // Check if this line is a closing fence (3+ backticks, optionally followed by inline prose)
-      const closeMatch = line.match(/^( {0,3})(`{3,})([ \t].*)?$/);
-      if (closeMatch && closeMatch[2].length >= fenceLen) {
+      // A tool-call fence's BODY is OPAQUE: nested ```<tool> fences, heredocs, and edit
+      // SEARCH/REPLACE regions are all body content. feedToolBodyLine tracks that state
+      // (in one shared place with the post-fence guard) and returns true only when a bare
+      // ``` with no open inner fence or heredoc closes the OUTER tool fence.
+      if (feedToolBodyLine(line, bodyState, fenceLen, !!toolSpec?.editPair)) {
         // Closing fence reached (possibly with prose glued after it on the same line).
         const inner = blockLines.join("\n");
         const args = parseFencedInner(toolSpec!, inner);
@@ -748,12 +790,13 @@ export function parseFencedToolCalls(
           calls.push(makeCall(toolSpec!.name, args));
           matchedIndices.push({ start: blockStartIndex, end: i });
         }
-        const trailing = closeMatch[3]?.trim();
+        const closeMatch = line.match(/^( {0,3})(`{3,})([ \t].*)?$/);
+        const trailing = closeMatch?.[3]?.trim();
         if (trailing) trailingProse.push(trailing);
         inBlock = false;
         toolSpec = null;
         blockLines = [];
-        heredocStack = [];
+        bodyState = createFenceBodyState();
       } else {
         blockLines.push(line);
       }

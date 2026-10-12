@@ -19,7 +19,7 @@ header lines, one free-form arg is the fence body, and an `old`/`new` pair rende
 aider-style `SEARCH/REPLACE` diff.
 
 **Advanced Fence Parsing & Schema Normalization (`fenced.ts`):**
-- **Heredoc-Aware Parser:** Shell tools parsing `cat <<'EOF' ... EOF` will **not** prematurely close the tool fence when the heredoc contains nested code blocks.
+- **Opaque Tool Body (all tools):** A tool-call fence's body is opaque — nested ```lang code fences (e.g. a `write` whose content is a Markdown doc embedding ```python), bash heredocs (`cat <<'EOF' ... EOF`), and edit `SEARCH/REPLACE` regions are all body content. A bare ``` inside the body closes an *inner* fence, not the tool block; only the real closing fence ends it. This is shared by the parser and the post-fence contamination guard (`feedToolBodyLine` in `fenced.ts`), so no tool call is truncated at an inner fence.
 - **CommonMark Variable Backtick Lengths:** Fences opened with ```` ````tool ```` are correctly matched to closing fences with $\ge 4$ backticks.
 - **Consecutive Tool Call Transitions & EOF Flush:** Handles back-to-back tool blocks without closing backticks and flushes unclosed fences at stream completion.
 - **Question Schema Normalization:** Normalizes `questions` arrays for interactive prompts, defaulting `header` ("Clarification"), formatting options as `{ label, description }` pairs, and setting `multiple: false`.

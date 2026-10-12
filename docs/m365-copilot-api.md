@@ -603,7 +603,7 @@ Evidence (`scripts/dataverse-bot-probe.mjs`, with a `<org>.crm4.dynamics.com/.de
 | `packages/core/src/session.ts` | Stateful `CopilotSession` (reconnect per turn, reuse ids), SignalR frame handling |
 | `packages/core/src/model.ts` | `ModelSession` — auth + agent + conversation continuity, string-in/stream-out |
 | `packages/core/src/agent.ts` | Copilot Studio agent create/publish, BAP env discovery |
-| `packages/core/src/fenced.ts` | Fenced tool definitions, Universal Advisor Framing, shell-routing (`SHELL_LANGS`), heredoc-aware parsing |
+| `packages/core/src/fenced.ts` | Fenced tool definitions, Universal Advisor Framing, shell-routing (`SHELL_LANGS`), opaque tool-body parsing (nested fences, heredocs, SEARCH/REPLACE) |
 | `packages/core/src/classifier.ts` | Dual-Engine SLM turn classifier (remote OpenAI / local Gemma 4 E2B ONNX) evaluating refusals vs deliverables |
 | `packages/core/src/auth-recovery.ts` | Degradation backoff & circuit breaker controller; distinct-conversation empty response tracking and pacing |
 | `packages/core/src/schemas.ts` | Zod schemas for SignalR frames & JWT claims |

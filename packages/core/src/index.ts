@@ -99,7 +99,10 @@ export {
   FRAMING_VARIANT_NAMES,
   buildSpecMap,
   createProseStreamGate,
+  createFenceBodyState,
+  feedToolBodyLine,
   type FencedToolSpec,
+  type FenceBodyState,
   type ProseStreamGate,
 } from "./fenced.js";
 

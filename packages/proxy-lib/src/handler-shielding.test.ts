@@ -1502,6 +1502,29 @@ describe("hasPostFenceContamination (post-fence abort guard)", () => {
     expect(hasPostFenceContamination("```bash\ncat > f <<'EOF'\n```bash\nnpm start\n```\nEOF\n```\n")).toBe(false);
   });
 
+  it("does NOT flag a write body containing a nested code fence (all tools)", () => {
+    const text = [
+      "```write_file",
+      "path: result.md",
+      "",
+      "# QA Result",
+      "",
+      "Actual file content:",
+      "",
+      "```python",
+      "class AuditableModel(models.Model):",
+      "    class Meta:",
+      "        abstract = True",
+      "```",
+      "",
+      "## MORE CONTENT AFTER THE PYTHON BLOCK",
+      "This should be preserved.",
+      "```",
+      "",
+    ].join("\n");
+    expect(hasPostFenceContamination(text)).toBe(false);
+  });
+
   it("does not flag prose before the fence", () => {
     expect(hasPostFenceContamination("Let me ground myself first.\n\n```bash\npwd\n```")).toBe(false);
   });

@@ -894,6 +894,78 @@ EOF
     expect(args.command).toContain("# Project");
     expect(args.command).toContain("npm start");
   });
+
+  // Regression: a `write` whose body is a Markdown doc embedding a ```python fence must
+  // NOT be truncated at the inner fence's closing ```. Previously the parser closed the
+  // write block at the first bare ``` (the inner python closer), cutting off the rest of
+  // the file. Same class as the bash heredoc fix, but for arbitrary tool bodies.
+  it("does not truncate a write body containing a nested code fence (all tools)", () => {
+    const text = [
+      "```write_file",
+      "path: result-qa-verify-issue-10.md",
+      "",
+      "# QA Verification Result",
+      "",
+      "Actual file content (verified by direct read):",
+      "",
+      "```python",
+      "from django.db import models",
+      "from django.utils import timezone",
+      "",
+      "",
+      "class AuditableModel(models.Model):",
+      "    record_timestamp = models.DateTimeField(default=timezone.now, db_index=True)",
+      "    created_at = models.DateTimeField(auto_now_add=True)",
+      "    updated_at = models.DateTimeField(auto_now=True)",
+      "",
+      "    class Meta:",
+      "        abstract = True",
+      "```",
+      "",
+      "## MORE CONTENT AFTER THE PYTHON BLOCK",
+      "This should be preserved.",
+      "```",
+    ].join("\n");
+
+    const { calls, leftover } = parseFencedToolCalls(text, specs);
+    expect(calls).toHaveLength(1);
+    const args = JSON.parse(calls[0].function.arguments);
+    expect(args.path).toBe("result-qa-verify-issue-10.md");
+    expect(args.content).toContain("abstract = True");
+    expect(args.content).toContain("MORE CONTENT AFTER THE PYTHON BLOCK");
+    expect(leftover.trim()).toBe("");
+  });
+
+  it("parses a write body with MULTIPLE nested code fences, closing only at the real tool fence", () => {
+    const text = [
+      "```write_file",
+      "path: guide.md",
+      "",
+      "# Guide",
+      "",
+      "```python",
+      "print('a')",
+      "```",
+      "",
+      "more prose",
+      "",
+      "```bash",
+      "echo hi",
+      "```",
+      "",
+      "the end",
+      "```",
+    ].join("\n");
+
+    const { calls, leftover } = parseFencedToolCalls(text, specs);
+    expect(calls).toHaveLength(1);
+    const args = JSON.parse(calls[0].function.arguments);
+    expect(args.content).toContain("print('a')");
+    expect(args.content).toContain("more prose");
+    expect(args.content).toContain("echo hi");
+    expect(args.content).toContain("the end");
+    expect(leftover.trim()).toBe("");
+  });
 });
 
 
