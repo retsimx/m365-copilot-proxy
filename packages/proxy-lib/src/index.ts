@@ -21,9 +21,7 @@ export {
   getRecentTurnTimestamps,
   setRecentTurnTimestamps,
   CONFAB_FORCE_PROMPT,
-  HALLUCINATION_FORCE_PROMPT,
   REMOTE_ARTIFACT_FORCE_PROMPT,
-  TRUNCATION_SURRENDER_FORCE_PROMPT,
   ARTIFACT_FORCE_PROMPT,
 } from "./handler.js";
 export {

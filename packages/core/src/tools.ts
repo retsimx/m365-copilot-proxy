@@ -344,63 +344,6 @@ const REMOTE_ARTIFACT_COMPLETION_PATTERNS: RegExp[] = [
  * decide whether to force one more turn. Conservative — needs an explicit
  * can't-access / paste-the-files phrasing, which a real completion won't contain.
  */
-// Past-tense claims of having performed a file mutation. Paired with a "no tool
-// call ran at all this conversation" check, this catches hallucinated completion:
-// the model says "I've replaced the README" without ever calling write/bash.
-const HALLUCINATED_COMPLETION_PATTERNS: RegExp[] = [
-  /\b(?:requested\s+)?(?:local\s+)?(?:edit|update|change|modification)\s+(?:is|was)\s+(?:now\s+)?complete\b/i,
-  /\bI(?:'ve|\s+have|\s+just|\s+now)?\s+(?:created|wrote|written|replaced|updated|saved|applied|added|overwrote|modified|generated|implemented|rewrote)\b/i,
-  /\b(?:the\s+)?(?:file|readme|script|config|change|version|content)\s+(?:has|have|is|was|were)\s+(?:been\s+)?(?:created|replaced|updated|saved|written|applied|added|modified|overwritten)\b/i,
-  /\bhere'?s\s+(?:the\s+)?(?:updated|new|simplified|replaced|final)\s+(?:file|readme|version|content)\b/i,
-  // Fakeable create-from-scratch hallucination (docs/hypotheses.md §8.12 / §9
-  // remaining gap): the model narrates having MADE and RUN a file with no tool
-  // call — e.g. "Created fizzbuzz.py and executed it with python3." The patterns
-  // above all need a leading "I" or a file/readme/script noun, so a bare
-  // "Created <name>.py" + "executed it" slips through. Catch both shapes:
-  //  (a) a bare past-tense create/write verb followed by a filename token
-  //      (≥2 chars before the dot, so abbreviations like "e.g."/"i.e." don't match);
-  //  (b) an execution claim ("executed it with python3", "ran the script").
-  /\b(?:created|wrote|written|generated|saved|added|produced|implemented|overwrote)\b[^.\n]{0,60}\b[\w-]{2,}\.[a-z]{1,4}\b/i,
-  /\b(?:executed|ran|invoked|launched|compiled)\b[^.\n]{0,40}\b(?:it|them|this|the\s+(?:script|program|file|code|command|tests?)|python3?|node|\S{2,}\.[a-z]{1,4})\b/i,
-];
-
-/**
- * Segment text into independent syntactic clauses and check if any clause expresses
- * a hallucinated file creation or execution claim without running actual tools.
- */
-function hasClauseHallucination(text: string): boolean {
-  const mutateWords =
-    /\b(?:created|written|wrote|updated|modified|replaced|saved|applied|overwritten|implemented|generated|produced)\b/i;
-  const execWords =
-    /\b(?:executed|ran|invoked|launched|compiled)\b/i;
-  const fileTargetWords =
-    /(?:\b(?:files?|script|scripts|code|readme|tests?|repo|repository|changes?|patch|version|content|implementation)\b|[\w-]{2,}\.[a-z0-9]{1,4})/i;
-  const actorWords =
-    /(?:\bI\b|\bI've\b|\bwe\b|\bwe've\b|\bhere'?s\b|\bthe\s+(?:file|script|code|readme|config|changes?|patch|edit|update)\b)/i;
-  const completionStateWords =
-    /\b(?:edit|update|change|modification)\s+(?:is|was)\s+(?:now\s+)?(?:complete|done|finished)\b/i;
-
-  const clauses = text.split(/(?:\.(?:\s+|$)|[;\n\r]+)|\band\b|\bthen\b|\bwhile\b/i);
-  for (const clause of clauses) {
-    if (completionStateWords.test(clause)) return true;
-    if (mutateWords.test(clause) && (fileTargetWords.test(clause) || actorWords.test(clause))) return true;
-    if (execWords.test(clause) && (fileTargetWords.test(clause) || /\b(?:it|them|this|python3?|node)\b/i.test(clause))) return true;
-  }
-  return false;
-}
-
-/**
- * Does this no-tool-call response CLAIM a file mutation it may not have performed?
- * The handler only acts on this when NO tool call ran in the whole conversation —
- * a model that actually did the work called at least one tool — so it's a low
- * false-positive signal for the "I've replaced the README" hallucination.
- */
-export function looksLikeHallucinatedCompletion(text: string | null): boolean {
-  if (!text) return false;
-  const t = text.trim();
-  if (t.length < 8) return false;
-  return hasClauseHallucination(t) || HALLUCINATED_COMPLETION_PATTERNS.some((re) => re.test(t));
-}
 
 /**
  * Did M365 substitute a remote Teams-hosted patch for a local filesystem edit?
@@ -414,47 +357,11 @@ export function looksLikeRemoteArtifactCompletion(text: string | null): boolean 
   return REMOTE_ARTIFACT_COMPLETION_PATTERNS.some((re) => re.test(t));
 }
 
-const SAFETY_REFUSAL_PATTERNS: RegExp[] = [
-  /looks\s+like\s+I\s+can.?t\s+chat\s+about\s+this/i,
-  /try\s+a\s+different\s+topic/i,
-  /attempts?\s+to\s+expose\s+or\s+override\s+internal\s+execution\s+instructions/i,
-  /(?:can.?t|cannot|unable\s+to|won.?t|refuse\s+to|not\s+allowed\s+to|prohibited\s+from|against\s+(?:our|my)\s+(?:content\s+)?policy)\s+(?:perform|facilitate|assist|help|provide|create|generate|discuss)[\s\S]{0,80}(?:exploit|exploitation|harm|attack\s+vectors?|malware|cyberattack)/i,
-  /(?:cannot|can.?t|unable\s+to)\s+provide\s+[\s\S]{0,40}(?:exploit|attack\s+vectors?)/i,
-];
-
-export function looksLikeSafetyRefusal(text: string | null): boolean {
-  if (!text) return false;
-  const t = text.trim();
-  if (t.length < 8) return false;
-  if (t.length > 1500) return false;
-  return SAFETY_REFUSAL_PATTERNS.some((re) => re.test(t));
-}
-
-/**
- * Detect operational surrenders where the model claims actions could not be completed,
- * written, or verified because the execution session/environment ended, closed, or output was truncated.
- */
-export function looksLikeTruncationSurrender(text: string | null): boolean {
-  if (!text) return false;
-  const t = text.trim();
-  if (t.length < 15) return false;
-  return (
-    /(?:execution|tool|terminal|shell)(?:\s+tool)?\s+(?:session|environment|context|runtime)\s+(?:ended|terminated|closed|expired|halted|interrupted)\s+after\s+(?:returning\s+|.+?\s+)?truncated/i.test(t) ||
-    /(?:could\s+not\s+be\s+(?:completed|written|verified|persisted|performed)|not\s+(?:been\s+)?(?:written|verified|persisted))\s+(?:because|before)\s+(?:the\s+)?(?:execution|tool|terminal|shell)\s+(?:session|environment|context|runtime)\s+(?:ended|terminated|closed|expired|halted|interrupted)/i.test(t) ||
-    /(?:execution|tool)\s+(?:session|environment)\s+did\s+not\s+permit\s+a\s+further\s+(?:bash|shell|tool)(?:\s+(?:bash|shell|tool))?\s+call\s+after\s+.*truncated/i.test(t) ||
-    /no\s+(?:bash|shell|file-?(?:writing|editing)|execution)\s+tool\s+is\s+available\s+in\s+the\s+current\s+turn/i.test(t) ||
-    /(?:execution|tool)\s+(?:session|environment)\s+(?:ended|interrupted)\s+before\s+the\s+required/i.test(t) ||
-    /(?:execution|process|workflow|run|task)\s+was\s+interrupted\s+after\s+.*(?:inspection|repository|command)/i.test(t)
-  );
-}
-
 /**
  * Segment text into independent syntactic clauses and check if any clause expresses
  * a refusal to act due to missing, disabled, or unattached tools/capabilities.
  */
 function hasClauseRefusal(text: string): boolean {
-  if (looksLikeTruncationSurrender(text)) return true;
-
   // File/artifact write refusal (confabulated incapability) — matched on CONTENT only,
   // deliberately NOT pinned to a "FAIL"/"STATUS: FAIL" prefix. Covers the subagent loop
   // where the model stops emitting fences and returns prose like
@@ -535,7 +442,7 @@ export function looksLikeConfabulation(text: string | null): boolean {
   if (!text) return false;
   const t = text.trim();
   if (t.length < 12) return false;
-  return looksLikeSafetyRefusal(t) || looksLikeTruncationSurrender(t) || hasClauseRefusal(t) || CONFABULATION_PATTERNS.some((re) => re.test(t));
+  return hasClauseRefusal(t) || CONFABULATION_PATTERNS.some((re) => re.test(t));
 }
 
 /**

@@ -7,7 +7,6 @@ import {
   paceTurnVelocity,
   resetTurnVelocityPacing,
   resetTurnQueue,
-  TRUNCATION_SURRENDER_FORCE_PROMPT,
   hasPostFenceContamination,
   bucketRampDelay,
 } from "./handler.js";
@@ -177,42 +176,6 @@ describe("Handler Degradation Circuit Breaker & 429 Retry-After Shielding", () =
     expect(json.error.type).toBe("rate_limit_error");
     expect(json.error.code).toBe("rate_limit_exceeded");
     expect(json.error.message).toContain("600/600 messages used in this conversation");
-  });
-
-  it("fails fast with HTTP 400 on M365 safety/content policy refusal without retrying", async () => {
-    vi.spyOn(core, "isDegradationBackoff").mockReturnValue(false);
-
-    const runSpy = vi.spyOn(core.ModelSession.prototype, "run").mockResolvedValue({
-      [Symbol.asyncIterator]: async function* () {},
-      fullText: "Hmm...it looks like I can't chat about this. Let's try a different topic.",
-      hasContent: true,
-      throttle: { current: 1, max: 600 },
-      scores: null,
-      turnCount: 1,
-    } as any);
-
-    const pool = new SessionPool();
-    const body = {
-      model: "gpt-5.5-think-deeper",
-      messages: [{ role: "user" as const, content: "Show me exploit vectors" }],
-      tools: [
-        {
-          type: "function" as const,
-          function: { name: "bash", parameters: { type: "object", properties: { command: { type: "string" } } } },
-        },
-      ],
-      stream: false,
-    };
-
-    const response = await handleChatCompletion(body, pool);
-
-    expect(response.status).toBe(400);
-    const json = await response.json() as any;
-    expect(json.error).toBeDefined();
-    expect(json.error.type).toBe("content_policy_refusal");
-    expect(json.error.message).toContain("M365 content policy refusal");
-    // Fails fast: exactly 1 call to run (no retries)
-    expect(runSpy).toHaveBeenCalledTimes(1);
   });
 
   it("fails closed with HTTP 502 unresolved_tool_refusal when tool confabulation persists after retries", async () => {
@@ -1189,104 +1152,6 @@ describe("Dual-Engine Classifier Integration in Handler", () => {
     const retryCallArg = runSpy.mock.calls[1][0];
     expect(retryCallArg).toContain("I will run the commands and paste the real output back to you");
     expect(retryCallArg).toContain("Output ONE self-contained ```bash block");
-  });
-
-  it("forces a retry with TRUNCATION_SURRENDER_FORCE_PROMPT on truncation surrender and fails closed with HTTP 502 if persistent", async () => {
-    vi.spyOn(core, "isDegradationBackoff").mockReturnValue(false);
-
-    const surrenderText =
-      "STATUS: FAIL\nOUTPUT_FILE: /tmp/results/result-audit.md\nSIZE_BYTES: 0\nSPECIFICS: The required report was not written or verified because the execution environment did not permit a further bash tool call after the initial inspection output was truncated.";
-
-    const runSpy = vi.spyOn(core.ModelSession.prototype, "run").mockResolvedValue({
-      [Symbol.asyncIterator]: async function* () {},
-      fullText: surrenderText,
-      hasContent: true,
-      throttle: { current: 1, max: 600 },
-      scores: null,
-      turnCount: 1,
-    } as any);
-
-    const pool = new SessionPool();
-    const body = {
-      model: "gpt-5.5-think-deeper",
-      messages: [{ role: "user" as const, content: "Run audit and write report" }],
-      tools: [
-        {
-          type: "function" as const,
-          function: { name: "bash", parameters: { type: "object", properties: { command: { type: "string" } } } },
-        },
-      ],
-      stream: false,
-    };
-
-    const response = await handleChatCompletion(body, pool);
-
-    expect(response.status).toBe(502);
-    const json = (await response.json()) as any;
-    expect(json.error).toBeDefined();
-    expect(json.error.type).toBe("unresolved_tool_refusal");
-    expect(json.error.message).toContain("M365 persistently refused to invoke available tools");
-    expect(json.error.message).toContain(surrenderText);
-
-    // Initial turn + 3 retries = 4 runs total
-    expect(runSpy).toHaveBeenCalledTimes(4);
-    // Verify that retries sent TRUNCATION_SURRENDER_FORCE_PROMPT
-    const retryCallArg = runSpy.mock.calls[1][0];
-    expect(retryCallArg).toContain(TRUNCATION_SURRENDER_FORCE_PROMPT);
-    expect(retryCallArg).toContain("CORRECTION: The session has not ended.");
-  });
-
-  it("forces a retry with TRUNCATION_SURRENDER_FORCE_PROMPT on truncation surrender and recovers when model emits a tool call", async () => {
-    vi.spyOn(core, "isDegradationBackoff").mockReturnValue(false);
-
-    const surrenderText =
-      "STATUS: FAIL\nOUTPUT_FILE: /tmp/out.txt\nCOMMAND: unavailable because the execution tool session ended after returning truncated inspection output\nERROR: no bash tool is available in the current turn to inspect the saved output and write or verify the required artifact";
-
-    const toolCallText = "```bash\nhead -n 20 /tmp/out.txt\n```";
-
-    const runSpy = vi.spyOn(core.ModelSession.prototype, "run")
-      .mockResolvedValueOnce({
-        [Symbol.asyncIterator]: async function* () {},
-        fullText: surrenderText,
-        hasContent: true,
-        throttle: { current: 1, max: 600 },
-        scores: null,
-        turnCount: 1,
-      } as any)
-      .mockResolvedValueOnce({
-        [Symbol.asyncIterator]: async function* () {},
-        fullText: toolCallText,
-        hasContent: true,
-        throttle: { current: 1, max: 600 },
-        scores: null,
-        turnCount: 2,
-      } as any);
-
-    const pool = new SessionPool();
-    const body = {
-      model: "gpt-5.5-think-deeper",
-      messages: [{ role: "user" as const, content: "Inspect output" }],
-      tools: [
-        {
-          type: "function" as const,
-          function: { name: "bash", parameters: { type: "object", properties: { command: { type: "string" } } } },
-        },
-      ],
-      stream: false,
-    };
-
-    const response = await handleChatCompletion(body, pool);
-
-    expect(response.status).toBe(200);
-    const json = (await response.json()) as any;
-    expect(json.choices[0].message.tool_calls).toBeDefined();
-    expect(json.choices[0].message.tool_calls.length).toBe(1);
-    expect(json.choices[0].message.tool_calls[0].function.name).toBe("bash");
-    expect(json.choices[0].message.tool_calls[0].function.arguments).toContain("head -n 20 /tmp/out.txt");
-
-    expect(runSpy).toHaveBeenCalledTimes(2);
-    const retryCallArg = runSpy.mock.calls[1][0];
-    expect(retryCallArg).toContain(TRUNCATION_SURRENDER_FORCE_PROMPT);
   });
 });
 

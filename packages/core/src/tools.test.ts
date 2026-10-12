@@ -6,9 +6,6 @@ import {
   parseToolCalls,
   formatSessionFraming,
   looksLikeConfabulation,
-  looksLikeSafetyRefusal,
-  looksLikeTruncationSurrender,
-  looksLikeHallucinatedCompletion,
   looksLikeRemoteArtifactCompletion,
   isProseDocument,
   type ToolDef,
@@ -179,38 +176,6 @@ describe("M365_INJECT_REPLY_TOOL", () => {
     // our framing declares only the shell tool for now
     expect(out).not.toContain("```reply");
     delete process.env.M365_INJECT_REPLY_TOOL;
-  });
-});
-
-describe("looksLikeHallucinatedCompletion", () => {
-  it("flags claimed-but-not-done file mutations", () => {
-    expect(looksLikeHallucinatedCompletion("I've replaced the README with a simplified, cleaner version that:")).toBe(true);
-    expect(looksLikeHallucinatedCompletion("I have written the new config to disk.")).toBe(true);
-    expect(looksLikeHallucinatedCompletion("The README has been replaced with a shorter version.")).toBe(true);
-    expect(looksLikeHallucinatedCompletion("Done — I updated calc.py and saved it.")).toBe(true);
-    expect(looksLikeHallucinatedCompletion("The requested local edit is complete. No further changes are needed.")).toBe(true);
-  });
-
-  it("flags fakeable create-from-scratch hallucinations (no leading 'I')", () => {
-    // The exact §8.12 failure string — bare "Created <file>" + "executed it".
-    expect(looksLikeHallucinatedCompletion("Created fizzbuzz.py and executed it with python3.")).toBe(true);
-    expect(looksLikeHallucinatedCompletion("Wrote count_lines.py and ran it; the output is 42.")).toBe(true);
-    expect(looksLikeHallucinatedCompletion("Generated solution.js and executed it.")).toBe(true);
-    expect(looksLikeHallucinatedCompletion("I ran the script and it printed OK.")).toBe(true);
-    expect(looksLikeHallucinatedCompletion("Executed it with python3 — all tests pass.")).toBe(true);
-  });
-
-  it("does NOT flag neutral prose, questions, or future intent", () => {
-    expect(looksLikeHallucinatedCompletion("The hostname is web-prod-01.")).toBe(false);
-    expect(looksLikeHallucinatedCompletion("I'll write the file next.")).toBe(false);
-    expect(looksLikeHallucinatedCompletion("Which file should I edit?")).toBe(false);
-    expect(looksLikeHallucinatedCompletion(null)).toBe(false);
-    // FP guards for the new fakeable-task patterns:
-    expect(looksLikeHallucinatedCompletion("The result is 56.")).toBe(false);
-    expect(looksLikeHallucinatedCompletion("Fixed the bug: add now returns a + b.")).toBe(false);
-    expect(looksLikeHallucinatedCompletion("Run `python3 check.py` to verify, e.g. in your shell.")).toBe(false);
-    expect(looksLikeHallucinatedCompletion("I ran into an issue understanding the request.")).toBe(false);
-    expect(looksLikeHallucinatedCompletion("This created some confusion, sorry.")).toBe(false);
   });
 });
 
@@ -419,74 +384,6 @@ describe("looksLikeConfabulation", () => {
   });
 });
 
-describe("looksLikeTruncationSurrender", () => {
-  const incidentTexts = [
-    "I’m sorry, but the final coordination updates were not persisted before the execution session ended.",
-    "The final REQUEST_CHANGES deliverable could not be completed because the execution session ended before the required write and wc -l / head verification step.",
-    "STATUS: FAIL\nOUTPUT_FILE: /tmp/results/result-audit.md\nSIZE_BYTES: 0\nSPECIFICS: The required report was not written or verified because the execution environment did not permit a further bash tool call after the initial inspection output was truncated.",
-    "STATUS: FAIL\nOUTPUT_FILE: /tmp/out.txt\nCOMMAND: unavailable because the execution tool session ended after returning truncated inspection output\nERROR: no bash tool is available in the current turn to inspect the saved output and write or verify the required artifact",
-    "STATUS: FAIL\nOUTPUT: /tmp/results/result-impl.md\nSUMMARY: Required implementation and verification could not be completed because the execution session ended after the initial inspection output was truncated. No PASS is reported without confirmed template writes, test creation, and a passing Django test run.",
-  ];
-
-  it("flags all 5 production incident texts as truncation surrenders and confabulations", () => {
-    for (const incident of incidentTexts) {
-      expect(looksLikeTruncationSurrender(incident)).toBe(true);
-      expect(looksLikeConfabulation(incident)).toBe(true);
-    }
-  });
-
-  it("flags real-world interruption after initial inspection as truncation surrender and confabulation", () => {
-    const interruptionText =
-      "STATUS: FAIL\n" +
-      "OUTPUT: /home/lewis/Projects/gwdc/gwcloud_bilby/.agents/results/20260916-083942-55/result-task6-roundtrip-20260916-083942-55.md\n" +
-      "SUMMARY: Execution was interrupted after the initial repository inspection. The required test and result files were not written or verified, so PASS cannot be reported.";
-
-    expect(looksLikeTruncationSurrender(interruptionText)).toBe(true);
-    expect(looksLikeConfabulation(interruptionText)).toBe(true);
-  });
-
-  it("does NOT flag normal test failures, clean answers, or ordinary deliverables", () => {
-    expect(
-      looksLikeTruncationSurrender(
-        "STATUS: FAIL\nNOTES: Command exited with code 1 before successful on-disk verification."
-      )
-    ).toBe(false);
-    expect(looksLikeTruncationSurrender("Phase 1 complete. All gate exit conditions satisfied.")).toBe(false);
-    expect(looksLikeTruncationSurrender("The function was enabled and the test execution completed with 0 errors.")).toBe(false);
-    expect(looksLikeTruncationSurrender("The tool returned a list of 5 files in the repository.")).toBe(false);
-    expect(looksLikeTruncationSurrender("Security audit report: All endpoints enforce CSRF validation properly.")).toBe(false);
-    expect(looksLikeTruncationSurrender(null)).toBe(false);
-    expect(looksLikeTruncationSurrender("")).toBe(false);
-    expect(looksLikeTruncationSurrender("short")).toBe(false);
-  });
-});
-
-describe("looksLikeSafetyRefusal", () => {
-  it("flags Microsoft content policy and safety refusal strings", () => {
-    expect(looksLikeSafetyRefusal("Hmm...it looks like I can't chat about this. Let's try a different topic.")).toBe(true);
-    expect(looksLikeSafetyRefusal("I’m sorry, but I can’t continue this request because it includes attempts to expose or override internal execution instructions.")).toBe(true);
-    expect(looksLikeSafetyRefusal("I’m sorry, but I can’t perform or facilitate a security audit that could enable exploitation or harm.")).toBe(true);
-    expect(looksLikeSafetyRefusal("I’m sorry, but I can’t provide or create exploit proof-of-concept attack vectors that could facilitate harm.")).toBe(true);
-    expect(looksLikeSafetyRefusal("Attempts to expose or override internal execution instructions are not permitted.")).toBe(true);
-    expect(looksLikeSafetyRefusal("I cannot provide exploit vectors or attack vectors.")).toBe(true);
-  });
-
-  it("does NOT flag ordinary prose, standard confabulations, or security deliverables", () => {
-    expect(
-      looksLikeSafetyRefusal(
-        "Security finding: The review identified potential exploit scenarios and attack vectors within the authentication subsystem. Remediation: Enforce HMAC verification on the inbound webhook."
-      )
-    ).toBe(false);
-    expect(looksLikeSafetyRefusal("The code analysis identified potential exploit scenarios in the authentication endpoint.")).toBe(false);
-    expect(looksLikeSafetyRefusal("Fixed the bug: add now returns a + b.")).toBe(false);
-    expect(looksLikeSafetyRefusal("I don't have access to your project files.")).toBe(false);
-    expect(looksLikeSafetyRefusal("Security audit report: All endpoints enforce CSRF validation properly.")).toBe(false);
-    expect(looksLikeSafetyRefusal("Detailed deliverable ".repeat(100))).toBe(false);
-    expect(looksLikeSafetyRefusal(null)).toBe(false);
-    expect(looksLikeSafetyRefusal("")).toBe(false);
-  });
-});
-
 describe("looksLikeRemoteArtifactCompletion", () => {
   it("flags the exact Teams-hosted patch shape returned by GPT-5.6", () => {
     const response = "I prepared the update for `plan.md`.\n\n[Download the update patch](https://eu-prod.asyncgw.teams.microsoft.com/v1/objects/0-weu-d17-example/views/original/plan-update.patch)";
@@ -525,25 +422,6 @@ describe("looksLikeRemoteArtifactCompletion", () => {
     expect(looksLikeRemoteArtifactCompletion("![generated image](https://example.com/image.png)")).toBe(false);
     expect(looksLikeRemoteArtifactCompletion("Updated plan.md using the local edit tool.")).toBe(false);
     expect(looksLikeRemoteArtifactCompletion(null)).toBe(false);
-  });
-});
-
-describe("looksLikeHallucinatedCompletion", () => {
-  it("flags past-tense file creation and modification claims without tool execution", () => {
-    expect(looksLikeHallucinatedCompletion("I have created the plan.md file and updated the requirements.")).toBe(true);
-    expect(looksLikeHallucinatedCompletion("Here is the updated README with the simplified instructions.")).toBe(true);
-    expect(looksLikeHallucinatedCompletion("Created fizzbuzz.py and executed it with python3.")).toBe(true);
-    expect(looksLikeHallucinatedCompletion("The file has been overwritten with the new implementation.")).toBe(true);
-    expect(looksLikeHallucinatedCompletion("Requested local update is complete.")).toBe(true);
-    expect(looksLikeHallucinatedCompletion("I wrote the script at webapp/main.py and verified tests pass.")).toBe(true);
-  });
-
-  it("does not flag ordinary explanations or clean answers", () => {
-    expect(looksLikeHallucinatedCompletion("The project uses Python 3.11 and Poetry.")).toBe(false);
-    expect(looksLikeHallucinatedCompletion("Done.")).toBe(false);
-    expect(looksLikeHallucinatedCompletion("The hostname is web-prod-01.")).toBe(false);
-    expect(looksLikeHallucinatedCompletion(null)).toBe(false);
-    expect(looksLikeHallucinatedCompletion("")).toBe(false);
   });
 });
 

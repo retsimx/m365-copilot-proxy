@@ -253,10 +253,10 @@ describe("reasoning SSE (Track B, design §4.3)", () => {
   });
 
   it("emits a repeated reasoning step exactly once across runBuffered retries (F3)", async () => {
-    // Disable prose streaming so streamedProse stays false and the confab/hallucination
-    // retry loop actually re-runs the model; each attempt re-emits the same CoT step.
+    // Disable prose streaming so streamedProse stays false and the confab retry loop
+    // actually re-runs the model; each attempt re-emits the same CoT step.
     process.env.M365_NO_TOOL_STREAM = "1";
-    const prose = ["I have created ", "the file config.json ", "with the updated settings."];
+    const prose = ["I can't generate or verify ", "the requested file because file-generation ", "capabilities are disabled in this session."];
     const chunks = await streamChunks(prose, prose.join(""), {
       tools: TOOLS,
       reasoning: ["Inspecting files.\n"],

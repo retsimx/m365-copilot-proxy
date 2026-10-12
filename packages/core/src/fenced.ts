@@ -796,8 +796,8 @@ function findToolFenceOffset(buf: string, specs: Map<string, FencedToolSpec>): n
     if (prev === " ") {
       let s = i;
       while (s > 0 && buf[s - 1] === " ") s--; // leading indentation
-      if ((s === 0 || buf[s - 1] === "\n") && i - s <= 3) return i;
-      continue; // 4+ spaces = indented code, not a call opener
+      if (s === 0 || buf[s - 1] === "\n") return i; // indented opener
+      continue;
     }
     if (prev !== "`" && prev !== "\r") return i; // glued opener (`...contract.```read`)
   }

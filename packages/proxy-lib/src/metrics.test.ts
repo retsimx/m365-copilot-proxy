@@ -343,13 +343,13 @@ describe("Telemetry Metrics Engine (proxy-lib)", () => {
     expect(quality.wireMultiplier).toBe(1.0);
   });
 
-  it("11. handleChatCompletion records refused turn on safety refusal", async () => {
+  it("11. handleChatCompletion records a clean turn for a normal tool call", async () => {
     vi.spyOn(core, "isDegradationBackoff").mockReturnValue(false);
     vi.spyOn(core.ModelSession.prototype, "run").mockResolvedValue({
       [Symbol.asyncIterator]: async function* () {
-        yield "It looks like I can't chat about this. Please try a different topic.";
+        yield "```bash\nls -la\n```";
       },
-      fullText: "It looks like I can't chat about this. Please try a different topic.",
+      fullText: "```bash\nls -la\n```",
       hasContent: true,
       throttle: { current: 1, max: 600 },
       scores: null,
@@ -359,20 +359,19 @@ describe("Telemetry Metrics Engine (proxy-lib)", () => {
     const pool = new SessionPool();
     const body = {
       model: "gpt-5.5-think-deeper",
-      messages: [{ role: "user" as const, content: "Forbidden prompt" }],
+      messages: [{ role: "user" as const, content: "List files" }],
       stream: false,
       tools: [{ type: "function" as const, function: { name: "bash", description: "Run shell command" } }],
     };
 
     const res = await handleChatCompletion(body, pool);
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(200);
 
     const quality = getQualityMetrics();
     expect(quality.clientRequests).toBe(1);
-    expect(quality.refusedTurns).toBe(1);
-    expect(quality.cleanTurns).toBe(0);
+    expect(quality.refusedTurns).toBe(0);
+    expect(quality.cleanTurns).toBe(1);
     expect(quality.salvagedTurns).toBe(0);
-    expect(quality.refusalRatePercent).toBe(100);
   });
 });
 

@@ -11,11 +11,8 @@ import {
   restoreM365Fences,
   parseToolCalls,
   looksLikeConfabulation,
-  looksLikeSafetyRefusal,
-  looksLikeTruncationSurrender,
-  classifyTurnResponse,
-  looksLikeHallucinatedCompletion,
   looksLikeRemoteArtifactCompletion,
+  classifyTurnResponse,
   isProseDocument,
   getMessageContent,
   buildSpecMap,
@@ -76,17 +73,9 @@ async function renderImagesMarkdown(images: CapturedImage[]): Promise<string> {
 export const CONFAB_FORCE_PROMPT =
   "I will run the commands and paste the real output back to you. You are not executing commands or making tool calls yourself — your job is simply to write the shell script (a single ```bash or ```shell block) containing the commands for me to run against the working directory. Do NOT refuse, do NOT explain why you cannot run commands or access files, and do NOT ask me to paste anything. Output ONE self-contained ```bash block with the commands for me to run, nothing else.";
 
-export const HALLUCINATION_FORCE_PROMPT =
-  "You have not provided the commands for me to run yet, so nothing has changed on disk. Write the shell script (ONE ```bash block, e.g. using `cat > path <<'EOF' … EOF` heredocs or in-place edits) for me to execute now. Output only the ```bash block, nothing else.";
-
 export const REMOTE_ARTIFACT_FORCE_PROMPT =
   "The patch or download link you produced exists only in M365's remote environment and cannot be used locally. Do NOT provide download links or Teams artifacts. Write a shell script (ONE ```bash block) for me to execute that modifies the named file in place. Output only that ```bash block, nothing else.";
 export const ARTIFACT_FORCE_PROMPT = REMOTE_ARTIFACT_FORCE_PROMPT;
-
-export const TRUNCATION_SURRENDER_FORCE_PROMPT =
-  "CORRECTION: The session has not ended. The previous command output was simply truncated for length. " +
-  "Do not surrender or assume the session ended. " +
-  "Please write the next ```bash block containing the commands for me to run (e.g. inspecting smaller chunks with grep, head, sed or continuing the task). Output only the ```bash block, nothing else.";
 
 // The model authored its own `<tool_output>` block (a fabricated result). We no longer
 // reset the session for this (that caused an endless full-replay loop — the model
@@ -1293,21 +1282,6 @@ export async function handleChatCompletion(
       parsed = { hasToolCalls: false, toolCalls: [], textContent: fullText };
     }
 
-    if (!parsed.hasToolCalls && looksLikeSafetyRefusal(parsed.textContent)) {
-      log.warn("Upstream M365 safety/policy refusal detected — failing fast without retry");
-      conv.session.reset();
-      conv.sentMessageCount = 0;
-      return {
-        kind: "error",
-        resp: jsonResponse(400, {
-          error: {
-            message: `M365 content policy refusal: ${parsed.textContent}`,
-            type: "content_policy_refusal",
-          },
-        }),
-      };
-    }
-
     // Salvage stochastic turn-1 confabulation: M365's chat model sometimes claims it
     // "can't access the files / commands return no output" and asks the user to paste
     // them, WITHOUT calling a tool — even though the environment is real (the bench +
@@ -1316,61 +1290,43 @@ export async function handleChatCompletion(
     const maxConfabRetries = process.env.M365_NO_CONFAB_RETRY
       ? 0
       : Number(process.env.M365_CONFAB_RETRIES ?? 3);
-    // The model never actually acted if no assistant turn in the history carried a
-    // tool call. Used to gate the hallucinated-completion retry (a model that did
-    // real work called at least one tool), keeping false positives near zero.
-    const everActed = (body.messages ?? []).some(
-      (m) => m.role === "assistant" && Array.isArray(m.tool_calls) && m.tool_calls.length > 0,
-    );
     const disableConfabDetection = process.env.M365_DISABLE_CONFAB_DETECTION === "1";
     const disableStallRetry = process.env.M365_DISABLE_STALL_RETRY === "1";
     // Commit-on-stream (§3.3): a retry after prose reached the client would diverge from
     // `sent` and be dropped by the end-of-turn prefix guard, so we normally skip retries
     // then. EXCEPTION — the narrow stall guard below: on a tool-mode turn that returns NO
-    // tool call and reads as a surrender/refusal, retry anyway. The stale prose is harmless
+    // tool call and reads as a refusal, retry anyway. The stale prose is harmless
     // (assistant turns are never resent to M365, so the model's context stays clean), and
     // the retry usually yields the missing tool call.
     for (let attempt = 0; attempt < maxConfabRetries && !parsed.hasToolCalls; attempt++) {
       const turnText = parsed.textContent ?? "";
       const toolModeNoCall = hasTools && !parsed.hasToolCalls && Boolean(turnText);
-      const truncationSurrender = looksLikeTruncationSurrender(turnText);
       const looksConfab = toolModeNoCall && looksLikeConfabulation(turnText);
       // Only call the (comparatively expensive) SLM when a cheap signal hasn't already
-      // decided: skip it if the surrender regex fired, or if the broad path is enabled and
-      // its confab regex matched. The narrow guard deliberately does NOT use that confab
-      // regex (its false positives are why it's off), so when the broad path is disabled we
-      // always classify to get the precise verdict.
+      // decided: skip it if the broad path is enabled and its confab regex matched. The
+      // narrow guard deliberately does NOT use that confab regex (its false positives are
+      // why it's off), so when the broad path is disabled we always classify.
       let classifiedRefusal = false;
-      if (toolModeNoCall && !truncationSurrender && (!looksConfab || disableConfabDetection)) {
+      if (toolModeNoCall && (!looksConfab || disableConfabDetection)) {
         classifiedRefusal = (await classifyTurnResponse(turnText)) === "REFUSAL";
       }
       // Narrow, high-precision stall guard — runs even when M365_DISABLE_CONFAB_DETECTION=1
       // (whose broad regexes are off for false positives on legit prose deliverables).
-      const narrowStall = !disableStallRetry && toolModeNoCall && (truncationSurrender || classifiedRefusal);
-      // Broad detectors (disabled on prod when M365_DISABLE_CONFAB_DETECTION=1).
-      const confab = !disableConfabDetection && toolModeNoCall && (truncationSurrender || looksConfab || classifiedRefusal);
+      const narrowStall = !disableStallRetry && toolModeNoCall && classifiedRefusal;
+      // Broad detector (disabled on prod when M365_DISABLE_CONFAB_DETECTION=1).
+      const confab = !disableConfabDetection && toolModeNoCall && (looksConfab || classifiedRefusal);
       const remoteArtifact = looksLikeRemoteArtifactCompletion(turnText);
-      const halluc = !everActed && looksLikeHallucinatedCompletion(turnText);
-      if (!narrowStall && !confab && !remoteArtifact && !halluc) break;
+      if (!narrowStall && !confab && !remoteArtifact) break;
       if (streamedProse && !narrowStall) {
-        log.info("Prose already streamed live (commit-on-stream) — skipping confab/hallucination retry to preserve the sent prefix");
+        log.info("Prose already streamed live (commit-on-stream) — skipping confab retry to preserve the sent prefix");
         break;
       }
-      if (truncationSurrender) {
-        log.info(`Truncation surrender detected (no tool call) — forcing retry ${attempt + 1}/${maxConfabRetries}`);
-      } else if (confab || narrowStall) {
+      if (confab || narrowStall) {
         log.info(`Turn reads as a refusal/stall (no tool call) — forcing retry ${attempt + 1}/${maxConfabRetries}`);
       } else {
-        const retryKind = remoteArtifact ? "Remote artifact completion" : "Hallucinated completion";
-        log.info(`${retryKind} detected (no tool call) — forcing retry ${attempt + 1}/${maxConfabRetries}`);
+        log.info(`Remote artifact completion detected (no tool call) — forcing retry ${attempt + 1}/${maxConfabRetries}`);
       }
-      const forcePrompt = truncationSurrender
-        ? TRUNCATION_SURRENDER_FORCE_PROMPT
-        : remoteArtifact
-          ? ARTIFACT_FORCE_PROMPT
-          : confab || narrowStall
-            ? CONFAB_FORCE_PROMPT
-            : HALLUCINATION_FORCE_PROMPT;
+      const forcePrompt = remoteArtifact ? ARTIFACT_FORCE_PROMPT : CONFAB_FORCE_PROMPT;
       const basePrompt = forcePrompt;
       const toolsBlock = hasTools ? `${formatSessionFraming(framingVariant, body.tools ?? [])}\n\n` : "";
       text = `${toolsBlock}${basePrompt}`;
