@@ -211,7 +211,14 @@ As documented in [`docs/hypotheses.md` §21](./hypotheses.md#21-october-8-2026--
 2. **Regex false positives reached 85.9% (55/64 flagged turns):** Because confabulations became negligible, the proxy's internal keyword regex heuristics (`hasClauseRefusal` in `packages/core/src/tools.ts`) misidentified normal technical words in engineering deliverables (`binary`, `execution`, `available`, `run`) as refusals (e.g. in test diagnostics, review verdicts, and `### Task Complete` reports).
 3. **Counterproductive retry loops:** Flagged turns were forced into 3–10 turn retry loops, discarding valid deliverable prose, burning conversational turn quota, and tripping upstream pacing limits.
 
-**Resolution:** Shipped **`M365_DISABLE_CONFAB_DETECTION=1`**, allowing prose deliverables through untouched to client orchestrators (such as Pi or OpenCode) which natively handle model retries, while preserving safety refusal fast-fails (HTTP 400 `content_policy_refusal`).
+**Resolution:** The binary **`M365_DISABLE_CONFAB_DETECTION=1`** bypass was later replaced by an
+in-process zero-shot **NLI turn classifier** (`Xenova/nli-deberta-v3-base`, `dtype:"q8"`, CPU, no
+network, ~100 ms/turn) that runs by default on every tool-mode turn returning no tool call:
+`REFUSAL ⇒ force a retry (hard-capped at 3)`, `DELIVERABLE ⇒ return as-is`. It scores **92.4%** on the
+198-item balanced refusal/deliverable benchmark (vs the prior `gemma4:e2b` SLM's 88.9%, at ~**34×** the
+speed), so genuine deliverables pass through without the old regex false positives while true refusals
+are still retried. Content-policy refusals are no longer special-cased — the old `looksLikeSafetyRefusal`
+→ HTTP 400 `content_policy_refusal` fast-fail was removed.
 
 ## Results
 

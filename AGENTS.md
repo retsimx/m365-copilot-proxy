@@ -215,10 +215,10 @@ pnpm test:live      # M365_LIVE=1; live tests that hit real M365 (uses quota)
 - **New Session Stagger Queue:** The proxy enforces a 15-second spacing queue for initial turns
   (`turn === 0`, `M365_NEW_SESSION_SPACING_MS = 15000`), capping fresh session creation to 4/min to
   prevent parallel dispatch drops while follow-up turns (`turn > 0`) run unthrottled.
-- **Safety Refusal Separation vs Unresolved Tool Refusal:** Upstream content policy violations
-  (`looksLikeSafetyRefusal`) fast-fail with **HTTP 400 `content_policy_refusal`** and flush session
-  context immediately without retries. In contrast, unresolved tool confabulations that persist after
-  forcing retries fail closed with **HTTP 502 `unresolved_tool_refusal`**.
+- **Refusal Fallthrough:** An NLI-classified tool refusal that persists after the forcing retries
+  returns **HTTP 200** with the refusal as assistant content (session context
+  reset) — refusals no longer fail closed. The remote-artifact `file_mutation_without_local_tool`
+  502 is unchanged.
 - **Structural Clause NLP Analysis** (`packages/core/src/tools.ts`): All natural language
   heuristics for tool refusals, confabulations, and unearned mutation claims use clause-boundary
   segmentation (`[Tool Anchor] + [Negation] + [Availability State]`). This avoids false positives
@@ -231,19 +231,39 @@ pnpm test:live      # M365_LIVE=1; live tests that hit real M365 (uses quota)
 - **Assistant-simulated `<tool_response>` tags are rejected & flush session context:** When
   a model produces a hallucinated simulation with fake `<tool_response>` tags, the proxy strips
   them and resets the session to force a clean full-history replay on the next turn.
-- **Dual-Engine SLM Turn Classifier (`packages/core/src/classifier.ts`):** Distinguishes genuine
-  prose deliverables (e.g. security audits, test diagnostics) from tool confabulations using Gemma 4
-  E2B with Chain-of-Thought (`thinking: true`, `max_tokens: 1000`). If `M365_CLASSIFIER_OPENAI_URL`
-  is configured, queries the remote OpenAI endpoint (e.g. GPU host with Ollama) with a 10s timeout
-  (`M365_CLASSIFIER_TIMEOUT_MS`); otherwise seamlessly falls back to in-process `@kessler/gemma`
-  ONNX execution. Bypasses completely for tool-calling turns (~95% of traffic has 0ms overhead). Deliverables
-  immediately return HTTP 200 without retrying, protecting conversational turn quotas.
-- **Disabling Proxy Confabulation Detection (`M365_DISABLE_CONFAB_DETECTION=1`):** With modern advisor
-  framing, models confabulate on only ~0.3% of turns (4/1306 in prod) while keyword regexes cause ~86% false
-  positives on legitimate completion prose, triggering expensive retry loops. Setting `M365_DISABLE_CONFAB_DETECTION=1`
-  bypasses proxy-level confabulation forcing retries and 502 fails, allowing all prose deliverables through cleanly
-  to client orchestrators (which handle retries natively). Content policy refusals (`looksLikeSafetyRefusal`) still
-  fast-fail 400.
+- **In-Process NLI Turn Classifier (`packages/core/src/classifier.ts`):** On every tool-mode turn
+  that returns no tool call, distinguishes genuine prose deliverables (security audits, test
+  diagnostics) from tool confabulations with a zero-shot NLI pipeline — `Xenova/nli-deberta-v3-base`
+  (`dtype:"q8"`, CPU, via `@huggingface/transformers`/`onnxruntime-node`), no network, ~100 ms/turn.
+  Labels are *claim-vs-result* (`["the assistant claiming it cannot perform the task", "the assistant
+  providing its actual answer or results"]`, hypothesis template `"This message shows {}."`). Chosen
+  on a 198-item balanced clean benchmark (~99 refusals / 99 deliverables): **92.4%** accuracy vs the
+  prior `gemma4:e2b` SLM's **88.9%**, ~**34× faster** (~100 ms vs ~3.4 s; the SLM also serialised, no
+  parallelism). `REFUSAL` forces an in-conversation retry (hard-capped at 3); `DELIVERABLE` returns
+  as-is. The `claim-vs-result` framing alone lifted the same model 86.9% → 92.4% over a naive
+  `refusal/success` framing. Max input is `max_position_embeddings: 512` tokens (~2,000 chars of prose,
+  fewer for dense code) — the classifier sees only the message head. Fine for refusals (short: median
+  ~200 chars, p95 ~600, max ~1,100 observed); long deliverables get head-truncated (normally still
+  DELIVERABLE).
+  - *History:* regex (`looksLikeConfabulation`, brittle/over-grown, ~86% false positives on real
+    prose) → SLM (`gemma4:e2b`, high precision/zero false-retries but slow ~3.4 s and weaker recall,
+    88.9%) → in-process NLI classifier (92.4%, ~100 ms). Other NLI candidates rejected on the same
+    benchmark: `onnx-community/deberta-v3-large-zeroshot-v2.0-c` (missed a plain refusal),
+    `Xenova/bart-large-mnli` (missed a plain success), `onnx-community/ModernBERT-large-zeroshot-v2.0`
+    (79.8%, strong REFUSAL bias, 2× slower), `Xenova/mobilebert-uncased-mnli` (84.8%),
+    `protectai/distilroberta-base-rejection-v1` (58.1% — a *safety*-rejection model, blind to
+    *capability* refusals).
+- **Refusal Retry & Fallthrough:** When a retry happens, the assistant content concatenates each
+  attempt separated by `\n\n--- REFUSAL DETECTED - RETRY N/3 ---\n\n` (or
+  `--- REMOTE ARTIFACT DETECTED - RETRY N/3 ---`); it is streamed as a content delta on the SSE path
+  too. If a refusal survives all 3 retries, the proxy returns **HTTP 200** with the refusal as
+  assistant content (session context reset) — it no longer 502s on a refusal (the remote-artifact
+  `file_mutation_without_local_tool` 502 is unchanged). `M365_NO_CONFAB_RETRY=1` disables the retry
+  loop; `M365_CONFAB_RETRIES` tunes the count (clamped to ≤3). Removed env vars:
+  `M365_CLASSIFIER_OPENAI_URL`, `M365_CLASSIFIER_OPENAI_MODEL`, `M365_CLASSIFIER_OPENAI_API_KEY`,
+  `M365_CLASSIFIER_TIMEOUT_MS`, `M365_CLASSIFIER_MAX_TOKENS`, `M365_DISABLE_CONFAB_DETECTION`,
+  `M365_DISABLE_STALL_RETRY`. Content-policy refusals are no longer special-cased (the old
+  `looksLikeSafetyRefusal` → HTTP 400 `content_policy_refusal` fast-fail was removed).
 
 
 ## Verifying changes end-to-end

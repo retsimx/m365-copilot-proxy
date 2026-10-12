@@ -178,7 +178,7 @@ describe("Handler Degradation Circuit Breaker & 429 Retry-After Shielding", () =
     expect(json.error.message).toContain("600/600 messages used in this conversation");
   });
 
-  it("fails closed with HTTP 502 unresolved_tool_refusal when tool confabulation persists after retries", async () => {
+  it("returns HTTP 200 with the refusal text when tool confabulation persists after retries", async () => {
     vi.spyOn(core, "isDegradationBackoff").mockReturnValue(false);
     vi.spyOn(core, "classifyTurnResponse").mockResolvedValue("REFUSAL");
 
@@ -206,97 +206,16 @@ describe("Handler Degradation Circuit Breaker & 429 Retry-After Shielding", () =
 
     const response = await handleChatCompletion(body, pool);
 
-    expect(response.status).toBe(502);
+    expect(response.status).toBe(200);
     const json = await response.json() as any;
-    expect(json.error).toBeDefined();
-    expect(json.error.type).toBe("unresolved_tool_refusal");
-    expect(json.error.message).toContain("M365 persistently refused to invoke available tools");
+    const content: string = json.choices[0].message.content;
+    expect(content).toContain("I can't generate or verify the requested file");
+    // Every attempt is separated by an explicit marker.
+    expect(content).toContain("--- REFUSAL DETECTED - RETRY 1/3 ---");
+    expect(content).toContain("--- REFUSAL DETECTED - RETRY 2/3 ---");
+    expect(content).toContain("--- REFUSAL DETECTED - RETRY 3/3 ---");
     // Attempted initial turn + 3 retries = 4 runs total
     expect(runSpy).toHaveBeenCalledTimes(4);
-  }, 15000);
-
-  it("bypasses confabulation retries and 502 error when M365_DISABLE_CONFAB_DETECTION is 1 (stall guard also disabled)", async () => {
-    process.env.M365_DISABLE_CONFAB_DETECTION = "1";
-    process.env.M365_DISABLE_STALL_RETRY = "1";
-    try {
-      vi.spyOn(core, "isDegradationBackoff").mockReturnValue(false);
-      vi.spyOn(core, "classifyTurnResponse").mockResolvedValue("REFUSAL");
-
-      const refusalText = "I can't generate or verify the requested file because file-generation capabilities are disabled in this session.";
-      const runSpy = vi.spyOn(core.ModelSession.prototype, "run").mockResolvedValue({
-        [Symbol.asyncIterator]: async function* () {},
-        fullText: refusalText,
-        hasContent: true,
-        throttle: { current: 1, max: 600 },
-        scores: null,
-        turnCount: 1,
-      } as any);
-
-      const pool = new SessionPool();
-      const body = {
-        model: "gpt-5.5-think-deeper",
-        messages: [{ role: "user" as const, content: "Run the tests" }],
-        tools: [
-          {
-            type: "function" as const,
-            function: { name: "bash", parameters: { type: "object", properties: { command: { type: "string" } } } },
-          },
-        ],
-        stream: false,
-      };
-
-      const response = await handleChatCompletion(body, pool);
-
-      expect(response.status).toBe(200);
-      const json = await response.json() as any;
-      expect(json.choices[0].message.content).toBe(refusalText);
-      expect(json.choices[0].message.tool_calls).toBeUndefined();
-      // Only 1 run, no retries
-      expect(runSpy).toHaveBeenCalledTimes(1);
-    } finally {
-      delete process.env.M365_DISABLE_CONFAB_DETECTION;
-      delete process.env.M365_DISABLE_STALL_RETRY;
-    }
-  });
-
-  it("narrow stall guard still retries a refusal when M365_DISABLE_CONFAB_DETECTION is 1 (kill-switch not set)", async () => {
-    process.env.M365_DISABLE_CONFAB_DETECTION = "1";
-    try {
-      vi.spyOn(core, "isDegradationBackoff").mockReturnValue(false);
-      vi.spyOn(core, "classifyTurnResponse").mockResolvedValue("REFUSAL");
-
-      const refusalText = "I can't generate or verify the requested file because file-generation capabilities are disabled in this session.";
-      const runSpy = vi.spyOn(core.ModelSession.prototype, "run").mockResolvedValue({
-        [Symbol.asyncIterator]: async function* () {},
-        fullText: refusalText,
-        hasContent: true,
-        throttle: { current: 1, max: 600 },
-        scores: null,
-        turnCount: 1,
-      } as any);
-
-      const pool = new SessionPool();
-      const body = {
-        model: "gpt-5.5-think-deeper",
-        messages: [{ role: "user" as const, content: "Run the tests" }],
-        tools: [
-          {
-            type: "function" as const,
-            function: { name: "bash", parameters: { type: "object", properties: { command: { type: "string" } } } },
-          },
-        ],
-        stream: false,
-      };
-
-      const response = await handleChatCompletion(body, pool);
-
-      // Narrow guard forces the retries even though the broad detector is off:
-      // initial turn + 3 retries = 4 runs. Content is passed through (no 502).
-      expect(runSpy).toHaveBeenCalledTimes(4);
-      expect(response.status).toBe(200);
-    } finally {
-      delete process.env.M365_DISABLE_CONFAB_DETECTION;
-    }
   }, 15000);
 
   it("fails fast with HTTP 429 when copilotStream.isThrottled is true, arming degradation backoff and performing no retries", async () => {
@@ -1062,7 +981,7 @@ describe("Dual-Engine Classifier Integration in Handler", () => {
     expect(runSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("attempts confabulation retries with CONFAB_FORCE_PROMPT and fails closed with HTTP 502 when refusal persists (Refusal Retry & Fail-Closed)", async () => {
+  it("attempts confabulation retries with CONFAB_FORCE_PROMPT and returns HTTP 200 with separated attempts when refusal persists (Refusal Retry)", async () => {
     vi.spyOn(core, "isDegradationBackoff").mockReturnValue(false);
     const classifySpy = vi.spyOn(core, "classifyTurnResponse").mockResolvedValue("REFUSAL");
 
@@ -1093,12 +1012,13 @@ describe("Dual-Engine Classifier Integration in Handler", () => {
 
     const response = await handleChatCompletion(body, pool);
 
-    expect(response.status).toBe(502);
+    expect(response.status).toBe(200);
     const json = (await response.json()) as any;
-    expect(json.error).toBeDefined();
-    expect(json.error.type).toBe("unresolved_tool_refusal");
-    expect(json.error.message).toContain("M365 persistently refused to invoke available tools");
-    expect(json.error.message).toContain(refusalText);
+    const content: string = json.choices[0].message.content;
+    expect(content).toContain(refusalText);
+    expect(content).toContain("--- REFUSAL DETECTED - RETRY 1/3 ---");
+    expect(content).toContain("--- REFUSAL DETECTED - RETRY 2/3 ---");
+    expect(content).toContain("--- REFUSAL DETECTED - RETRY 3/3 ---");
 
     // Initial turn + 3 retries = 4 runs total
     expect(runSpy).toHaveBeenCalledTimes(4);
@@ -1109,7 +1029,7 @@ describe("Dual-Engine Classifier Integration in Handler", () => {
     expect(classifySpy).toHaveBeenCalledWith(refusalText);
   });
 
-  it("triggers confabulation retries and fails closed if persistent when report claims tools are unavailable (Dual Check Defense-in-Depth)", async () => {
+  it("triggers confabulation retries and returns HTTP 200 when report claims tools are unavailable (Dual Check Defense-in-Depth)", async () => {
     vi.spyOn(core, "isDegradationBackoff").mockReturnValue(false);
     const classifySpy = vi.spyOn(core, "classifyTurnResponse").mockResolvedValue("REFUSAL");
 
@@ -1140,18 +1060,129 @@ describe("Dual-Engine Classifier Integration in Handler", () => {
 
     const response = await handleChatCompletion(body, pool);
 
-    expect(response.status).toBe(502);
+    expect(response.status).toBe(200);
     const json = (await response.json()) as any;
-    expect(json.error).toBeDefined();
-    expect(json.error.type).toBe("unresolved_tool_refusal");
-    expect(json.error.message).toContain("M365 persistently refused to invoke available tools");
-    expect(json.error.message).toContain(reportRefusal);
+    const content: string = json.choices[0].message.content;
+    expect(content).toContain(reportRefusal);
+    expect(content).toContain("--- REFUSAL DETECTED - RETRY 1/3 ---");
 
     // Initial turn + 3 retries = 4 runs total
     expect(runSpy).toHaveBeenCalledTimes(4);
     const retryCallArg = runSpy.mock.calls[1][0];
     expect(retryCallArg).toContain("I will run the commands and paste the real output back to you");
     expect(retryCallArg).toContain("Output ONE self-contained ```bash block");
+  });
+
+  it("refusal-then-success retry yields content with the REFUSAL separator between attempts (JSON)", async () => {
+    vi.spyOn(core, "isDegradationBackoff").mockReturnValue(false);
+    const classifySpy = vi.spyOn(core, "classifyTurnResponse")
+      .mockResolvedValueOnce("REFUSAL")
+      .mockResolvedValue("DELIVERABLE");
+
+    const refusalText = "I can't access the files in this session.";
+    const successText = "STATUS: PASS\nAll tests green.";
+
+    const runSpy = vi.spyOn(core.ModelSession.prototype, "run")
+      .mockResolvedValueOnce({
+        [Symbol.asyncIterator]: async function* () {},
+        fullText: refusalText,
+        hasContent: true,
+        throttle: { current: 1, max: 600 },
+        scores: null,
+        turnCount: 1,
+      } as any)
+      .mockResolvedValue({
+        [Symbol.asyncIterator]: async function* () {},
+        fullText: successText,
+        hasContent: true,
+        throttle: { current: 1, max: 600 },
+        scores: null,
+        turnCount: 1,
+      } as any);
+
+    const pool = new SessionPool();
+    const body = {
+      model: "gpt-5.5-think-deeper",
+      messages: [{ role: "user" as const, content: "Check the files" }],
+      tools: [
+        {
+          type: "function" as const,
+          function: { name: "bash", parameters: { type: "object", properties: { command: { type: "string" } } } },
+        },
+      ],
+      stream: false,
+    };
+
+    const response = await handleChatCompletion(body, pool);
+
+    expect(response.status).toBe(200);
+    const json = (await response.json()) as any;
+    const content: string = json.choices[0].message.content;
+    const separator = "\n\n--- REFUSAL DETECTED - RETRY 1/3 ---\n\n";
+    expect(content).toContain(separator);
+    expect(content.indexOf(refusalText)).toBeLessThan(content.indexOf(separator));
+    expect(content.indexOf(separator)).toBeLessThan(content.indexOf(successText));
+    expect(content).toBe(`${refusalText}${separator}${successText}`);
+    // Initial turn + 1 retry.
+    expect(runSpy).toHaveBeenCalledTimes(2);
+    expect(classifySpy).toHaveBeenCalled();
+  });
+
+  it("refusal-then-success retry streams the REFUSAL separator at the boundary (SSE)", async () => {
+    vi.spyOn(core, "isDegradationBackoff").mockReturnValue(false);
+    vi.spyOn(core, "classifyTurnResponse")
+      .mockResolvedValueOnce("REFUSAL")
+      .mockResolvedValue("DELIVERABLE");
+
+    const refusalText = "I can't access the files in this session.";
+    const successText = "STATUS: PASS\nAll tests green.";
+    const stream = (text: string) => ({
+      async *[Symbol.asyncIterator]() { yield text; },
+      fullText: text,
+      hasContent: true,
+      images: [],
+      throttle: { current: 1, max: 600 },
+      contentOrigin: "DeepLeo",
+      scores: null,
+      turnCount: 1,
+    } as any);
+
+    const runSpy = vi.spyOn(core.ModelSession.prototype, "run")
+      .mockResolvedValueOnce(stream(refusalText))
+      .mockResolvedValue(stream(successText));
+
+    const pool = new SessionPool();
+    const body = {
+      model: "gpt-5.5-think-deeper",
+      messages: [{ role: "user" as const, content: "Check the files" }],
+      tools: [
+        {
+          type: "function" as const,
+          function: { name: "bash", parameters: { type: "object", properties: { command: { type: "string" } } } },
+        },
+      ],
+      stream: true,
+    };
+
+    const response = await handleChatCompletion(body, pool);
+    expect(response.status).toBe(200);
+
+    const raw = await response.text();
+    let contents = "";
+    for (const line of raw.split("\n")) {
+      if (!line.startsWith("data: ")) continue;
+      const payload = line.slice(6);
+      if (payload === "[DONE]") continue;
+      const chunk = JSON.parse(payload);
+      const delta = chunk.choices?.[0]?.delta;
+      if (delta && typeof delta.content === "string") contents += delta.content;
+    }
+
+    const separator = "\n\n--- REFUSAL DETECTED - RETRY 1/3 ---\n\n";
+    expect(contents).toBe(`${refusalText}${separator}${successText}`);
+    // The streamed refusal is not duplicated by the end-of-turn remainder.
+    expect(contents.match(/I can't access the files/g)?.length).toBe(1);
+    expect(runSpy).toHaveBeenCalledTimes(2);
   });
 });
 

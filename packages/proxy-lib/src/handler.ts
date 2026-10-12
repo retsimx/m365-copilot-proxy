@@ -10,7 +10,6 @@ import {
   framingVariantForTone,
   restoreM365Fences,
   parseToolCalls,
-  looksLikeConfabulation,
   looksLikeRemoteArtifactCompletion,
   classifyTurnResponse,
   isProseDocument,
@@ -1297,50 +1296,53 @@ export async function handleChatCompletion(
     // "can't access the files / commands return no output" and asks the user to paste
     // them, WITHOUT calling a tool — even though the environment is real (the bench +
     // pi both reproduce this). Re-prompt forcefully in the SAME conversation (one
-    // thread, cheap). Disable with M365_NO_CONFAB_RETRY; tune count with M365_CONFAB_RETRIES.
+    // thread, cheap). Disable with M365_NO_CONFAB_RETRY; tune count with M365_CONFAB_RETRIES
+    // (default and hard max: 3).
     const maxConfabRetries = process.env.M365_NO_CONFAB_RETRY
       ? 0
-      : Number(process.env.M365_CONFAB_RETRIES ?? 3);
-    const disableConfabDetection = process.env.M365_DISABLE_CONFAB_DETECTION === "1";
-    const disableStallRetry = process.env.M365_DISABLE_STALL_RETRY === "1";
+      : Math.min(Number(process.env.M365_CONFAB_RETRIES ?? 3), 3);
+    // Change 2: when a retry happens, the assistant content is the concatenation of every
+    // attempt's text separated by an explicit marker, so the client sees each refusal and
+    // the final answer. `combinedText` accumulates that; `retried` records whether any
+    // separator was inserted (so the no-retry path keeps its exact prior behaviour).
+    let combinedText = parsed.textContent ?? "";
+    let retried = false;
+    const confabSeparator = (n: number) =>
+      `\n\n--- REFUSAL DETECTED - RETRY ${n}/${maxConfabRetries} ---\n\n`;
+    const artifactSeparator = (n: number) =>
+      `\n\n--- REMOTE ARTIFACT DETECTED - RETRY ${n}/${maxConfabRetries} ---\n\n`;
+
     // Commit-on-stream (§3.3): a retry after prose reached the client would diverge from
     // `sent` and be dropped by the end-of-turn prefix guard, so we normally skip retries
-    // then. EXCEPTION — the narrow stall guard below: on a tool-mode turn that returns NO
-    // tool call and reads as a refusal, retry anyway. The stale prose is harmless
-    // (assistant turns are never resent to M365, so the model's context stays clean), and
-    // the retry usually yields the missing tool call.
+    // after prose has already been streamed — UNLESS the classifier marks it a refusal,
+    // in which case the stale prose is harmless (assistant turns are never resent to M365)
+    // and the retry usually yields the missing tool call.
     for (let attempt = 0; attempt < maxConfabRetries && !parsed.hasToolCalls; attempt++) {
       const turnText = parsed.textContent ?? "";
       const toolModeNoCall = hasTools && !parsed.hasToolCalls && Boolean(turnText);
-      const looksConfab = toolModeNoCall && looksLikeConfabulation(turnText);
-      // Only call the (comparatively expensive) SLM when a cheap signal hasn't already
-      // decided: skip it if the broad path is enabled and its confab regex matched. The
-      // narrow guard deliberately does NOT use that confab regex (its false positives are
-      // why it's off), so when the broad path is disabled we always classify.
-      let classifiedRefusal = false;
-      if (toolModeNoCall && (!looksConfab || disableConfabDetection)) {
-        classifiedRefusal = (await classifyTurnResponse(turnText)) === "REFUSAL";
-      }
-      // Narrow, high-precision stall guard — runs even when M365_DISABLE_CONFAB_DETECTION=1
-      // (whose broad regexes are off for false positives on legit prose deliverables).
-      const narrowStall = !disableStallRetry && toolModeNoCall && classifiedRefusal;
-      // Broad detector (disabled on prod when M365_DISABLE_CONFAB_DETECTION=1).
-      const confab = !disableConfabDetection && toolModeNoCall && (looksConfab || classifiedRefusal);
+      const verdict = toolModeNoCall ? await classifyTurnResponse(turnText) : "DELIVERABLE";
+      const refusal = toolModeNoCall && verdict === "REFUSAL";
       const remoteArtifact = looksLikeRemoteArtifactCompletion(turnText);
-      if (!narrowStall && !confab && !remoteArtifact) break;
-      if (streamedProse && !narrowStall) {
+      if (!refusal && !remoteArtifact) break;
+      if (streamedProse && !refusal) {
         log.info("Prose already streamed live (commit-on-stream) — skipping confab retry to preserve the sent prefix");
         break;
       }
-      if (confab || narrowStall) {
-        log.info(`Turn reads as a refusal/stall (no tool call) — forcing retry ${attempt + 1}/${maxConfabRetries}`);
+      if (refusal) {
+        log.info(`Turn classified REFUSAL (no tool call) — forcing retry ${attempt + 1}/${maxConfabRetries}`);
       } else {
         log.info(`Remote artifact completion detected (no tool call) — forcing retry ${attempt + 1}/${maxConfabRetries}`);
       }
+      // Emit the separator for the retry that is *starting*. Stream it live only if this
+      // attempt's prose already reached the client (otherwise the whole combined text is
+      // emitted once at the end); the JSON path picks it up from `combinedText` regardless.
+      const separator = remoteArtifact ? artifactSeparator(attempt + 1) : confabSeparator(attempt + 1);
+      combinedText += separator;
+      retried = true;
+      if (streamedProse) onDelta?.(separator);
       const forcePrompt = remoteArtifact ? ARTIFACT_FORCE_PROMPT : CONFAB_FORCE_PROMPT;
-      const basePrompt = forcePrompt;
       const toolsBlock = hasTools ? `${formatSessionFraming(framingVariant, body.tools ?? [])}\n\n` : "";
-      text = `${toolsBlock}${basePrompt}`;
+      text = `${toolsBlock}${forcePrompt}`;
       const retry = await runBuffered(onDelta, onReasoning);
       if ("error" in retry) return { kind: "error", resp: retry.error };
       conv.sentMessageCount = body.messages.length;
@@ -1350,6 +1352,7 @@ export async function handleChatCompletion(
         log.info(`Response is a prose document (${parsed.toolCalls.length} embedded fences), returning as text instead of executing`);
         parsed = { hasToolCalls: false, toolCalls: [], textContent: fullText };
       }
+      combinedText += parsed.textContent ?? fullText;
       log.info(`After forcing retry: hasToolCalls=${parsed.hasToolCalls}, count=${parsed.toolCalls.length}`);
     }
 
@@ -1395,23 +1398,14 @@ export async function handleChatCompletion(
     }
 
     if (
-      !disableConfabDetection &&
       !parsed.hasToolCalls &&
       hasTools &&
-      (looksLikeConfabulation(parsed.textContent) || (await classifyTurnResponse(parsed.textContent)) === "REFUSAL")
+      (await classifyTurnResponse(parsed.textContent)) === "REFUSAL"
     ) {
-      log.warn("Tool confabulation/refusal persisted after forcing retries — failing closed");
+      log.warn("Tool refusal persisted after forcing retries — returning the refusal as assistant content (session context reset)");
       conv.session.reset();
       conv.sentMessageCount = 0;
-      return {
-        kind: "error",
-        resp: jsonResponse(502, {
-          error: {
-            message: `M365 persistently refused to invoke available tools: ${parsed.textContent}`,
-            type: "unresolved_tool_refusal",
-          },
-        }),
-      };
+      return { kind: "text", text: combinedText };
     }
 
     // Prose alongside tool calls is DESIRED now: both framings invite a short line
@@ -1466,9 +1460,9 @@ export async function handleChatCompletion(
     }
 
     if (parsed.hasToolCalls && parsed.toolCalls.length > 0) {
-      return { kind: "tools", toolCalls: parsed.toolCalls, text: parsed.textContent ?? "" };
+      return { kind: "tools", toolCalls: parsed.toolCalls, text: retried ? combinedText : (parsed.textContent ?? "") };
     }
-    return { kind: "text", text: fullText };
+    return { kind: "text", text: retried ? combinedText : fullText };
   } else {
     // No tools — stream deltas live (onDelta) while buffering for the retry logic.
     const result = await runBuffered(onDelta, onReasoning);

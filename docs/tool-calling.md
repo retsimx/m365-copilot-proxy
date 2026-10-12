@@ -93,29 +93,32 @@ prompt is tuned. The layers, in handler order:
   "here's a simplified README") would get its own answer executed as shell. A response that
   looks like a document (≥2 fences AND ≥120 chars surrounding prose, OR ≥4 fences) is returned
   as **text**, not executed. A single action is never reclassified. (hypotheses §9 F15.)
-- **Safety Refusal Separation (`looksLikeSafetyRefusal`):** When the model response matches
-  safety or content policy refusal heuristics (e.g. prompt injection warnings, prohibited topic
-  canned responses), the proxy fast-fails immediately with **HTTP 400 `content_policy_refusal`**
-  and resets the session context (`session.reset()`). Unlike confabulations, safety refusals are
-  never retried.
-- **Disabling Proxy Confabulation Detection (`M365_DISABLE_CONFAB_DETECTION=1`):** With Universal Advisor
-  Framing, models confabulate on only ~0.3% of turns (4/1,306 in production) while keyword regexes cause an
-  85.9% false positive rate (55/64 flagged turns) on legitimate technical completion prose (e.g. `### Task Complete`
-  reports, audit verdicts, and test failure diagnostics). Setting `M365_DISABLE_CONFAB_DETECTION=1` bypasses
-  proxy-level confabulation forcing retries and terminal 502 fails, returning deliverable prose immediately with
-  HTTP 200 and delegating retry decisions to client orchestrators (Pi, OpenCode).
+- **Refusal Fallthrough (no more safety fast-fail):** the old `looksLikeSafetyRefusal` → **HTTP 400
+  `content_policy_refusal`** fast-fail was removed. Content-policy refusals are no longer special-cased;
+  they flow through the same classifier/retry path described below.
+- **In-Process NLI Turn Classifier (`classifier.ts`):** On every tool-mode turn that returns no tool
+  call, a zero-shot NLI pipeline — `Xenova/nli-deberta-v3-base` (`dtype:"q8"`, CPU, via
+  `@huggingface/transformers`), no network — labels the message *claim-vs-result*. It runs ~100 ms/turn
+  and was chosen on a 198-item balanced benchmark at **92.4%** accuracy vs the prior `gemma4:e2b` SLM's
+  88.9%, ~**34×** faster (~100 ms vs ~3.4 s, which also serialised). `REFUSAL` forces an in-conversation
+  retry (hard-capped at 3); `DELIVERABLE` returns immediately as HTTP 200. (The old
+  `M365_DISABLE_CONFAB_DETECTION=1` bypass and its regex false-positive problem are gone.)
+  - *History:* regex (`looksLikeConfabulation`, brittle/over-grown, ~86% false positives on real prose)
+    → SLM (`gemma4:e2b`, high precision/zero false-retries but slow ~3.4 s and weaker recall, 88.9%)
+    → in-process NLI classifier (92.4%, ~100 ms).
 - **Structural Clause NLP Confabulation & Refusal Detection** (`hasClauseRefusal`): replaces
   brittle linear regexes with clause-boundary segmentation (`[Tool Anchor] + [Negation] + [Availability State]`).
   Catches transitive provision verbs (`this interface does not expose tools`), tool existence claims
   (`no apply_patch binary exists`), truncation surrenders, and shell diagnosis deferrals (`status is
   a read-only variable; next execution must replace with rc`) without splitting on `.py` filenames.
-- **Forced Confabulation & Hallucination Retries:** When confabulation detection is active, stochastic
-  turn-1 claims that tools or files cannot be accessed trigger automated in-conversation re-prompting
-  (up to `M365_CONFAB_RETRIES`, default 3).
-- **Fail-Closed Unresolved Tool Refusal (Terminal HTTP 502):** If tool confabulation persists after all
-  forcing retries are exhausted without any tool calls emitted (when confabulation detection is active), the
-  proxy fails closed with **HTTP 502 `unresolved_tool_refusal`** (and flushes session context), rather than
-  passing unearned prose claims through to the agent.
+- **Forced Refusal & Hallucination Retries:** When the NLI classifier labels a no-tool-call turn a
+  `REFUSAL`, the proxy re-prompts in-conversation (up to `M365_CONFAB_RETRIES`, default 3; set
+  `M365_NO_CONFAB_RETRY=1` to disable). Remote-artifact completion claims and pure-transcript
+  hallucinations get the same bounded retries.
+- **Persistent Refusal Fallthrough (HTTP 200):** If a refusal persists after all forcing retries are
+  exhausted without any tool calls emitted, the proxy returns **HTTP 200** with the refusal as assistant
+  content (and flushes session context) rather than failing closed. (The remote-artifact
+  `file_mutation_without_local_tool` 502 is unchanged.)
 - **Hallucinated-completion retry** (`hasClauseHallucination`): if the model CLAIMS a file mutation
   ("I've replaced the README") with **no tool call all conversation**, force a real write. Gated on
   `!everActed`, so it won't misfire on a genuine post-write summary.

@@ -104,15 +104,11 @@ export {
 export { createLogger, trunc, LOG_PATH } from "./log.js";
 
 export {
-  CLASSIFIER_SYSTEM_PROMPT,
-  normalizeChatCompletionsUrl,
-  parseClassificationTag,
-  classifyWithRemoteOpenAI,
-  classifyWithLocalGemma,
+  CLASSIFIER_MODEL_ID,
+  CLASSIFIER_LABELS,
+  CLASSIFIER_HYPOTHESIS_TEMPLATE,
   classifyTurnResponse,
-  setLocalGemmaPromise,
-  resetLocalGemma,
+  warmupClassifier,
+  setClassifierPipelinePromise,
   resetClassifierCache,
-  type RemoteClassifierOptions,
-  type LocalGemmaOptions,
 } from "./classifier.js";

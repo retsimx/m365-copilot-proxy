@@ -115,7 +115,7 @@ The repository is organized as a pnpm workspace across four TypeScript/ESM packa
 
 | Package | Role |
 |---|---|
-| [`@m365-copilot/core`](packages/core) | Core protocol engine: MSAL PKCE auth, SignalR WebSocket client, Copilot Studio agent provisioning, fenced tool formatting, Dual-Engine SLM turn classifier, and image generation. |
+| [`@m365-copilot/core`](packages/core) | Core protocol engine: MSAL PKCE auth, SignalR WebSocket client, Copilot Studio agent provisioning, fenced tool formatting, in-process NLI turn classifier, and image generation. |
 | [`@m365-copilot/proxy-lib`](packages/proxy-lib) | Framework-free Web-standard `createApp()` fetch handler, `SessionPool`, Dual-Horizon Leaky Bucket, Turn Gatekeeper, dashboard HTML/SVG generation, and atomic state persistence. |
 | [`@m365-copilot/proxy`](packages/proxy) | Standalone [Nitro](https://nitro.build/) server executable wrapper (`m365-proxy`). File-based routes, startup auth plugin, and production builds. |
 | [`@m365-copilot/openclaw-plugin`](packages/openclaw-plugin) | OpenClaw provider generator, interactive setup CLI (`m365-openclaw-setup`), and agent skill integration. |
@@ -135,7 +135,8 @@ M365 Copilot does not support native OpenAI-style `tool_calls`. Instead, tools a
 - **Delta Turn Tool Re-Injection**: On multi-turn conversations (`turn > 0`), the proxy automatically re-injects tool definitions into `formatDeltaMessages`. M365 reasoning models (`DeepLeo`) require continuous tool context; without re-injection, follow-up turns often confabulate that tools are no longer available.
 - **Simulation Rejection**: If a model hallucinates assistant-simulated `<tool_response>` tags in its output, the proxy strips them and flushes the session context to force a clean full-history replay on the next turn.
 - **Structural Clause NLP (`tools.ts`)**: Uses clause-boundary segmentation (`[Tool Anchor] + [Negation] + [Availability State]`) to intercept subtle refusals, fake file existence claims, truncation surrenders, and shell error deferrals without tripping on filenames with dots (e.g. `test_candidate_claim.py`).
-- **Dual-Engine SLM Turn Classifier (`classifier.ts`)**: Distinguishes genuine prose deliverables (such as security audit write-ups or test failure analyses) from tool confabulations using Gemma 4 E2B with Chain-of-Thought reasoning. If `M365_CLASSIFIER_OPENAI_URL` is set, queries the remote endpoint; otherwise runs in-process via `@kessler/gemma` ONNX. Completely bypassed for tool-calling turns (~95% of requests) for 0ms overhead.
+- **In-Process NLI Turn Classifier (`classifier.ts`)**: On every tool-mode turn that returns no tool call, distinguishes genuine prose deliverables (security audit write-ups, test failure analyses) from tool confabulations using a zero-shot NLI pipeline — `Xenova/nli-deberta-v3-base` (q8, CPU, via `@huggingface/transformers`), no network. Labels are *claim-vs-result*; it runs ~100 ms/turn. Chosen on a 198-item balanced benchmark at **92.4%** accuracy, beating the prior `gemma4:e2b` SLM's 88.9% at ~**34×** the speed (~100 ms vs ~3.4 s, which also serialised). `REFUSAL` forces an in-conversation retry (hard-capped at 3); `DELIVERABLE` returns as-is. Bypassed for turns that already produced a tool call.
+  - *History:* regex (`looksLikeConfabulation`, brittle/over-grown, ~86% false positives on real prose) → SLM (`gemma4:e2b`, high precision/zero false-retries but slow ~3.4 s and weaker recall, 88.9%) → in-process NLI classifier (92.4%, ~100 ms). See [tool-calling.md](docs/tool-calling.md).
 
 ### 2. Copilot Studio Agent Mode
 On first request with tools, the proxy provisions a dedicated **Copilot Studio agent** with tool-calling system instructions baked into its server-side prompt via the PowerPlatform API:
@@ -163,12 +164,12 @@ local protections**, informed by observation but **not confirmed universal Micro
   - When upstream throttling (`PerScenarioThrottled` or `PerUserThrottled`) is detected, the proxy enters local cooldown (1800s or 1200s).
   - During this window, requests are intercepted locally and return **`HTTP 429 Too Many Requests`** with a client header capped at **`Retry-After: 60`** (`M365_MAX_RETRY_AFTER_SEC = 60`).
   - **Zero traffic is sent to Microsoft** during cooldown, letting Microsoft's token bucket fully recover while standard OpenAI clients (OpenCode, Pi) pause and automatically resume without failing the turn.
-- **Content Safety Separation vs. Confabulation**:
-  - Upstream content policy violations (`looksLikeSafetyRefusal`) fail immediately with **`HTTP 400 content_policy_refusal`** and flush session context.
-  - Unresolved tool confabulations that persist after exhausting forcing retries fail closed with **`HTTP 502 unresolved_tool_refusal`**.
-- **Bypassing Confabulation Retries (`M365_DISABLE_CONFAB_DETECTION=1`)**:
-  - With advisor framing, model confabulation drops to ~0.3% of turns while keyword checks can trigger false positives on legitimate completion prose.
-  - Setting `M365_DISABLE_CONFAB_DETECTION=1` disables proxy-level confabulation retries and 502 fails, passing prose deliverables directly through to client orchestrators.
+- **Refusal Fallthrough**:
+  - A tool-mode refusal that survives the classifier's forcing retries is returned as **`HTTP 200`** assistant content (session context reset) — refusals no longer fail closed. The remote-artifact `file_mutation_without_local_tool` 502 is unchanged.
+  - Content-policy refusals are no longer special-cased: the old `looksLikeSafetyRefusal` → **`HTTP 400 content_policy_refusal`** fast-fail was removed, so they flow through the same classifier/retry path.
+- **Refusal Retry Control**:
+  - The in-process NLI classifier runs on every tool-mode turn that returns no tool call: `REFUSAL` forces an in-conversation retry (hard-capped at 3), `DELIVERABLE` returns as-is.
+  - `M365_NO_CONFAB_RETRY=1` disables the retry loop; `M365_CONFAB_RETRIES` tunes the retry count (clamped to ≤3).
 
 ### 4. Conversation Reuse & Session Isolation
 - Each distinct client conversation maps to an isolated M365 session (`sessionId` + `conversationId`).
@@ -371,9 +372,8 @@ All configuration and cache files reside in `~/.config/opencode-m365/`:
 | **Tool Calling & Execution** | | |
 | `M365_ALLOW_MULTI_TOOL` | `0` | Allow models to emit multiple tool calls in a single turn. By default, only the first call is executed. |
 | `M365_INJECT_REPLY_TOOL` | `0` | Inject a synthetic `reply(text)` tool, enforcing tool-calling semantics even on prose turns. |
-| `M365_CONFAB_RETRIES` | `3` | Maximum retry re-prompts within the same conversation when the model confabulates an inability or unearned mutation claim. |
-| `M365_NO_CONFAB_RETRY` | `0` | Set to `1` to disable proxy-level confabulation forcing retries. |
-| `M365_DISABLE_CONFAB_DETECTION` | `0` | Set to `1` to bypass all proxy-level confabulation detection and terminal 502 errors, passing prose directly to orchestrators. |
+| `M365_CONFAB_RETRIES` | `3` | Maximum retry re-prompts within the same conversation when the NLI classifier labels a no-tool-call turn `REFUSAL` (clamped to ≤3). |
+| `M365_NO_CONFAB_RETRY` | `0` | Set to `1` to disable the classifier-driven refusal retry loop. |
 | **Degradation Backoff** | | |
 | `M365_NO_BACKOFF` | `0` | Set to `1` to disable pacing backoff on empty/throttled responses. |
 | `M365_BACKOFF_THRESHOLD` | `3` | Consecutive empty/throttled responses across distinct conversations before triggering backoff. |
@@ -395,12 +395,6 @@ All configuration and cache files reside in `~/.config/opencode-m365/`:
 | `M365_SUSTAINED_MAX_TURNS` | `120` | Local conservative cap for the 60-minute macro-window (code default `120`; **deployed `135`**; policy, not a confirmed upstream threshold; see F35/F36). |
 | `M365_SUSTAINED_WARN_TURNS` | `90` | Turn threshold in 60-minute window where progressive 5s–25s pacing resistance begins. |
 | `M365_SUSTAINED_WINDOW_MS` | `3600000` | Sustained window duration (ms) (60 minutes). |
-| **SLM Turn Classifier** | | |
-| `M365_CLASSIFIER_OPENAI_URL` | unset | Remote OpenAI-compatible endpoint URL for turn classifier (e.g. `http://gpu-host:11434/v1`). If unset, uses in-process `@kessler/gemma` ONNX. |
-| `M365_CLASSIFIER_OPENAI_MODEL` | `gemma4:e2b` | Model name requested at remote classifier endpoint. |
-| `M365_CLASSIFIER_OPENAI_API_KEY` | unset | API key for remote classifier endpoint (falls back to `OPENAI_API_KEY`). |
-| `M365_CLASSIFIER_TIMEOUT_MS` | `10000` | Max milliseconds to wait for remote GPU classifier before falling back to local ONNX (10 seconds). |
-| `M365_CLASSIFIER_MAX_TOKENS` | `1000` | Token budget for classifier reasoning and tag output. |
 | **State & Context Limits** | | |
 | `M365_STATE_FILE` | unset | Custom path for `proxy-state.json`. |
 | `M365_DATA_DIR` | `~/.config/opencode-m365` | Base data directory for secrets, cache, and logs. |

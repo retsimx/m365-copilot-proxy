@@ -10,7 +10,7 @@ const scripted: {
   runCalls: number;
 } = { deltas: [], runCalls: 0 };
 
-const classify = { value: "DELIVERABLE" };
+const classify = { value: "DELIVERABLE" as "REFUSAL" | "DELIVERABLE", queue: [] as Array<"REFUSAL" | "DELIVERABLE"> };
 
 vi.mock("@m365-copilot/core", async (importActual) => {
   const actual = await importActual<typeof import("@m365-copilot/core")>();
@@ -55,7 +55,7 @@ vi.mock("@m365-copilot/core", async (importActual) => {
   return {
     ...actual,
     ModelSession: FakeModelSession,
-    classifyTurnResponse: async () => classify.value,
+    classifyTurnResponse: async () => (classify.queue.length > 0 ? classify.queue.shift()! : classify.value),
   };
 });
 
@@ -127,6 +127,7 @@ beforeEach(() => {
   resetTurnVelocityPacing();
   scripted.runCalls = 0;
   classify.value = "DELIVERABLE";
+  classify.queue = [];
   delete process.env.M365_NO_TOOL_STREAM;
   delete process.env.M365_NO_REASONING_STREAM;
 });
@@ -253,9 +254,12 @@ describe("reasoning SSE (Track B, design §4.3)", () => {
   });
 
   it("emits a repeated reasoning step exactly once across runBuffered retries (F3)", async () => {
-    // Disable prose streaming so streamedProse stays false and the confab retry loop
+    // Disable prose streaming so streamedProse stays false and the retry loop
     // actually re-runs the model; each attempt re-emits the same CoT step.
     process.env.M365_NO_TOOL_STREAM = "1";
+    // First classification is a refusal (forces one retry); the next call falls
+    // through to the default DELIVERABLE so the turn commits without a 502.
+    classify.queue = ["REFUSAL"];
     const prose = ["I can't generate or verify ", "the requested file because file-generation ", "capabilities are disabled in this session."];
     const chunks = await streamChunks(prose, prose.join(""), {
       tools: TOOLS,
