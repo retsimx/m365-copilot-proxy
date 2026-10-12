@@ -92,6 +92,7 @@ export {
   restoreM365Fences,
   agentTurnProhibition,
   buildSpecMap,
+  SHELL_LANGS,
   createProseStreamGate,
   createFenceBodyState,
   feedToolBodyLine,

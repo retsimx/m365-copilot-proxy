@@ -1334,6 +1334,11 @@ describe("Priority FIFO Turn Gatekeeper", () => {
 });
 
 describe("hasPostFenceContamination (post-fence abort guard)", () => {
+  const guardSpecs = core.buildSpecMap([
+    { type: "function", function: { name: "bash", parameters: { type: "object", properties: { command: { type: "string" } } } } },
+    { type: "function", function: { name: "write_file", parameters: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } } } } },
+  ] as any);
+
   it("does not flag a clean single call", () => {
     expect(hasPostFenceContamination("I'll inspect it.\n\n```bash\npwd && ls -la .\n```\n")).toBe(false);
   });
@@ -1387,7 +1392,26 @@ describe("hasPostFenceContamination (post-fence abort guard)", () => {
       "```",
       "",
     ].join("\n");
-    expect(hasPostFenceContamination(text)).toBe(false);
+    expect(hasPostFenceContamination(text, guardSpecs)).toBe(false);
+  });
+
+  it("does NOT flag a non-tool code fence (```c) followed by prose — only tool fences are calls", () => {
+    // Regression: the model wrote a prose analysis containing a ```c block (no call).
+    // The guard's own-line regex matched ANY fence, latched onto the ```c as the
+    // "call", then aborted the prose after it (log 2026-10-11, ownline-lang:c).
+    const text = [
+      "Now I have a clear picture of the code. The inner loop is:",
+      "```c",
+      "while ((m = TAILQ_FIRST(&fl[oind].pl)) != NULL) {",
+      "```",
+      "When the loop finishes, the barrier is armed.",
+    ].join("\n");
+    expect(hasPostFenceContamination(text, guardSpecs)).toBe(false);
+  });
+
+  it("does NOT flag a bare ``` fence followed by prose", () => {
+    const text = ["A note:", "```", "plain text block", "```", "more prose"].join("\n");
+    expect(hasPostFenceContamination(text, guardSpecs)).toBe(false);
   });
 
   it("does not flag prose before the fence", () => {

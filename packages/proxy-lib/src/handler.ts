@@ -16,6 +16,7 @@ import {
   isProseDocument,
   getMessageContent,
   buildSpecMap,
+  SHELL_LANGS,
   createProseStreamGate,
   createFenceBodyState,
   feedToolBodyLine,
@@ -301,8 +302,12 @@ export function hasPostFenceContamination(text: string, specs?: Map<string, Fenc
       }
       continue;
     }
-    const open = line.match(/^\s*(`{3,})/);
-    if (open) {
+    const open = line.match(/^\s*(`{3,})([A-Za-z0-9_.-]+)?[ \t]*$/);
+    // Only a RECOGNISED tool/shell fence counts as the call — mirroring the parser.
+    // A non-tool fence (```c, ```json, a bare ```) that the parser would ignore must
+    // not be mistaken for the call, or the guard aborts a legitimate prose/analysis
+    // response (log 2026-10-11: model analysis with a ```c block, no call).
+    if (open && open[2] !== undefined && (specs?.has(open[2]) || SHELL_LANGS.has(open[2]))) {
       // A SECOND fence opening — we run at most one call per turn, so the rest is
       // unexecutable anyway; abort rather than let it continue into simulation.
       if (fencesClosed >= 1) return true;
