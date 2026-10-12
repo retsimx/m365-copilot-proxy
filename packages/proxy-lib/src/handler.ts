@@ -26,6 +26,7 @@ import {
   getImageArtifactToken,
   fetchImageBytes,
   type CapturedImage,
+  type FencedToolSpec,
 } from "@m365-copilot/core";
 import { ChatCompletionRequest } from "./schemas.js";
 import {
@@ -280,12 +281,17 @@ function annotateToolOutput(content: string): { attrs: string; text: string } {
  *  The fence body is walked by the shared `feedToolBodyLine` (core), which tracks nested
  *  code fences, heredocs, and SEARCH/REPLACE regions — so a bare ``` inside the body
  *  closes an inner fence, not the tool block, and only the real closing fence ends it. */
-export function hasPostFenceContamination(text: string): boolean {
+export function hasPostFenceContamination(text: string, specs?: Map<string, FencedToolSpec>): boolean {
+  // Normalise exactly as the parser does: restoreM365Fences re-attaches an opening
+  // fence GLUED to the prose line (`...prose.```bash`) which the own-line opener
+  // regex below would otherwise miss — causing the guard to latch onto a nested
+  // ```lang block inside the body and abort a legitimate write (2026-10-12).
+  const src = specs ? restoreM365Fences(text, specs) : text;
   let inFence = false;
   let fencesClosed = 0;
   let outerFenceLen = 3;
   let bodyState = createFenceBodyState();
-  for (const line of text.split(/\r?\n/)) {
+  for (const line of src.split(/\r?\n/)) {
     if (inFence) {
       // feedToolBodyLine returns true only when a bare ``` with no open inner fence or
       // heredoc closes the OUTER tool fence.
@@ -1102,7 +1108,7 @@ export async function handleChatCompletion(
         for await (const delta of copilotStream) {
           fullText += delta;
           onDelta?.(delta);
-          if (hasPostFenceContamination(fullText)) {
+          if (hasPostFenceContamination(fullText, specs)) {
             log.warn(`Post-fence contamination — aborting generation (Stop frame), keeping the valid call prefix: ${JSON.stringify(fullText.slice(-200))}`);
             guardAbort.abort();
             break;

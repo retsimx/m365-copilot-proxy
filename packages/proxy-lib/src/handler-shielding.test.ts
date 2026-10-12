@@ -1393,5 +1393,45 @@ describe("hasPostFenceContamination (post-fence abort guard)", () => {
   it("does not flag prose before the fence", () => {
     expect(hasPostFenceContamination("Let me ground myself first.\n\n```bash\npwd\n```")).toBe(false);
   });
+
+  it("does not flag a heredoc write whose body contains a nested code fence when the opener is GLUED to prose", () => {
+    // Regression: the model glued the opening fence to the prose line —
+    // `...required path.```bash` — and wrote a heredoc whose body embeds a ```c
+    // block. The guard's own-line opener regex missed the glued opener, latched
+    // onto the INNER ```c block as the "tool fence", then flagged the content
+    // after it as contamination and aborted a legitimate write (log 2026-10-12
+    // 07:01:00Z, `result-security-audit-pr-27`).
+    const text = [
+      "I'll write the audit to the required path.```bash",
+      "cat > /tmp/audit.md <<'EOF'",
+      "# Audit",
+      "",
+      "```c",
+      "if (x == 0) {",
+      "```",
+      "",
+      "more content",
+    ].join("\n");
+    const specs = core.buildSpecMap([
+      { type: "function" as const, function: { name: "bash", parameters: { type: "object", properties: { command: { type: "string" } } } } },
+    ]);
+    expect(hasPostFenceContamination(text, specs)).toBe(false);
+  });
+
+  it("does not flag a heredoc write whose body contains a nested code fence (own-line opener)", () => {
+    const text = [
+      "I'll write the audit to the required path.",
+      "```bash",
+      "cat > /tmp/audit.md <<'EOF'",
+      "# Audit",
+      "",
+      "```c",
+      "if (x == 0) {",
+      "```",
+      "",
+      "more content",
+    ].join("\n");
+    expect(hasPostFenceContamination(text)).toBe(false);
+  });
 });
 
