@@ -56,7 +56,7 @@ export function getDashboardHtml(): string {
 <body>
 <div class="container">
   <header>
-    <div class="brand"><div class="logo">M</div><div><h1>M365 Copilot Proxy</h1><div class="subtitle">Turn governing · session governing · upstream recovery</div></div></div>
+    <div class="brand"><div class="logo">M</div><div><h1>M365 Copilot Proxy</h1><div class="subtitle">Two-layer turn governor (60m/110 · 60s/8 · soft pace) · session governing · upstream recovery</div></div></div>
     <div class="header-status">
       <span id="serviceStatus" class="pill ok">Service online</span>
       <span id="turnStatus" class="pill neutral">Turns —</span>
@@ -71,14 +71,14 @@ export function getDashboardHtml(): string {
       <div class="card-head"><span class="card-title">Sustained Turns · 60m</span><span id="sustainedBadge" class="badge neutral">—</span></div>
       <div class="value-row"><span id="sustainedValue" class="value">—</span><span id="sustainedUnit" class="unit">/ — attempts</span></div>
       <div class="bar"><div id="sustainedFill" class="fill"></div><div id="sustainedMarker" class="marker"></div></div>
-      <div class="details"><span>Remaining</span><span id="sustainedRemaining">—</span><span>Current delay</span><span id="sustainedDelay">—</span><span>Oldest expires</span><span id="sustainedRecovery">—</span><span>Policy warning</span><span id="sustainedWarn">—</span></div>
+      <div class="details"><span>Remaining</span><span id="sustainedRemaining">—</span><span>Current delay</span><span id="sustainedDelay">—</span><span>Oldest expires</span><span id="sustainedRecovery">—</span><span>Resist begins</span><span id="sustainedWarn">—</span></div>
     </article>
 
     <article class="card">
-      <div class="card-head"><span class="card-title">Burst Turns · 10m</span><span id="burstBadge" class="badge neutral">—</span></div>
+      <div class="card-head"><span class="card-title">Burst Turns · 60s</span><span id="burstBadge" class="badge neutral">—</span></div>
       <div class="value-row"><span id="burstValue" class="value">—</span><span id="burstUnit" class="unit">/ — attempts</span></div>
-      <div class="bar"><div id="burstFill" class="fill"></div><div id="burstMarker" class="marker"></div></div>
-      <div class="details"><span>Remaining</span><span id="burstRemaining">—</span><span>Current delay</span><span id="burstDelay">—</span><span>Oldest expires</span><span id="burstRecovery">—</span><span>Soft pacing</span><span id="burstSoft">—</span></div>
+      <div class="bar"><div id="burstFill" class="fill"></div></div>
+      <div class="details"><span>Window</span><span id="burstWindow">—</span><span>Remaining</span><span id="burstRemaining">—</span><span>Oldest leaves</span><span id="burstRecovery">—</span><span>Soft pace</span><span id="burstAllowance">—</span></div>
     </article>
 
     <article class="card">
@@ -92,7 +92,7 @@ export function getDashboardHtml(): string {
       <div class="card-head"><span class="card-title">Upstream Circuit Breaker</span><span id="circuitBadge" class="badge neutral">—</span></div>
       <div class="value-row"><span id="circuitValue" class="value">—</span><span id="circuitUnit" class="unit">upstream</span></div>
       <div class="bar"><div id="circuitFill" class="fill" style="background:var(--purple)"></div></div>
-      <div class="details"><span>Reason</span><span id="circuitReason">—</span><span>Recovery</span><span id="circuitRecovery">—</span><span>Last throttle</span><span id="lastThrottle">—</span><span>Lifetime events</span><span id="throttleCount">—</span></div>
+      <div class="details"><span>Reason</span><span id="circuitReason">—</span><span>Recovery</span><span id="circuitRecovery">—</span><span>Probe ladder</span><span id="circuitEpisode">—</span><span>Schedule</span><span id="circuitSchedule">—</span><span>Next probe</span><span id="circuitNextProbe">—</span><span>Last throttle</span><span id="lastThrottle">—</span><span>Lifetime events</span><span id="throttleCount">—</span></div>
     </article>
 
     <article class="card">
@@ -122,12 +122,12 @@ export function getDashboardHtml(): string {
 
   <section class="section">
     <div class="section-head">
-      <div><div class="section-title">Governor History</div><div class="section-note">Turn and session governing are shown separately. Rolling windows are calculated server-side.</div></div>
+      <div><div class="section-title">Governor History</div><div class="section-note">Turn and session governing are shown separately. The 60m and 60s caps are hard; the 10m block is informational. Rolling windows are calculated server-side.</div></div>
       <div class="controls"><button class="btn active" data-range="1h">1h</button><button class="btn" data-range="6h">6h</button><button class="btn" data-range="24h">24h</button></div>
     </div>
     <div class="charts">
       <div class="chart"><div class="chart-head"><span class="chart-name" style="color:var(--cyan)">Turn governing · 60m</span><span id="turn60Meta" class="chart-meta">—</span></div><svg id="turn60Chart" viewBox="0 0 700 170" preserveAspectRatio="none"></svg></div>
-      <div class="chart"><div class="chart-head"><span class="chart-name" style="color:#67e8f9">Turn governing · 10m</span><span id="turn10Meta" class="chart-meta">—</span></div><svg id="turn10Chart" viewBox="0 0 700 170" preserveAspectRatio="none"></svg></div>
+      <div class="chart"><div class="chart-head"><span class="chart-name" style="color:#67e8f9">Turn rate · 10m</span><span id="turn10Meta" class="chart-meta">—</span></div><svg id="turn10Chart" viewBox="0 0 700 170" preserveAspectRatio="none"></svg></div>
       <div class="chart"><div class="chart-head"><span class="chart-name" style="color:var(--purple)">Turn dispatch delay</span><span id="delayMeta" class="chart-meta">average per minute</span></div><svg id="delayChart" viewBox="0 0 700 170" preserveAspectRatio="none"></svg></div>
       <div class="chart"><div class="chart-head"><span class="chart-name" style="color:var(--amber)">Session governing</span><span id="sessionMeta" class="chart-meta">rolling 10m fresh sessions</span></div><svg id="sessionChart" viewBox="0 0 700 170" preserveAspectRatio="none"></svg></div>
     </div>
@@ -140,8 +140,9 @@ export function getDashboardHtml(): string {
 
   <section class="section">
     <div class="section-head"><div><div class="section-title">Operating Notes</div><div class="section-note">Empirical policy and governor behaviour</div></div></div>
-    <details><summary>Turn governing versus session governing</summary><p>Turn governing protects account-wide Microsoft-facing attempts over rolling 10-minute and 60-minute windows. Session governing separately protects fresh conversation creation using a stagger and token bucket. A fresh conversation consumes both a session permit and a turn permit; follow-up turns consume only turn capacity.</p></details>
-    <details><summary>What do the local limits mean?</summary><p>The configured sustained cap is conservative local operating policy, not a confirmed Microsoft quota. Tool-enabled testing sustained 130 and 135 recorded attempts per rolling hour without an explicit throttle. Production selected 130 for margin. A differently shaped high-velocity run triggered <code>PerUserThrottled</code> near 140 recorded attempts/hour, so the exact upstream accounting function remains unknown.</p></details>
+    <details><summary>Turn governing versus session governing</summary><p>Turn governing protects account-wide Microsoft-facing attempts with a two-layer governor: a hard dual sliding-window cap — sustained 60 minutes and burst 60 seconds — plus a proportional-taper soft pace that begins resisting as the window fills, before the hard caps are reached. Session governing separately protects fresh conversation creation using a stagger and token bucket. A fresh conversation consumes both a session permit and a turn permit; follow-up turns consume only turn capacity.</p></details>
+    <details><summary>What do the local limits mean?</summary><p>The configured sustained cap is conservative local operating policy, not a confirmed Microsoft quota. The hard sustained cap is currently 110 attempts per rolling 60 minutes and the hard burst cap is 8 attempts per rolling 60 seconds; 125 and 135 both tripped upstream on 2026-10-11/12. A differently shaped high-velocity run triggered <code>PerUserThrottled</code> near 140 recorded attempts/hour, so the exact upstream accounting function remains unknown.</p></details>
+    <details><summary>Upstream probe ladder</summary><p>A <code>PerUserThrottled</code> response arms the local circuit breaker on an escalating probe ladder: 20 minutes, then 40, then 65 (<code>M365_USER_THROTTLE_PROBE_SEC</code>). Each window expiry is a safe probe opportunity — per F31, probing does not reset the account's rolling recovery timer — and a clean response resets the ladder to the first step.</p></details>
     <details><summary>How are retries counted?</summary><p>Every proxy-managed upstream attempt passes through turn governing, including empty-response retries, forced continuations, transport reconnects, and Disengaged recovery. Disengaged recovery rotates to a fresh conversation, so it also consumes session capacity.</p></details>
     <details><summary>Which upstream throttle belongs to which governor?</summary><p><code>PerUserThrottled</code> is associated with account-wide turn volume. <code>PerScenarioThrottled</code> is associated with fresh-conversation creation. The circuit breaker locally shields traffic during recovery so no additional Copilot turns are dispatched.</p></details>
   </section>
@@ -166,22 +167,34 @@ export function getDashboardHtml(): string {
     el.textContent=text;
   };
   const statusClass=s=>s==="safe"?"ok":s==="guarded"?"warn":"bad";
-  function setCapacity(prefix,g,current,max,threshold){
-    $(prefix+"Value").textContent=current;
-    $(prefix+"Unit").textContent="/ "+max+" attempts";
-    $(prefix+"Remaining").textContent=Math.max(0,max-current);
-    $(prefix+"Delay").textContent=fmtMs(g.currentDelayMs);
-    $(prefix+"Recovery").textContent=fmtMs(g.recoveryMs);
-    $(prefix+(prefix==="burst"?"Soft":"Warn")).textContent=threshold;
-    $(prefix+"Fill").style.width=Math.min(100,current/Math.max(1,max)*100)+"%";
-    $(prefix+"Fill").style.background=g.status==="danger"?"var(--rose)":g.status==="guarded"?"var(--amber)":"var(--cyan)";
-    $(prefix+"Marker").style.left=Math.min(100,threshold/Math.max(1,max)*100)+"%";
-    badge($(prefix+"Badge"),g.status,g.status);
+  const fillFor=status=>status==="danger"?"var(--rose)":status==="guarded"?"var(--amber)":"var(--cyan)";
+  function renderSustained(g,cfg){
+    const max=cfg.sustainedMaxTurns;
+    $("sustainedValue").textContent=g.turns;$("sustainedUnit").textContent="/ "+max+" attempts";
+    $("sustainedRemaining").textContent=Math.max(0,max-g.turns);
+    $("sustainedDelay").textContent=fmtMs(g.currentDelayMs);
+    $("sustainedRecovery").textContent=fmtMs(g.recoveryMs);
+    $("sustainedWarn").textContent=cfg.sustainedWarnTurns;
+    $("sustainedFill").style.width=Math.min(100,g.turns/Math.max(1,max)*100)+"%";
+    $("sustainedFill").style.background=fillFor(g.status);
+    $("sustainedMarker").style.left=Math.min(100,cfg.sustainedWarnTurns/Math.max(1,max)*100)+"%";
+    badge($("sustainedBadge"),g.status,g.status);
+  }
+  function renderBurst(g,cfg){
+    const max=g.maxTurns||cfg.burstMaxTurns;
+    $("burstValue").textContent=g.turns;$("burstUnit").textContent="/ "+max+" attempts";
+    $("burstWindow").textContent=Math.round((g.windowMs||cfg.burstWindowMs)/1000)+"s";
+    $("burstRemaining").textContent=Math.max(0,max-g.turns);
+    $("burstRecovery").textContent=fmtMs(g.recoveryMs);
+    $("burstAllowance").textContent=cfg.paceBurstAllowance;
+    $("burstFill").style.width=Math.min(100,g.turns/Math.max(1,max)*100)+"%";
+    $("burstFill").style.background=fillFor(g.status);
+    badge($("burstBadge"),g.status,g.status);
   }
   function renderCards(d){
     const g=d.governor,cfg=d.config,q=d.turnQueue,sq=d.staggerQueue,cb=d.circuitBreaker;
-    setCapacity("sustained",g.sixtyMinute,g.sixtyMinute.turns,cfg.sustainedMaxTurns,cfg.sustainedWarnTurns);
-    setCapacity("burst",g.tenMinute,g.tenMinute.turns,cfg.burstMaxTurns,cfg.burstSoftTurns);
+    renderSustained(g.sixtyMinute,cfg);
+    renderBurst(g.burst,cfg);
     $("turnStatus").className="pill "+statusClass(g.sixtyMinute.status);$("turnStatus").textContent="Turns "+g.sixtyMinute.status;
 
     $("sessionValue").textContent=sq.sessionTokens;$("sessionUnit").textContent="/ "+sq.tokenCapacity+" tokens";
@@ -193,6 +206,7 @@ export function getDashboardHtml(): string {
     const sessState=sessionCritical?"critical":sessionLow||sq.delayMs>0?"pacing":"ready",sessClass=sessionCritical?"bad":sessionLow||sq.delayMs>0?"warn":"ok";
     badge($("sessionBadge"),sessClass,sessState);$("sessionStatus").className="pill "+sessClass;$("sessionStatus").textContent="Sessions "+sessState;
 
+    const probe=cb.probeScheduleSec||[],probeText=probe.map(s=>Math.round(s/60)+"m").join(" -> ");
     if(cb.isArmed){
       badge($("circuitBadge"),"armed","armed");$("circuitValue").textContent=fmtMs(cb.remainingCooldownSec*1000);$("circuitUnit").textContent="cooldown";
       $("circuitReason").textContent=cb.reason||"throttled";$("circuitRecovery").textContent=new Date(Date.now()+cb.remainingCooldownSec*1000).toLocaleTimeString();
@@ -202,6 +216,9 @@ export function getDashboardHtml(): string {
       $("circuitReason").textContent="none";$("circuitRecovery").textContent="not armed";$("circuitFill").style.width="0";
       $("upstreamStatus").className="pill ok";$("upstreamStatus").textContent="Upstream available";
     }
+    $("circuitEpisode").textContent=(cb.isArmed?cb.escalationLevel+1:0)+"/"+probe.length;
+    $("circuitSchedule").textContent=probeText||"—";
+    $("circuitNextProbe").textContent=cb.isArmed?fmtMs(cb.remainingCooldownSec*1000):"—";
     $("lastThrottle").textContent=ago(cb.lastThrottleAt);$("throttleCount").textContent=cb.throttleCount;
 
     const next=cb.isArmed?cb.remainingCooldownSec*1000:q.nextDispatchMs;
@@ -213,9 +230,9 @@ export function getDashboardHtml(): string {
     $("retryAttempts").textContent=c.retryAttempts||0;$("reconnectAttempts").textContent=c.transportReconnects||0;$("disengagedAttempts").textContent=c.disengagedRecoveries||0;
     $("consumptionUnit").textContent="upstream attempts";
 
-    const hourly=g.tenMinute.turns*6,active=g.tenMinute.turns>0;
-    $("throughputValue").textContent=active?hourly:"—";$("throughput10").textContent=g.tenMinute.turns+" attempts";$("throughput60").textContent=g.sixtyMinute.turns+" attempts";
-    $("throughputUsed").textContent=Math.round(g.sixtyMinute.turns/cfg.sustainedMaxTurns*100)+"%";$("flowState").textContent=active?"active":"no active flow";
+    const hourly=g.sixtyMinute.turns,active=hourly>0||g.tenMinute.turns>0;
+    $("throughputValue").textContent=hourly>0?hourly:"—";$("throughput10").textContent=g.tenMinute.turns+" attempts / 10m";$("throughput60").textContent=hourly+" attempts / 60m";
+    $("throughputUsed").textContent=Math.round(hourly/cfg.sustainedMaxTurns*100)+"%";$("flowState").textContent=active?"active":"no active flow";
     badge($("throughputBadge"),active?"safe":"neutral",active?"active":"idle");
 
     const dd=d.dispatchDelay||{};$("delayValue").textContent=fmtMs(dd.p95DelayMs);$("delayP50").textContent=fmtMs(dd.p50DelayMs);$("delayMax").textContent=fmtMs(dd.maxDelayMs);
@@ -227,11 +244,13 @@ export function getDashboardHtml(): string {
   }
   function chart(id,points,key,max,threshold,color,tooltipLabel){
     const svg=$(id),w=700,h=170,pad=25,vals=points.map(p=>p[key]||0),d=path(vals,max,w,h,pad);
-    const ty=h-pad-threshold/Math.max(1,max)*(h-2*pad);
-    let html='<line class="axis" x1="'+pad+'" y1="'+(h-pad)+'" x2="'+(w-pad)+'" y2="'+(h-pad)+'"/>'+
-      '<line class="threshold" x1="'+pad+'" y1="'+ty+'" x2="'+(w-pad)+'" y2="'+ty+'" stroke="var(--amber)"/>'+
-      '<text class="tick" x="3" y="'+(ty+3)+'">'+threshold+'</text>'+
-      '<path class="series" d="'+d+'" stroke="'+color+'"/>';
+    let html='<line class="axis" x1="'+pad+'" y1="'+(h-pad)+'" x2="'+(w-pad)+'" y2="'+(h-pad)+'"/>';
+    if(threshold!=null){
+      const ty=h-pad-threshold/Math.max(1,max)*(h-2*pad);
+      html+='<line class="threshold" x1="'+pad+'" y1="'+ty+'" x2="'+(w-pad)+'" y2="'+ty+'" stroke="var(--amber)"/>'+
+        '<text class="tick" x="3" y="'+(ty+3)+'">'+threshold+'</text>';
+    }
+    html+='<path class="series" d="'+d+'" stroke="'+color+'"/>';
     points.forEach((p,i)=>{if((p.throttles||0)>0){const x=pad+i*(w-2*pad)/Math.max(1,points.length-1);html+='<line x1="'+x+'" y1="'+pad+'" x2="'+x+'" y2="'+(h-pad)+'" stroke="var(--purple)" stroke-dasharray="3 3"/>'}});
     html+='<line class="crosshair" data-crosshair="'+key+'" x1="0" y1="'+pad+'" x2="0" y2="'+(h-pad)+'" visibility="hidden"/>'+
       '<circle class="cursor-point" data-cursor-point="'+key+'" cx="0" cy="0" r="4.5" stroke="'+color+'" visibility="hidden"/>'+
@@ -256,11 +275,11 @@ export function getDashboardHtml(): string {
   }
   function renderCharts(d){
     const p=d.history.points,c=d.config;
-    chart("turn60Chart",p,"rolling60mTurns",Math.max(c.sustainedMaxTurns+10,...p.map(x=>x.rolling60mTurns||0)),c.sustainedWarnTurns,"var(--cyan)","Rolling 60m attempts");
-    chart("turn10Chart",p,"rolling10mTurns",Math.max(c.burstMaxTurns+5,...p.map(x=>x.rolling10mTurns||0)),c.burstSoftTurns,"#67e8f9","Rolling 10m attempts");
+    chart("turn60Chart",p,"rolling60mTurns",Math.max(c.sustainedMaxTurns+10,...p.map(x=>x.rolling60mTurns||0)),null,"var(--cyan)","Rolling 60m attempts");
+    chart("turn10Chart",p,"rolling10mTurns",Math.max(10,...p.map(x=>x.rolling10mTurns||0)),null,"#67e8f9","Rolling 10m attempts");
     const maxDelay=Math.max(1000,...p.map(x=>x.averageTurnDelayMs||0));chart("delayChart",p,"averageTurnDelayMs",maxDelay,Math.min(3000,maxDelay),"var(--purple)","Average turn delay ms");
     chart("sessionChart",p,"rolling10mSessions",Math.max(c.sessionDangerThreshold10m+5,...p.map(x=>x.rolling10mSessions||0)),c.sessionWarnThreshold10m,"var(--amber)","Rolling 10m sessions");
-    $("turn60Meta").textContent="warn "+c.sustainedWarnTurns+" · max "+c.sustainedMaxTurns;$("turn10Meta").textContent="soft "+c.burstSoftTurns+" · max "+c.burstMaxTurns;
+    $("turn60Meta").textContent="cap "+c.sustainedMaxTurns;$("turn10Meta").textContent="informational · rolling 10m";
     $("sessionMeta").textContent="warn "+c.sessionWarnThreshold10m+" · danger "+c.sessionDangerThreshold10m;
   }
   function renderConversations(d){

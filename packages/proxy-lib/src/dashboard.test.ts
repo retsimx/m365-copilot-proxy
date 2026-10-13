@@ -43,7 +43,7 @@ describe("Web Dashboard & Telemetry API", () => {
       const html = getDashboardHtml();
       expect((html.match(/<article class="card">/g) ?? [])).toHaveLength(8);
       expect(html).toContain("Sustained Turns · 60m");
-      expect(html).toContain("Burst Turns · 10m");
+      expect(html).toContain("Burst Turns · 60s");
       expect(html).toContain("Fresh-Session Capacity");
       expect(html).toContain("Upstream Circuit Breaker");
       expect(html).toContain("Next Turn / Queue");
@@ -57,7 +57,8 @@ describe("Web Dashboard & Telemetry API", () => {
       expect(html).toContain('id="turnStatus"');
       expect(html).toContain('id="sessionStatus"');
       expect(html).toContain('id="sustainedDelay"');
-      expect(html).toContain('id="burstDelay"');
+      expect(html).toContain('id="burstWindow"');
+      expect(html).toContain('id="burstRecovery"');
       expect(html).toContain('id="sessionRefill"');
       expect(html).toContain('id="sessionEligible"');
       expect(html).toContain('id="sessionDelay"');
@@ -133,16 +134,36 @@ describe("Web Dashboard & Telemetry API", () => {
       expect(html).toContain("cfg.sustainedMaxTurns");
       expect(html).toContain("cfg.sustainedWarnTurns");
       expect(html).toContain("cfg.burstMaxTurns");
-      expect(html).toContain("cfg.burstSoftTurns");
+      expect(html).toContain("cfg.paceBurstAllowance");
+      expect(html).toContain("cb.probeScheduleSec");
+      expect(html).toContain("cb.escalationLevel");
       expect(html).toContain("c.sessionDangerThreshold10m");
       expect(html).toContain("c.sessionWarnThreshold10m");
       expect(html).toContain("setInterval(fetchMetrics,2000)");
     });
 
+    it("shows the PerUserThrottled probe ladder inside the circuit breaker card", () => {
+      const html = getDashboardHtml();
+      expect(html).toContain('id="circuitEpisode"');
+      expect(html).toContain('id="circuitSchedule"');
+      expect(html).toContain('id="circuitNextProbe"');
+      expect(html).toContain("Probe ladder");
+      expect(html).toContain("Schedule");
+      expect(html).toContain("Next probe");
+    });
+
+    it("renders the 10m turn block as an informational rate view without a cap marker", () => {
+      const html = getDashboardHtml();
+      expect(html).toContain("Turn rate · 10m");
+      expect(html).toContain("informational · rolling 10m");
+    });
+
     it("contains corrected empirical operating notes", () => {
       const html = getDashboardHtml();
       expect(html).toContain("conservative local operating policy");
-      expect(html).toContain("130 and 135 recorded attempts");
+      expect(html).toContain("125 and 135 both tripped upstream");
+      expect(html).toContain("two-layer governor");
+      expect(html).toContain("probe ladder");
       expect(html).toContain("PerUserThrottled");
       expect(html).toContain("PerScenarioThrottled");
       expect(html).toContain("exact upstream accounting function remains unknown");

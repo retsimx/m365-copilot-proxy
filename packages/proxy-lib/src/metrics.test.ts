@@ -48,7 +48,7 @@ describe("Telemetry Metrics Engine (proxy-lib)", () => {
 
       const config = getSystemMetricsConfig();
       expect(config.burstMaxTurns).toBe(42);
-      expect(config.burstSoftTurns).toBe(37); // 42 - 5
+      expect(config.paceBurstAllowance).toBe(6);
       expect(config.sustainedWarnTurns).toBe(99);
       expect(config.maxNumUserMessagesInConversation).toBe(750);
     } finally {
@@ -87,7 +87,7 @@ describe("Telemetry Metrics Engine (proxy-lib)", () => {
     expect(latestPoint.maxPacingDelayMs).toBe(3000);
   });
 
-  it("3. evaluates safe / guarded / danger statuses for 10m and 60m horizons", () => {
+  it("3. evaluates the 10m session horizon and the single 60m turn horizon", () => {
     const collector = new MetricsCollector();
     const now = Date.now();
 
@@ -100,24 +100,25 @@ describe("Telemetry Metrics Engine (proxy-lib)", () => {
     expect(snapshot.governor.sixtyMinute.status).toBe("safe");
     expect(snapshot.health).toBe("healthy");
 
-    // Simulate 31 turns within 10 minutes (over softTurns = 30)
+    // 31 turns in the 60m window. The 10m horizon is now informational + session-only, so
+    // it stays safe (no fresh sessions); the turn pressure registers on the 60m horizon.
     for (let i = 0; i < 31; i++) {
       recordTurn(now - i * 1000, 2000);
     }
+    const midSnapshot = getMetricsSnapshot(undefined, "1h");
+    expect(midSnapshot.governor.tenMinute.turns).toBe(31);
+    expect(midSnapshot.governor.tenMinute.status).toBe("safe");
+    expect(midSnapshot.governor.sixtyMinute.turns).toBe(31);
+    expect(midSnapshot.governor.sixtyMinute.status).not.toBe("danger");
 
-    const guardedSnapshot = getMetricsSnapshot(undefined, "1h");
-    // 31 turns >= 30 soft limit -> guarded
-    expect(guardedSnapshot.governor.tenMinute.turns).toBe(31);
-    expect(guardedSnapshot.governor.tenMinute.status).toBe("guarded");
-    expect(guardedSnapshot.health).toBe("warning");
-
-    // Simulate 36 turns (over burstMax = 35) -> danger
-    for (let i = 0; i < 5; i++) {
+    // Fill the 60m bucket to its cap -> danger.
+    const max = Number(process.env.M365_SUSTAINED_MAX_TURNS ?? 110);
+    for (let i = 31; i <= max; i++) {
       recordTurn(now - i * 1000, 5000);
     }
     const dangerSnapshot = getMetricsSnapshot(undefined, "1h");
-    expect(dangerSnapshot.governor.tenMinute.turns).toBe(36);
-    expect(dangerSnapshot.governor.tenMinute.status).toBe("danger");
+    expect(dangerSnapshot.governor.sixtyMinute.turns).toBeGreaterThanOrEqual(max);
+    expect(dangerSnapshot.governor.sixtyMinute.status).toBe("danger");
     expect(dangerSnapshot.health).toBe("danger");
   });
 
@@ -224,6 +225,15 @@ describe("Telemetry Metrics Engine (proxy-lib)", () => {
       delayCause: "ready",
     });
     expect(snapshot.circuitBreaker.reason).toBeUndefined();
+    expect(snapshot.circuitBreaker.escalationLevel).toBe(0);
+    expect(snapshot.circuitBreaker.probeScheduleSec).toEqual([1200, 2400, 3900]);
+    expect(snapshot.config.burstMaxTurns).toBe(8);
+    expect(snapshot.config.burstWindowMs).toBe(60_000);
+    expect(snapshot.config.paceBurstAllowance).toBe(6);
+    expect(snapshot.governor.burst.maxTurns).toBe(8);
+    expect(snapshot.governor.burst.windowMs).toBe(60_000);
+    expect(snapshot.governor.tenMinute.maxTurns).toBe(0);
+    expect(snapshot.governor.tenMinute.softTurns).toBe(0);
   });
 
   it("8. recordRequestQuality and getQualityMetrics compute turn quality and quota yield metrics correctly", () => {

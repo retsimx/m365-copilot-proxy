@@ -2,6 +2,7 @@ import {
   isDegradationBackoff,
   getRemainingDegradationCooldownMs,
   getDegradationBackoffReason,
+  getDegradationEscalationLevel,
 } from "@m365-copilot/core";
 import {
   getStaggerQueueState,
@@ -92,7 +93,8 @@ export interface SessionItemSnapshot {
 export interface SystemMetricsConfig {
   burstWindowMs: number;
   burstMaxTurns: number;
-  burstSoftTurns: number;
+  paceBurstAllowance: number;
+  paceCeilingMs: number;
   sustainedWindowMs: number;
   sustainedMaxTurns: number;
   sustainedWarnTurns: number;
@@ -111,13 +113,20 @@ export interface SystemMetricsConfig {
   newSessionSpacingMs: number;
   throttleCooldownSec: number;
   userThrottleCooldownSec: number;
+  userThrottleProbeSec: number[];
   maxRetryAfterSec: number;
 }
 
+function parseProbeSchedule(raw: string | undefined): number[] {
+  const schedule = (raw ?? "1200,2400,3900")
+    .split(",")
+    .map((s) => Number(s.trim()))
+    .filter((n) => Number.isFinite(n) && n > 0);
+  return schedule.length > 0 ? schedule : [3900];
+}
+
 export function getSystemMetricsConfig(): SystemMetricsConfig {
-  const burstMaxTurns = Number(process.env.M365_BURST_MAX_TURNS ?? 35);
-  const burstSoftTurns = Number(process.env.M365_BURST_SOFT_TURNS ?? Math.max(1, burstMaxTurns - 5));
-  const sustainedMaxTurns = Number(process.env.M365_SUSTAINED_MAX_TURNS ?? 115);
+  const sustainedMaxTurns = Number(process.env.M365_SUSTAINED_MAX_TURNS ?? 110);
   const sustainedWarnTurns = Number(process.env.M365_SUSTAINED_WARN_TURNS ?? 90);
   const sessionDanger10m = Number(process.env.M365_10M_DANGER_SESSIONS ?? 15);
   const sessionWarn10m = Number(process.env.M365_10M_WARN_SESSIONS ?? 10);
@@ -126,9 +135,10 @@ export function getSystemMetricsConfig(): SystemMetricsConfig {
   const minSpacingMs = Number(process.env.M365_NEW_SESSION_SPACING_MS ?? 15_000);
 
   return {
-    burstWindowMs: Number(process.env.M365_BURST_WINDOW_MS ?? 600_000),
-    burstMaxTurns,
-    burstSoftTurns,
+    burstWindowMs: Number(process.env.M365_BURST_WINDOW_MS ?? 60_000),
+    burstMaxTurns: Number(process.env.M365_BURST_MAX_TURNS ?? 8),
+    paceBurstAllowance: Number(process.env.M365_PACE_BURST_ALLOWANCE ?? 6),
+    paceCeilingMs: Number(process.env.M365_PACE_CEILING_MS ?? 45_000),
     sustainedWindowMs: Number(process.env.M365_SUSTAINED_WINDOW_MS ?? 3_600_000),
     sustainedMaxTurns,
     sustainedWarnTurns,
@@ -146,7 +156,8 @@ export function getSystemMetricsConfig(): SystemMetricsConfig {
     minSpacingMs,
     newSessionSpacingMs: minSpacingMs,
     throttleCooldownSec: Number(process.env.M365_THROTTLE_COOLDOWN_SEC ?? 1800),
-    userThrottleCooldownSec: Number(process.env.M365_USER_THROTTLE_COOLDOWN_SEC ?? 1200),
+    userThrottleCooldownSec: Number(process.env.M365_USER_THROTTLE_COOLDOWN_SEC ?? 3900),
+    userThrottleProbeSec: parseProbeSchedule(process.env.M365_USER_THROTTLE_PROBE_SEC),
     maxRetryAfterSec: Number(process.env.M365_MAX_RETRY_AFTER_SEC ?? 60),
   };
 }
@@ -161,6 +172,8 @@ export interface MetricsSnapshot {
     reason?: string;
     lastThrottleAt?: number;
     shieldedRequests: number;
+    escalationLevel: number;
+    probeScheduleSec: number[];
   };
   turnQueue: {
     depth: number;
@@ -187,6 +200,13 @@ export interface MetricsSnapshot {
       freshSessions: number;
       dangerSessions: number;
       currentDelayMs: number;
+      recoveryMs: number;
+      status: "safe" | "guarded" | "danger";
+    };
+    burst: {
+      turns: number;
+      maxTurns: number;
+      windowMs: number;
       recoveryMs: number;
       status: "safe" | "guarded" | "danger";
     };
@@ -775,6 +795,8 @@ export function getMetricsSnapshot(
       reason: getDegradationBackoffReason(),
       lastThrottleAt: defaultMetricsCollector.getLastThrottleAt(),
       shieldedRequests: 0,
+      escalationLevel: getDegradationEscalationLevel(),
+      probeScheduleSec: config.userThrottleProbeSec,
     },
     turnQueue: getTurnQueueState(),
     staggerQueue,
