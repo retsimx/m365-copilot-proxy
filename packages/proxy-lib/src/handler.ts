@@ -516,7 +516,6 @@ interface QueuedTurn {
   reject: (err: Error) => void;
   waitedMs?: number;
   enqueuedAt: number;
-  softDelayServed?: boolean;
 }
 
 let recentTurnTimestamps: number[] = [];
@@ -545,29 +544,80 @@ export function setRecentTurnTimestamps(ts: number[]): void {
   recentTurnTimestamps = [...ts];
 }
 
-/** Convex (quadratic) occupancy ramp for one rolling-window bucket.
- *  Below the ceiling the delay grows gently then steeply toward `targetMs` (mild early
- *  friction, strong late friction) so a user can still REACH 100% of the bucket — just with
- *  increasing per-turn timeouts — instead of a sudden multi-minute freeze at the cap.
- *  At/over `max` the exact rolling-window drain-wait applies: the hard ceiling is NEVER
- *  crossed (the max-th turn is admissible at count max-1; the next blocks until a slot frees). */
-export function bucketRampDelay(
-  count: number,
+export interface PaceConfig {
+  windowMs: number;
+  maxTurns: number;
+  burstWindowMs: number;
+  burstMaxTurns: number;
+  burstAllowance: number;
+  ceilingMs: number;
+}
+
+/** Resolve the two-layer velocity governor configuration from the environment. */
+export function loadPaceConfig(): PaceConfig {
+  return {
+    windowMs: Number(process.env.M365_SUSTAINED_WINDOW_MS ?? 3_600_000),
+    maxTurns: Number(process.env.M365_SUSTAINED_MAX_TURNS ?? 110),
+    burstWindowMs: Number(process.env.M365_BURST_WINDOW_MS ?? 60_000),
+    burstMaxTurns: Number(process.env.M365_BURST_MAX_TURNS ?? 8),
+    burstAllowance: Number(process.env.M365_PACE_BURST_ALLOWANCE ?? 6),
+    ceilingMs: Number(process.env.M365_PACE_CEILING_MS ?? 45_000),
+  };
+}
+
+/** Two-layer turn pacing wait (ms) until the next dispatch is admissible.
+ *
+ *  Layer A — hard dual sliding-window log (exact caps): never more than `maxTurns`
+ *  dispatches in any trailing `windowMs`, and never more than `burstMaxTurns` in any
+ *  trailing `burstWindowMs`. When a window is full the wait is the exact drain time
+ *  until its oldest entry leaves (floored at 1s).
+ *
+ *  Layer B — proportional-taper soft pacing (smooth, no chatter). While the window's
+ *  dispatch count sits above the "even line" for the window's age (`debt > 0`), the
+ *  target interval is the outstanding share of the churn (`amortized`) scaled down
+ *  while the debt is small, capped at `ceilingMs`. `softWait` is that interval minus
+ *  the time already elapsed since the last dispatch.
+ *
+ *  `timestamps` must be ascending dispatch times already pruned to `windowMs`. Returns
+ *  `max(hardWait, softWait)`; the caller applies the minimum-spacing floor. */
+export function turnPaceWait(
   timestamps: number[],
-  start: number,
-  max: number,
-  windowMs: number,
-  targetMs: number,
   now: number,
+  lastDispatch: number,
+  cfg: PaceConfig,
 ): number {
-  if (max <= 0 || windowMs <= 0) return 0;
-  if (count >= max) {
-    const oldest = timestamps[timestamps.length - max];
-    return Math.max(1000, oldest + windowMs - now);
+  const { windowMs, maxTurns, burstWindowMs, burstMaxTurns, burstAllowance, ceilingMs } = cfg;
+  const count = timestamps.length;
+
+  let hardWait = 0;
+  if (maxTurns > 0 && windowMs > 0 && count >= maxTurns) {
+    hardWait = Math.max(1000, timestamps[count - maxTurns] + windowMs - now);
   }
-  if (count < start) return 0;
-  const p = (count - start + 1) / (max - start);
-  return Math.round(p * p * targetMs);
+
+  let burstCount = 0;
+  for (let i = timestamps.length - 1; i >= 0; i--) {
+    if (now - timestamps[i] < burstWindowMs) burstCount++;
+    else break;
+  }
+  if (burstMaxTurns > 0 && burstWindowMs > 0 && burstCount >= burstMaxTurns) {
+    const burstOldest = timestamps[count - burstCount];
+    hardWait = Math.max(hardWait, Math.max(1000, burstOldest + burstWindowMs - now));
+  }
+
+  let softWait = 0;
+  if (count > 0 && maxTurns > count && windowMs > 0 && burstAllowance > 0) {
+    const oldest = timestamps[0];
+    const ideal = (now - oldest) / (windowMs / maxTurns);
+    const debt = count - ideal;
+    if (debt > 0) {
+      const amortized = (oldest + windowMs - now) / (maxTurns - count);
+      const pace = Math.min(amortized * Math.min(1, debt / burstAllowance), ceilingMs);
+      const sinceLast = lastDispatch > 0 ? now - lastDispatch : 0;
+      softWait = Math.max(0, pace - sinceLast);
+    }
+  }
+
+  return Math.max(hardWait, softWait);
 }
 
 export function getGovernorState(): {
@@ -578,6 +628,13 @@ export function getGovernorState(): {
     freshSessions: number;
     dangerSessions: number;
     currentDelayMs: number;
+    recoveryMs: number;
+    status: "safe" | "guarded" | "danger";
+  };
+  burst: {
+    turns: number;
+    maxTurns: number;
+    windowMs: number;
     recoveryMs: number;
     status: "safe" | "guarded" | "danger";
   };
@@ -592,13 +649,19 @@ export function getGovernorState(): {
     status: "safe" | "guarded" | "danger";
   };
 } {
-  const burstWindowMs = Number(process.env.M365_BURST_WINDOW_MS ?? 600_000); // 10 minutes
-  const burstMax = Number(process.env.M365_BURST_MAX_TURNS ?? 35);
-  const burstSoft = Number(process.env.M365_BURST_SOFT_TURNS ?? Math.max(1, burstMax - 5));
+  const cfg = loadPaceConfig();
+  // The 10m horizon is informational only (`maxTurns`/`softTurns` are 0, `currentDelayMs`
+  // is 0 and the status is session-based). It has its own fixed 10-minute window and no
+  // longer reads `M365_BURST_*` — that prefix now means the 60s pace burst window only.
+  const TEN_MINUTE_MS = 600_000;
 
-  const sustainedWindowMs = Number(process.env.M365_SUSTAINED_WINDOW_MS ?? 3_600_000); // 60 minutes
-  const sustainedMax = Number(process.env.M365_SUSTAINED_MAX_TURNS ?? 115);
+  const sustainedWindowMs = cfg.windowMs; // 60 minutes
+  const sustainedMax = cfg.maxTurns;
   const sustainedWarn = Number(process.env.M365_SUSTAINED_WARN_TURNS ?? 90);
+
+  const burstWindowMs = cfg.burstWindowMs; // 60 seconds
+  const burstMax = cfg.burstMaxTurns;
+  const burstAllowance = cfg.burstAllowance;
 
   const dangerSessions10m = Number(process.env.M365_10M_DANGER_SESSIONS ?? 15);
   const dangerSessions60m = Number(process.env.M365_60M_DANGER_SESSIONS ?? 50);
@@ -607,44 +670,53 @@ export function getGovernorState(): {
   // Evict entries older than the longest window (sustained 60m)
   recentTurnTimestamps = recentTurnTimestamps.filter((t) => now - t < sustainedWindowMs);
 
-  const burstEntries = recentTurnTimestamps.filter((t) => now - t < burstWindowMs);
-  const metricTurns10m = getTurnsInWindow(burstWindowMs, now);
+  const metricTurns10m = getTurnsInWindow(TEN_MINUTE_MS, now);
   const metricTurns60m = getTurnsInWindow(sustainedWindowMs, now);
-  const burstCount = Math.max(burstEntries.length, metricTurns10m);
   const sustainedCount = Math.max(recentTurnTimestamps.length, metricTurns60m);
 
-  const burstRampStart = Number(process.env.M365_BURST_RAMP_START ?? 24);
-  const burstRampTargetMs = Number(process.env.M365_BURST_RAMP_TARGET_MS ?? 60_000);
-  const sustainedRampTargetMs = Number(process.env.M365_SUSTAINED_RAMP_TARGET_MS ?? 30_000);
+  // Real hard burst window (60s) — the pacing source of truth is the dispatch log.
+  const burstEntries = recentTurnTimestamps.filter((t) => now - t < burstWindowMs);
+  const burstCount = burstEntries.length;
+  const statusBurst: "safe" | "guarded" | "danger" =
+    burstCount >= burstMax ? "danger" : burstCount >= Math.max(1, burstAllowance) ? "guarded" : "safe";
 
-  const burstDelayMs = bucketRampDelay(burstCount, burstEntries, burstRampStart, burstMax, burstWindowMs, burstRampTargetMs, now);
-  const sustainedDelayMs = bucketRampDelay(sustainedCount, recentTurnTimestamps, sustainedWarn, sustainedMax, sustainedWindowMs, sustainedRampTargetMs, now);
+  // Two-layer governor: the 60m bucket governs turns via `turnPaceWait` (hard dual
+  // sliding-window caps + proportional-taper soft pacing). `currentDelayMs` is the
+  // live remaining wait until the next admissible dispatch.
+  const sustainedDelayMs = turnPaceWait(recentTurnTimestamps, now, lastTurnDispatchedAt, cfg);
 
-  const freshSessions10m = getNewSessionsInWindow(burstWindowMs, now);
+  const freshSessions10m = getNewSessionsInWindow(TEN_MINUTE_MS, now);
   const freshSessions60m = getNewSessionsInWindow(sustainedWindowMs, now);
 
-  const is10mDanger = burstCount >= burstMax || freshSessions10m >= dangerSessions10m;
-  const is10mGuarded =
-    !is10mDanger &&
-    (burstCount >= burstSoft || burstDelayMs > 0 || freshSessions10m >= Math.max(1, dangerSessions10m - 5));
+  // The 10m horizon no longer paces turns — it is informational (turn count) plus the
+  // fresh-session guard for PerScenarioThrottled.
+  const is10mDanger = freshSessions10m >= dangerSessions10m;
+  const is10mGuarded = !is10mDanger && freshSessions10m >= Math.max(1, dangerSessions10m - 5);
   const status10m: "safe" | "guarded" | "danger" = is10mDanger ? "danger" : is10mGuarded ? "guarded" : "safe";
 
   const is60mDanger = sustainedCount >= sustainedMax || freshSessions60m >= dangerSessions60m;
   const is60mGuarded =
     !is60mDanger &&
-    (sustainedCount >= sustainedWarn || sustainedDelayMs > 0 || freshSessions60m >= Math.max(1, dangerSessions60m - 15));
+    (sustainedCount >= sustainedWarn || freshSessions60m >= Math.max(1, dangerSessions60m - 15));
   const status60m: "safe" | "guarded" | "danger" = is60mDanger ? "danger" : is60mGuarded ? "guarded" : "safe";
 
   return {
     tenMinute: {
-      turns: burstCount,
-      maxTurns: burstMax,
-      softTurns: burstSoft,
+      turns: metricTurns10m,
+      maxTurns: 0,
+      softTurns: 0,
       freshSessions: freshSessions10m,
       dangerSessions: dangerSessions10m,
-      currentDelayMs: burstDelayMs,
-      recoveryMs: burstEntries.length ? Math.max(0, burstEntries[0] + burstWindowMs - now) : 0,
+      currentDelayMs: 0,
+      recoveryMs: 0,
       status: status10m,
+    },
+    burst: {
+      turns: burstCount,
+      maxTurns: burstMax,
+      windowMs: burstWindowMs,
+      recoveryMs: burstEntries.length ? Math.max(0, burstEntries[0] + burstWindowMs - now) : 0,
+      status: statusBurst,
     },
     sixtyMinute: {
       turns: sustainedCount,
@@ -672,16 +744,15 @@ export function getTurnQueueState(): {
   const now = Date.now();
   const governor = getGovernorState();
   const spacingRemaining = Math.max(0, minSpacingMs - (lastTurnDispatchedAt > 0 ? now - lastTurnDispatchedAt : minSpacingMs));
-  const burstDelay = governor.tenMinute.currentDelayMs;
-  const sustainedDelay = governor.sixtyMinute.currentDelayMs;
-  const nextDispatchMs = Math.max(spacingRemaining, burstDelay, sustainedDelay);
-  const delayCause = sustainedDelay >= burstDelay && sustainedDelay >= spacingRemaining && sustainedDelay > 0
+  // The governor's `currentDelayMs` is already the live remaining wait from `turnPaceWait`
+  // (interval minus elapsed); combine it with the minimum-spacing floor.
+  const paceWaitMs = governor.sixtyMinute.currentDelayMs;
+  const nextDispatchMs = Math.max(paceWaitMs, spacingRemaining);
+  const delayCause = paceWaitMs >= spacingRemaining && paceWaitMs > 0
     ? "sustained"
-    : burstDelay >= spacingRemaining && burstDelay > 0
-      ? "burst"
-      : spacingRemaining > 0
-        ? "minimum-spacing"
-        : "ready";
+    : spacingRemaining > 0
+      ? "minimum-spacing"
+      : "ready";
   return {
     depth: turnQueue.length,
     priorityCount: turnQueue.filter((q) => q.priority).length,
@@ -698,13 +769,11 @@ async function processTurnQueue(): Promise<void> {
   isProcessingTurnQueue = true;
 
   try {
-    const burstWindowMs = Number(process.env.M365_BURST_WINDOW_MS ?? 600_000); // 10 minutes
-    const burstMax = Number(process.env.M365_BURST_MAX_TURNS ?? 35);
-    const burstSoft = Number(process.env.M365_BURST_SOFT_TURNS ?? Math.max(1, burstMax - 5));
-
-    const sustainedWindowMs = Number(process.env.M365_SUSTAINED_WINDOW_MS ?? 3_600_000); // 60 minutes
-    const sustainedMax = Number(process.env.M365_SUSTAINED_MAX_TURNS ?? 115);
-    const sustainedWarn = Number(process.env.M365_SUSTAINED_WARN_TURNS ?? 90);
+    const cfg = loadPaceConfig();
+    const sustainedWindowMs = cfg.windowMs; // 60 minutes
+    const sustainedMax = cfg.maxTurns;
+    const burstWindowMs = cfg.burstWindowMs;
+    const burstMax = cfg.burstMaxTurns;
 
     while (turnQueue.length > 0) {
       const head = turnQueue[0];
@@ -725,49 +794,23 @@ async function processTurnQueue(): Promise<void> {
 
       const now = Date.now();
       recentTurnTimestamps = recentTurnTimestamps.filter((t) => now - t < sustainedWindowMs);
-      const burstEntries = recentTurnTimestamps.filter((t) => now - t < burstWindowMs);
-      const burstCount = burstEntries.length;
       const sustainedCount = recentTurnTimestamps.length;
 
-      const burstRampStart = Number(process.env.M365_BURST_RAMP_START ?? 24);
-      const burstRampTargetMs = Number(process.env.M365_BURST_RAMP_TARGET_MS ?? 60_000);
-      const sustainedRampTargetMs = Number(process.env.M365_SUSTAINED_RAMP_TARGET_MS ?? 30_000);
-      // The soft ramp is served once per queue head; the hard drain-wait is not.
-      const softEligible = !head.softDelayServed;
-
-      let burstDelayMs = 0;
-      if (burstMax > 0 && burstWindowMs > 0) {
-        if (burstCount >= burstMax) {
-          const oldestBurst = burstEntries[burstEntries.length - burstMax];
-          burstDelayMs = Math.max(1000, (oldestBurst + burstWindowMs) - now);
-        } else if (softEligible && burstCount >= burstRampStart) {
-          const p = (burstCount - burstRampStart + 1) / (burstMax - burstRampStart);
-          burstDelayMs = Math.round(p * p * burstRampTargetMs);
-        }
-      }
-
-      let sustainedDelayMs = 0;
-      if (sustainedMax > 0 && sustainedWindowMs > 0) {
-        if (sustainedCount >= sustainedMax) {
-          const oldestSustained = recentTurnTimestamps[recentTurnTimestamps.length - sustainedMax];
-          sustainedDelayMs = Math.max(1000, (oldestSustained + sustainedWindowMs) - now);
-        } else if (softEligible && sustainedCount >= sustainedWarn) {
-          const p = (sustainedCount - sustainedWarn + 1) / (sustainedMax - sustainedWarn);
-          sustainedDelayMs = Math.round(p * p * sustainedRampTargetMs);
-        }
-      }
-
-      const delayMs = Math.max(burstDelayMs, sustainedDelayMs);
+      // Two-layer governor: hard dual sliding-window caps (60m / 60s) plus the
+      // proportional-taper soft pace. The first turn of a burst is immediate; after
+      // that the combined wait is the outstanding hard drain or soft interval, whichever
+      // is larger, floored by the minimum wire spacing below.
+      const paceDelayMs = turnPaceWait(recentTurnTimestamps, now, lastTurnDispatchedAt, cfg);
 
       const minSpacingMs = Number(process.env.M365_MIN_TURN_SPACING_MS ?? 1500);
       const timeSinceLast = lastTurnDispatchedAt > 0 ? now - lastTurnDispatchedAt : Infinity;
       const spacingDelayMs = Math.max(0, minSpacingMs - timeSinceLast);
-      const totalWaitMs = Math.max(delayMs, spacingDelayMs);
+      const totalWaitMs = Math.max(paceDelayMs, spacingDelayMs);
 
       if (totalWaitMs > 0) {
-        if (delayMs > 0) {
+        if (paceDelayMs > 0) {
           log.info(
-            `Velocity governor active: ${burstCount}/${burstMax} (10m), ${sustainedCount}/${sustainedMax} (60m)${head.priority ? " [PRIORITY RETRY]" : ""} — progressive pacing by ${(totalWaitMs / 1000).toFixed(1)}s`,
+            `Velocity governor active: ${sustainedCount}/${sustainedMax} (60m) — progressive pacing by ${(totalWaitMs / 1000).toFixed(1)}s`,
           );
         }
         head.waitedMs = (head.waitedMs ?? 0) + totalWaitMs;
@@ -798,14 +841,14 @@ async function processTurnQueue(): Promise<void> {
           continue;
         }
 
-        // Re-check live limits (hard caps)
+        // Re-check the live hard caps (sustained and burst) before dispatching.
         const recheckNow = Date.now();
         recentTurnTimestamps = recentTurnTimestamps.filter((t) => recheckNow - t < sustainedWindowMs);
-        const recheckBurst = recentTurnTimestamps.filter((t) => recheckNow - t < burstWindowMs).length;
         const recheckSustained = recentTurnTimestamps.length;
+        const recheckBurst = recentTurnTimestamps.filter((t) => recheckNow - t < burstWindowMs).length;
         if (
-          (burstMax > 0 && burstWindowMs > 0 && recheckBurst >= burstMax) ||
-          (sustainedMax > 0 && sustainedWindowMs > 0 && recheckSustained >= sustainedMax)
+          (sustainedMax > 0 && sustainedWindowMs > 0 && recheckSustained >= sustainedMax) ||
+          (burstMax > 0 && burstWindowMs > 0 && recheckBurst >= burstMax)
         ) {
           continue;
         }
@@ -818,13 +861,11 @@ async function processTurnQueue(): Promise<void> {
       recentTurnTimestamps.push(dispatchTime);
       lastTurnDispatchedAt = dispatchTime;
       const recordedDelay = head.waitedMs ?? totalWaitMs;
-      const delayCause = sustainedDelayMs >= burstDelayMs && sustainedDelayMs >= spacingDelayMs && sustainedDelayMs > 0
+      const delayCause = paceDelayMs >= spacingDelayMs && paceDelayMs > 0
         ? "sustained"
-        : burstDelayMs >= spacingDelayMs && burstDelayMs > 0
-          ? "burst"
-          : spacingDelayMs > 0
-            ? "minimum-spacing"
-            : "none";
+        : spacingDelayMs > 0
+          ? "minimum-spacing"
+          : "none";
       recordTurn(dispatchTime, recordedDelay, delayCause);
       scheduleStateSave();
       head.resolve();
@@ -842,10 +883,9 @@ export async function paceTurnVelocity(
   signal?: AbortSignal,
   opts?: { priority?: boolean },
 ): Promise<number> {
-  const burstMax = Number(process.env.M365_BURST_MAX_TURNS ?? 35);
-  const sustainedMax = Number(process.env.M365_SUSTAINED_MAX_TURNS ?? 115);
+  const sustainedMax = Number(process.env.M365_SUSTAINED_MAX_TURNS ?? 110);
 
-  if (burstMax <= 0 && sustainedMax <= 0) {
+  if (sustainedMax <= 0) {
     const now = Date.now();
     recordTurn(now, 0);
     recentTurnTimestamps.push(now);
