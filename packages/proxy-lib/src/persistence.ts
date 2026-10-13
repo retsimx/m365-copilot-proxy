@@ -10,6 +10,9 @@ import {
 import {
   getRecentTurnTimestamps,
   setRecentTurnTimestamps,
+  getSustainedTatMs,
+  setSustainedTatMs,
+  reconstructTat,
   getStaggerQueueInternalState,
   setStaggerQueueInternalState,
 } from "./handler.js";
@@ -23,6 +26,9 @@ export interface PersistentProxyState {
   savedAt: number;
   governor: {
     recentTurnTimestamps: number[];
+    /** GCRA theoretical-arrival-time. Optional for backward compatibility with files
+     *  written before the GCRA governor; reconstructed from timestamps when absent. */
+    sustainedTatMs?: number;
   };
   staggerQueue: {
     sessionTokens: number;
@@ -70,6 +76,7 @@ export function saveProxyState(filePath?: string): void {
     savedAt: now,
     governor: {
       recentTurnTimestamps: getRecentTurnTimestamps(),
+      sustainedTatMs: getSustainedTatMs(),
     },
     staggerQueue: getStaggerQueueInternalState(),
     circuitBreaker: {
@@ -116,10 +123,28 @@ export function loadProxyState(filePath?: string): boolean {
 
     // 1. Restore governor turn timestamps (pruning entries > 60m)
     if (state.governor && Array.isArray(state.governor.recentTurnTimestamps)) {
-      const validTurns = state.governor.recentTurnTimestamps.filter(
-        (t) => typeof t === "number" && now - t < sustainedWindowMs,
-      );
+      const validTurns = state.governor.recentTurnTimestamps
+        .filter((t) => typeof t === "number" && now - t < sustainedWindowMs)
+        .sort((a, b) => a - b);
       setRecentTurnTimestamps(validTurns);
+
+      // Restore the GCRA virtual schedule: prefer the persisted TAT; otherwise
+      // reconstruct it once from the retained timestamps (migration path). A
+      // far-future persisted TAT is treated as suspect (clock regression) and
+      // rebuilt from the log rather than trusted.
+      const maxTurns = Number(process.env.M365_SUSTAINED_MAX_TURNS ?? 110);
+      const intervalMs = sustainedWindowMs / Math.max(1, maxTurns);
+      const persistedTat = state.governor.sustainedTatMs;
+      if (
+        typeof persistedTat === "number" &&
+        Number.isFinite(persistedTat) &&
+        persistedTat >= 0 &&
+        persistedTat <= now + sustainedWindowMs
+      ) {
+        setSustainedTatMs(persistedTat);
+      } else {
+        setSustainedTatMs(reconstructTat(validTurns, intervalMs));
+      }
     }
 
     // 2. Restore session stagger queue tokens and timestamps

@@ -3109,7 +3109,47 @@ the burst-window lookback.
 **Related.** Supersedes F33's dual-horizon ramps; extends F34's Priority FIFO gatekeeper; the
 sustained cap remains the conservative local policy bounded by F35/F36 (125 and 135 both tripped).
 
+> **Superseded 2026-10-13 by F38.** The Layer-B proportional-taper was falsified in production: after
+> an ~11 min idle gap its debt signal (`count − (now−oldest)/(W/max)`) read negative and applied
+> **zero** pacing for 45 min while the account refilled above the sustainable rate, packing the 60 m
+> window and producing a 630.8 s stall (the exact "no cliff / ~45 s max interval" prediction was
+> wrong). Layer B is now a GCRA virtual schedule. See F38.
 
+### F38 — GCRA turn governor: the taper went dormant after idle gaps and produced a 630.8 s stall 🔴→🟢
+
+**Incident (2026-10-13).** A single turn stalled **630.8 s (10 min 31 s)**; the 60 m window pinned at
+110/110 (`status:"danger"`). Prod `proxy-state.json` retains the exact 110 dispatch timestamps
+(span 59.4 min; gaps p50 12.9 s, **max 630.8 s**, 15 gaps > 60 s). Timeline (UTC): an ~11-min idle
+gap 05:20→05:31; then ~96 turns in 46 min (~2.1/min, above the 1.83/min sustainable rate) with
+`maxPacingDelayMs = 0` for **every** minute 05:31–06:16 (taper dormant); window reaches 110 at 06:17;
+one turn then waited **630.8 s** in the uncapped hard-window drain. The dashboard's "5 m 19 s"
+(318,773 ms avg at the 06:31 bucket) is the *average of two delayed turns* — the worst was 10 m 31 s.
+
+**Root cause (three defects in the F37 taper).** (D1) `debt = count − (now−oldest)/(W/max)` is measured
+from the window's **oldest** entry, so the idle gap inflated `(now−oldest)` → `debt ≤ 0` → **dormant**
+while the account over-filled. (D2) The taper is bypassed at `count ≥ max` (`if maxTurns > count`), so
+at the cap the only brake is the **uncapped** `hardWait`. (D3) `M365_PACE_CEILING_MS = 45000` clamped the
+soft pace while `hardWait` was unbounded (a latent under-braking defect — but *not* this incident's
+trigger: no 45 s plateau appears in the data). **Dominant cause:** offered demand ≈ **112/hr vs a 110/hr
+cap**, so the window was chronically saturated; the taper defects determined the *cliff's shape*.
+
+**Fix (shipped).** Replace the taper with a **GCRA virtual schedule**: a persistent `tat`, admissible
+when `now ≥ tat − τ` (`τ = M365_PACE_BURST_ALLOWANCE(6) × intervalMs`); `tat = max(tat, t) + intervalMs`
+advanced only on a real dispatch. Lossless (no 429). Keeps the exact hard windows and 1500 ms spacing.
+`tat` is persisted (`governor.sustainedTatMs`) and reconstructed from the timestamp log on migration.
+
+**Verified numbers** (independent reproduction on the real trace): `reconstructTat = 1791873784307.907`;
+endpoint GCRA wait **89,451 ms** (`sustained-gcra`) vs the shipped taper's **35,080 ms** (silently
+under-reporting the accumulated debt); 2.1/min crossing at turn **49** (first wait) / **41** (post-dispatch
+debt), vs the third-party claim of "~7 turns" (false: `τ=6T=196.4 s`, excess 4.156 s/turn ⇒ ~47 turns).
+Lossless bound `(BA+1)·T ≈ 229 s` (adversarial zero-think); conservation: persistent offered load
+> 110/hr ⇒ unbounded latency for *concurrent* clients (cap concurrency at the source). A **worst-case
+amortisation** scheduler was proven strictly worse (3,600 s vs 229 s). Lowering `BA` *increases* the real
+endpoint wait (BA=0 → 285.8 s) — hence `BA = 6` retained.
+
+**Evidence.** `docs/plans/designs/governor-{taper-review,gcra-spec,lossless-review,finalisation}-2026-10-13.md`;
+tests `packages/proxy-lib/src/governor-gcra.test.ts` (+ fixture `__fixtures__/governor-trace-2026-10-13.json`)
+and `docs/m365-copilot-api.md` §7.
 
 ---
 

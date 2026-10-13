@@ -524,6 +524,8 @@ let turnQueue: QueuedTurn[] = [];
 let isProcessingTurnQueue = false;
 let lastTurnDispatchedAt = 0;
 let activeTurn: QueuedTurn | null = null;
+// GCRA virtual schedule (theoretical-arrival-time). Advances only on a real dispatch.
+let sustainedTatMs = 0;
 
 export function resetTurnQueue(): void {
   turnQueue = [];
@@ -534,7 +536,16 @@ export function resetTurnQueue(): void {
 
 export function resetTurnVelocityPacing(): void {
   recentTurnTimestamps = [];
+  sustainedTatMs = 0;
   resetTurnQueue();
+}
+
+export function getSustainedTatMs(): number {
+  return sustainedTatMs;
+}
+
+export function setSustainedTatMs(value: number): void {
+  sustainedTatMs = Number.isFinite(value) && value >= 0 ? value : 0;
 }
 
 export function getRecentTurnTimestamps(): number[] {
@@ -551,10 +562,25 @@ export interface PaceConfig {
   burstWindowMs: number;
   burstMaxTurns: number;
   burstAllowance: number;
-  ceilingMs: number;
+  minSpacingMs: number;
 }
 
-/** Resolve the two-layer velocity governor configuration from the environment. */
+/** The component of the governor that produced the returned wait. */
+export type PaceCause =
+  | "ready"
+  | "minimum-spacing"
+  | "burst-window"
+  | "sustained-window"
+  | "sustained-gcra";
+
+export interface PaceResult {
+  /** Milliseconds to sleep before the next dispatch is admissible (0 = immediate). */
+  waitMs: number;
+  /** The binding constraint that produced `waitMs` (attributed pre-ceiling). */
+  cause: PaceCause;
+}
+
+/** Resolve the velocity governor configuration from the environment. */
 export function loadPaceConfig(): PaceConfig {
   return {
     windowMs: Number(process.env.M365_SUSTAINED_WINDOW_MS ?? 3_600_000),
@@ -562,63 +588,116 @@ export function loadPaceConfig(): PaceConfig {
     burstWindowMs: Number(process.env.M365_BURST_WINDOW_MS ?? 60_000),
     burstMaxTurns: Number(process.env.M365_BURST_MAX_TURNS ?? 8),
     burstAllowance: Number(process.env.M365_PACE_BURST_ALLOWANCE ?? 6),
-    ceilingMs: Number(process.env.M365_PACE_CEILING_MS ?? 45_000),
+    minSpacingMs: Number(process.env.M365_MIN_TURN_SPACING_MS ?? 1500),
   };
 }
 
-/** Two-layer turn pacing wait (ms) until the next dispatch is admissible.
+/** Reconstruct the GCRA theoretical-arrival-time (TAT) from a sorted ascending
+ *  dispatch log. Used once on load when no persisted TAT exists (migration path).
+ *
+ *  Invariant: for a gap-free schedule every dispatch advances `tat` by `intervalMs`,
+ *  so the result is `timestamps[0] + n·intervalMs`. A timestamp that overtakes the
+ *  virtual schedule (`t > tat`) snaps it forward via `max(t, tat)`, correctly
+ *  discarding stale idle credit — exactly as live dispatch does. */
+export function reconstructTat(
+  timestamps: readonly number[],
+  intervalMs: number,
+): number {
+  let tat = 0;
+  for (const t of timestamps) {
+    if (!Number.isFinite(t)) continue;
+    tat = Math.max(t, tat) + intervalMs;
+  }
+  return tat;
+}
+
+/** Advance the GCRA TAT exactly once after a confirmed dispatch. Must NOT be called
+ *  for rejected requests, queue-position changes, or re-check loops. */
+export function advanceTatAfterDispatch(
+  tat: number,
+  dispatchTime: number,
+  intervalMs: number,
+): number {
+  return Math.max(tat, dispatchTime) + intervalMs;
+}
+
+/** Pure, lossless turn-pacing decision: GCRA virtual schedule + exact hard windows.
  *
  *  Layer A — hard dual sliding-window log (exact caps): never more than `maxTurns`
  *  dispatches in any trailing `windowMs`, and never more than `burstMaxTurns` in any
  *  trailing `burstWindowMs`. When a window is full the wait is the exact drain time
- *  until its oldest entry leaves (floored at 1s).
+ *  until its oldest entry leaves.
  *
- *  Layer B — proportional-taper soft pacing (smooth, no chatter). While the window's
- *  dispatch count sits above the "even line" for the window's age (`debt > 0`), the
- *  target interval is the outstanding share of the churn (`amortized`) scaled down
- *  while the debt is small, capped at `ceilingMs`. `softWait` is that interval minus
- *  the time already elapsed since the last dispatch.
+ *  Layer B — GCRA virtual schedule: a dispatch is admissible when `now >= tat − τ`
+ *  where `τ = burstAllowance × intervalMs`. This paces continuously from the first
+ *  turn above the sustainable rate (it does NOT go dormant after an idle gap and is
+ *  NOT bypassed at the cap) — the defect class that produced the 630.8 s stall.
  *
- *  `timestamps` must be ascending dispatch times already pruned to `windowMs`. Returns
- *  `max(hardWait, softWait)`; the caller applies the minimum-spacing floor. */
+ *  Layer C — minimum wire spacing.
+ *
+ *  `timestamps` must be ascending dispatch times. Returns `{ waitMs, cause }`;
+ *  `waitMs = 0` means dispatch immediately. Every request is eventually dispatched
+ *  (lossless). The caller sleeps `waitMs`, then RE-EVALUATES from fresh `Date.now()`
+ *  — never adding the wait blindly to a running total. */
 export function turnPaceWait(
-  timestamps: number[],
+  timestamps: readonly number[],
   now: number,
   lastDispatch: number,
+  tat: number,
   cfg: PaceConfig,
-): number {
-  const { windowMs, maxTurns, burstWindowMs, burstMaxTurns, burstAllowance, ceilingMs } = cfg;
-  const count = timestamps.length;
-
-  let hardWait = 0;
-  if (maxTurns > 0 && windowMs > 0 && count >= maxTurns) {
-    hardWait = Math.max(1000, timestamps[count - maxTurns] + windowMs - now);
+): PaceResult {
+  if (cfg.maxTurns <= 0 || cfg.windowMs <= 0 || !Number.isFinite(now)) {
+    return { waitMs: 0, cause: "ready" };
   }
 
-  let burstCount = 0;
-  for (let i = timestamps.length - 1; i >= 0; i--) {
-    if (now - timestamps[i] < burstWindowMs) burstCount++;
-    else break;
-  }
-  if (burstMaxTurns > 0 && burstWindowMs > 0 && burstCount >= burstMaxTurns) {
-    const burstOldest = timestamps[count - burstCount];
-    hardWait = Math.max(hardWait, Math.max(1000, burstOldest + burstWindowMs - now));
+  const intervalMs = cfg.windowMs / cfg.maxTurns;
+  const toleranceMs = Math.max(0, cfg.burstAllowance) * intervalMs;
+
+  // Strict lower boundary: an entry exactly `windowMs` old has left the window.
+  const live = timestamps.filter(
+    (t) => Number.isFinite(t) && t > now - cfg.windowMs && t <= now,
+  );
+
+  // Layer A — sustained hard window.
+  let sustainedWaitMs = 0;
+  if (live.length >= cfg.maxTurns) {
+    sustainedWaitMs = Math.max(0, live[live.length - cfg.maxTurns] + cfg.windowMs - now);
   }
 
-  let softWait = 0;
-  if (count > 0 && maxTurns > count && windowMs > 0 && burstAllowance > 0) {
-    const oldest = timestamps[0];
-    const ideal = (now - oldest) / (windowMs / maxTurns);
-    const debt = count - ideal;
-    if (debt > 0) {
-      const amortized = (oldest + windowMs - now) / (maxTurns - count);
-      const pace = Math.min(amortized * Math.min(1, debt / burstAllowance), ceilingMs);
-      const sinceLast = lastDispatch > 0 ? now - lastDispatch : 0;
-      softWait = Math.max(0, pace - sinceLast);
+  // Layer A — burst hard window.
+  let burstWaitMs = 0;
+  if (cfg.burstMaxTurns > 0 && cfg.burstWindowMs > 0) {
+    const burstLive = live.filter((t) => t > now - cfg.burstWindowMs);
+    if (burstLive.length >= cfg.burstMaxTurns) {
+      burstWaitMs = Math.max(0, burstLive[burstLive.length - cfg.burstMaxTurns] + cfg.burstWindowMs - now);
     }
   }
 
-  return Math.max(hardWait, softWait);
+  // Layer B — GCRA virtual schedule.
+  const gcraWaitMs = Math.max(0, tat - toleranceMs - now);
+
+  // Layer C — minimum wire spacing.
+  const spacingWaitMs =
+    lastDispatch > 0 ? Math.max(0, cfg.minSpacingMs - (now - lastDispatch)) : 0;
+
+  // Attribute the cause on the RAW components (before ceiling) to avoid the
+  // `Math.ceil(raw) === rawFloat` misattribution bug.
+  const components: ReadonlyArray<readonly [PaceCause, number]> = [
+    ["sustained-window", sustainedWaitMs],
+    ["burst-window", burstWaitMs],
+    ["sustained-gcra", gcraWaitMs],
+    ["minimum-spacing", spacingWaitMs],
+  ];
+  let cause: PaceCause = "ready";
+  let rawMax = 0;
+  for (const [c, v] of components) {
+    if (v > rawMax) {
+      rawMax = v;
+      cause = c;
+    }
+  }
+
+  return { waitMs: Math.ceil(Math.max(0, rawMax)), cause };
 }
 
 export function getGovernorState(): {
@@ -681,10 +760,17 @@ export function getGovernorState(): {
   const statusBurst: "safe" | "guarded" | "danger" =
     burstCount >= burstMax ? "danger" : burstCount >= Math.max(1, burstAllowance) ? "guarded" : "safe";
 
-  // Two-layer governor: the 60m bucket governs turns via `turnPaceWait` (hard dual
-  // sliding-window caps + proportional-taper soft pacing). `currentDelayMs` is the
-  // live remaining wait until the next admissible dispatch.
-  const sustainedDelayMs = turnPaceWait(recentTurnTimestamps, now, lastTurnDispatchedAt, cfg);
+  // Governor: the 60m horizon governs turns via `turnPaceWait` (hard dual
+  // sliding-window caps + GCRA virtual schedule). `currentDelayMs` is the live
+  // remaining wait until the next admissible dispatch. This call is read-only —
+  // it must never advance the GCRA TAT.
+  const sustainedDelayMs = turnPaceWait(
+    recentTurnTimestamps,
+    now,
+    lastTurnDispatchedAt,
+    sustainedTatMs,
+    cfg,
+  ).waitMs;
 
   const freshSessions10m = getNewSessionsInWindow(TEN_MINUTE_MS, now);
   const freshSessions60m = getNewSessionsInWindow(sustainedWindowMs, now);
@@ -797,21 +883,27 @@ async function processTurnQueue(): Promise<void> {
       recentTurnTimestamps = recentTurnTimestamps.filter((t) => now - t < sustainedWindowMs);
       const sustainedCount = recentTurnTimestamps.length;
 
-      // Two-layer governor: hard dual sliding-window caps (60m / 60s) plus the
-      // proportional-taper soft pace. The first turn of a burst is immediate; after
-      // that the combined wait is the outstanding hard drain or soft interval, whichever
-      // is larger, floored by the minimum wire spacing below.
-      const paceDelayMs = turnPaceWait(recentTurnTimestamps, now, lastTurnDispatchedAt, cfg);
+      // Governor: exact hard dual sliding-window caps (60m / 60s) + GCRA virtual
+      // schedule. GCRA paces continuously from the first turn above the sustainable
+      // rate — no idle-gap dormancy, no bypass at the cap. The loop re-evaluates from
+      // fresh `Date.now()` after every sleep; the wait is never added blindly.
+      const pace = turnPaceWait(
+        recentTurnTimestamps,
+        now,
+        lastTurnDispatchedAt,
+        sustainedTatMs,
+        cfg,
+      );
+      const paceDelayMs = pace.waitMs;
 
-      const minSpacingMs = Number(process.env.M365_MIN_TURN_SPACING_MS ?? 1500);
       const timeSinceLast = lastTurnDispatchedAt > 0 ? now - lastTurnDispatchedAt : Infinity;
-      const spacingDelayMs = Math.max(0, minSpacingMs - timeSinceLast);
+      const spacingDelayMs = Math.max(0, cfg.minSpacingMs - timeSinceLast);
       const totalWaitMs = Math.max(paceDelayMs, spacingDelayMs);
 
       if (totalWaitMs > 0) {
         if (paceDelayMs > 0) {
           log.info(
-            `Velocity governor active: ${sustainedCount}/${sustainedMax} (60m) — progressive pacing by ${(totalWaitMs / 1000).toFixed(1)}s`,
+            `Velocity governor active: ${sustainedCount}/${sustainedMax} (60m) — pacing by ${(totalWaitMs / 1000).toFixed(1)}s (${pace.cause})`,
           );
         }
         head.waitedMs = (head.waitedMs ?? 0) + totalWaitMs;
@@ -861,9 +953,15 @@ async function processTurnQueue(): Promise<void> {
       const dispatchTime = Date.now();
       recentTurnTimestamps.push(dispatchTime);
       lastTurnDispatchedAt = dispatchTime;
+      // Advance the GCRA virtual schedule exactly once, atomically with the dispatch.
+      sustainedTatMs = advanceTatAfterDispatch(
+        sustainedTatMs,
+        dispatchTime,
+        cfg.windowMs / Math.max(1, cfg.maxTurns),
+      );
       const recordedDelay = head.waitedMs ?? totalWaitMs;
       const delayCause = paceDelayMs >= spacingDelayMs && paceDelayMs > 0
-        ? "sustained"
+        ? pace.cause
         : spacingDelayMs > 0
           ? "minimum-spacing"
           : "none";
@@ -891,6 +989,14 @@ export async function paceTurnVelocity(
     recordTurn(now, 0);
     recentTurnTimestamps.push(now);
     lastTurnDispatchedAt = now;
+    // Keep the GCRA virtual schedule consistent on the bypass path, otherwise a later
+    // re-enable would see a stale (too-low) TAT and under-pace.
+    sustainedTatMs = advanceTatAfterDispatch(
+      sustainedTatMs,
+      now,
+      Number(process.env.M365_SUSTAINED_WINDOW_MS ?? 3_600_000) / Math.max(1, sustainedMax || 110),
+    );
+    scheduleStateSave();
     return 0;
   }
 

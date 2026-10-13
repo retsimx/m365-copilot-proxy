@@ -771,7 +771,7 @@ describe("Two-layer Velocity Governor (paceTurnVelocity)", () => {
   }
 
   // --- load-bearing landing-time property ---
-  it("lands the 110th turn before 60 min (close to it) and the 111th at the window boundary", async () => {
+  it("lands the 111th turn at the 60 min window boundary (GCRA front-loads a bounded burst)", async () => {
     vi.useFakeTimers();
     const times = await runSustainedTurns(111);
     expect(times).toHaveLength(111);
@@ -779,8 +779,11 @@ describe("Two-layer Velocity Governor (paceTurnVelocity)", () => {
     const turn111 = times[110];
     // eslint-disable-next-line no-console
     console.log(`[pacing] turn110=${Math.round(turn110)}ms turn111=${Math.round(turn111)}ms`);
-    expect(turn110).toBeGreaterThanOrEqual(3_450_000);
+    // GCRA + a 6-turn burst allowance front-loads up to 7 turns at min-spacing, so the
+    // 110th turn can land before the naive (110·T) point — but still inside the window.
+    expect(turn110).toBeGreaterThanOrEqual(3_300_000);
     expect(turn110).toBeLessThanOrEqual(3_600_000);
+    // The 111th turn cannot dispatch before the sustained window boundary.
     expect(turn111).toBeGreaterThanOrEqual(3_590_000);
     expect(turn111).toBeLessThanOrEqual(3_600_000);
   });
@@ -816,13 +819,22 @@ describe("Two-layer Velocity Governor (paceTurnVelocity)", () => {
     expect(max).toBeLessThanOrEqual(8);
   });
 
-  // --- smoothness: no fast/slow chatter ---
-  it("paces smoothly: inter-dispatch intervals are monotonically non-decreasing over the first 20 turns", async () => {
+  // --- smoothness: ramp to T then hold it (no fast/slow chatter) ---
+  it("paces smoothly: intervals ramp to the sustainable rate and then hold it", async () => {
     vi.useFakeTimers();
     const times = await runSustainedTurns(25);
     const intervals = times.slice(1, 21).map((t, i) => t - times[i]);
+    const T = 3_600_000 / 110;
     for (let i = 1; i < intervals.length; i++) {
-      expect(intervals[i]).toBeGreaterThanOrEqual(intervals[i - 1] - 1e-6);
+      // non-decreasing up to the sustainable interval (3 ms tolerance for ceil rounding)
+      expect(intervals[i]).toBeGreaterThanOrEqual(intervals[i - 1] - 3);
+      // never overshoots the sustainable pace (no cliff / no big spike within T)
+      expect(intervals[i]).toBeLessThanOrEqual(T + 3);
+    }
+    // the tail settles at the sustainable interval
+    for (const iv of intervals.slice(-5)) {
+      expect(iv).toBeGreaterThanOrEqual(T - 3);
+      expect(iv).toBeLessThanOrEqual(T + 3);
     }
   });
 
@@ -886,31 +898,31 @@ describe("turnPaceWait (pure function)", () => {
     burstWindowMs: 60_000,
     burstMaxTurns: 8,
     burstAllowance: 6,
-    ceilingMs: 45_000,
+    minSpacingMs: 1_500,
   };
 
   it("returns the exact sustained drain-wait when the 60m window is full", () => {
     const now = 10_000_000;
     // 110 timestamps spanning the last 3_500_000 ms: oldest drains at now + 100_000.
     const ts = Array.from({ length: 110 }, (_, i) => now - 3_500_000 + i * 1000);
-    expect(turnPaceWait(ts, now, now - 1000, cfg)).toBe(100_000);
+    const r = turnPaceWait(ts, now, now - 1000, 0, cfg);
+    expect(r.waitMs).toBe(100_000);
+    expect(r.cause).toBe("sustained-window");
   });
 
   it("returns the exact burst drain-wait when the 60s window is full", () => {
     const now = 5_000_000;
     // 8 timestamps inside 60s: the oldest drains at now + 52_000.
     const ts = Array.from({ length: 8 }, (_, i) => now - 8_000 + i * 100);
-    expect(turnPaceWait(ts, now, now - 100, cfg)).toBe(52_000);
+    const r = turnPaceWait(ts, now, now - 100, 0, cfg);
+    expect(r.waitMs).toBe(52_000);
+    expect(r.cause).toBe("burst-window");
   });
 
-  it("tapers: the pace is non-zero and grows with the window's dispatch count", () => {
-    const now = 50_000_000;
-    const ts = (k: number) => Array.from({ length: k }, (_, i) => now - (k - 1 - i) * 1000);
-    const w1 = turnPaceWait(ts(1), now, now, cfg);
-    const w5 = turnPaceWait(ts(5), now, now, cfg);
-    expect(w1).toBeGreaterThan(0);
-    expect(w5).toBeGreaterThan(w1);
-    expect(w1).toBeLessThan(cfg.ceilingMs);
+  it("returns 0 and cause 'ready' for an empty log with a spent GCRA schedule", () => {
+    const r = turnPaceWait([], 1_000_000, 0, 0, cfg);
+    expect(r.waitMs).toBe(0);
+    expect(r.cause).toBe("ready");
   });
 });
 

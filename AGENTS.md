@@ -215,13 +215,18 @@ pnpm test:live      # M365_LIVE=1; live tests that hit real M365 (uses quota)
   (OpenCode, Pi) automatically pause and retry without aborting the turn.
 - **Two-Layer Turn Governor & Priority FIFO Gatekeeper (`paceTurnVelocity`):** Turn pacing is a hard
   dual sliding-window dispatch log — `<=110` per trailing 60m and `<=8` per trailing 60s, both
-  timestamp-exact — layered with a proportional-taper soft pace (`debt = count - ideal`, capped at
-  `M365_PACE_CEILING_MS = 45000`) that resists as the window fills, before the hard caps are reached.
-  The old 35/10m burst bucket is **removed** (the remote tolerates ~10–17/min); the 10m turn count is
-  informational only. All backend turns serialize through a live-recalculating FIFO queue, enforce a
-  minimum 1500ms wire spacing (`M365_MIN_TURN_SPACING_MS = 1500`) to prevent thundering herd bursts,
-  and forcing retries (`attempt > 0`) queue with `{ priority: true }`, jumping ahead of normal turns
-  while preserving FIFO among retries. See F37.
+  timestamp-exact — layered with a **GCRA virtual schedule** (a persistent theoretical-arrival-time;
+  admissible when `now >= tat - tau`, `tau = M365_PACE_BURST_ALLOWANCE(6) * window/max`) that paces
+  continuously from the first turn above the sustainable rate. It is **lossless** (never returns 429)
+  and does **not** go dormant after idle gaps. This replaced the F37 proportional-taper, whose debt was
+  measured from the window's *oldest* entry: after an ~11-min idle gap it read `debt <= 0` and applied
+  **zero** pacing for 45 min while the account refilled at ~2.1/min, packing the window and producing a
+  **630.8 s stall** on 2026-10-13 (see F38). The old 35/10m burst bucket is **removed** (the remote
+  tolerates ~10–17/min); the 10m turn count is informational only. All backend turns serialize through a
+  live-recalculating FIFO queue, enforce a minimum 1500ms wire spacing (`M365_MIN_TURN_SPACING_MS = 1500`)
+  to prevent thundering herd bursts, and forcing retries (`attempt > 0`) queue with `{ priority: true }`,
+  jumping ahead of normal turns while preserving FIFO among retries — priority cannot bypass the GCRA
+  schedule or either hard window. See F37/F38.
 - **New Session Stagger Queue:** The proxy enforces a 15-second spacing queue for initial turns
   (`turn === 0`, `M365_NEW_SESSION_SPACING_MS = 15000`), capping fresh session creation to 4/min to
   prevent parallel dispatch drops while follow-up turns (`turn > 0`) run unthrottled.

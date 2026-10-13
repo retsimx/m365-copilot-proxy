@@ -94,7 +94,6 @@ export interface SystemMetricsConfig {
   burstWindowMs: number;
   burstMaxTurns: number;
   paceBurstAllowance: number;
-  paceCeilingMs: number;
   sustainedWindowMs: number;
   sustainedMaxTurns: number;
   sustainedWarnTurns: number;
@@ -138,7 +137,6 @@ export function getSystemMetricsConfig(): SystemMetricsConfig {
     burstWindowMs: Number(process.env.M365_BURST_WINDOW_MS ?? 60_000),
     burstMaxTurns: Number(process.env.M365_BURST_MAX_TURNS ?? 8),
     paceBurstAllowance: Number(process.env.M365_PACE_BURST_ALLOWANCE ?? 6),
-    paceCeilingMs: Number(process.env.M365_PACE_CEILING_MS ?? 45_000),
     sustainedWindowMs: Number(process.env.M365_SUSTAINED_WINDOW_MS ?? 3_600_000),
     sustainedMaxTurns,
     sustainedWarnTurns,
