@@ -2686,8 +2686,8 @@ surfacing as empty handshakes (`answer length: 0`) rather than `Disengaged`.
     - 62m 09s: 🟢 HTTP 200 `PONG` (fully recovered).
   - Probes during the throttle window do **not** reset the recovery timer, confirming a pure rolling leaky bucket.
 - **Shipped (`packages/core/src/session.ts` & `packages/proxy-lib/src/handler.ts`):**
-  - **Differentiated Reactive Backoff:** `PerUserThrottled` arms an empirically calibrated 65-minute (`3900s`) cooldown (`M365_USER_THROTTLE_COOLDOWN_SEC`), while `PerScenarioThrottled` keeps 30 minutes (`1800s`).
-  - **Sliding-Window Velocity Governor (`paceTurnVelocity`):** Tracks rolling turn timestamps across a 10-minute sliding window (`M365_VELOCITY_WINDOW_MS=600000`). For normal loads under 15 turns / 10m (~1.5 turns/min), delay is **0ms**. When sustained heavy load reaches the 15-turn threshold, the governor introduces dynamic pacing to let the window drain, proactively preventing `PerUserThrottled` from tripping without penalizing normal workloads.
+  - **Differentiated Reactive Backoff:** `PerUserThrottled` arms an empirically calibrated 65-minute (`3900s`) cooldown (`M365_USER_THROTTLE_COOLDOWN_SEC`), while `PerScenarioThrottled` keeps 30 minutes (`1800s`). *(Superseded 2026-10-13: the flat 3900s user cooldown is now the escalating probe ladder 20m → 40m → 65m — see the F34 correction and F37.)*
+  - **Sliding-Window Velocity Governor (`paceTurnVelocity`):** Tracks rolling turn timestamps across a 10-minute sliding window (`M365_VELOCITY_WINDOW_MS=600000`). For normal loads under 15 turns / 10m (~1.5 turns/min), delay is **0ms**. When sustained heavy load reaches the 15-turn threshold, the governor introduces dynamic pacing to let the window drain, proactively preventing `PerUserThrottled` from tripping without penalizing normal workloads. *(Superseded by F33, then F37 — the current governor is a timestamp-exact two-layer design.)*
 
 ### F32 — Continuous Token Bucket Session Governor for PerScenarioThrottled Prevention 🟢
 
@@ -2698,6 +2698,11 @@ surfacing as empty handshakes (`answer length: 0`) rather than `Disengaged`.
   - Layer 2 (Continuous Refill): Tokens replenish at 1 token every 150 seconds (`M365_SESSION_REFILL_MS=150000`). Once the burst is consumed, subsequent session starts are naturally held in queue until tokens refill, mathematically guaranteeing that the upstream conversation token bucket is never exhausted.
 
 ### F33 — Dual-Horizon Progressive Leaky Bucket Governor (35-Turn Burst & 120-Turn Sustained) 🟢
+
+> **Superseded 2026-10-13 by F37.** The dual-horizon count-based ramps below (35/10m burst +
+> 120/hr sustained) were replaced by a **timestamp-exact two-layer governor** (110/60m and 8/60s
+> hard windows + proportional taper). Kept for the historical record; F37 explains why the count
+> signal was wrong.
 
 - **Empirical Grounding:** Analyzing production windows leading to the `PerUserThrottled` lockout revealed that Microsoft easily tolerated bursts of **40–45 turns in 10 minutes** (4.5 turns/min) without throttling. The lockout occurred only after sustaining **164 turns over 60 minutes** (2.73 turns/min).
 - **Limitation of Static 15-Turn Limit:** A flat 15-turn ceiling in 10m clamped at only ~33% of Microsoft's true burst capacity, and inflicted a jarring 7-minute freeze on multi-subagent workflows.
@@ -2715,7 +2720,7 @@ surfacing as empty handshakes (`answer length: 0`) rather than `Disengaged`.
 
 - **Empirical Confirmation of the 120 Turns / 60m Account Ceiling:**
   - Sustained load testing across parallel subagents confirmed the hard volume limit: Microsoft throttles user accounts with `PerUserThrottled` when turn velocity exceeds 120 turns in a rolling 60-minute window.
-  - Cooldown probing demonstrates that a 20-minute (1200s) quiet window allows the leaky bucket to drain sufficiently for safe resumption. Consequently, the default `M365_USER_THROTTLE_COOLDOWN_SEC` has been calibrated down from 3900s (65m) to **1200s (20m)**.
+  - **Corrected 2026-10-13.** The earlier claim that "a 20-minute (1200s) quiet window allows the leaky bucket to drain sufficiently" was WRONG and contradicted F31's direct recovery probe (53m20s / 59m19s / 60m24s all still 🔴 429; 62m09s 🟢 recovered). Production corroborates F31: the proxy resumed after its 20-min cooldown and the account re-throttled **42–61 min later** (see the 2026-10-12 throttle-cluster analysis). The flat 1200s cooldown was wrongly calibrated 3900s → 1200s here; it is restored to an escalating probe ladder **20m → 40m → 65m** (`M365_USER_THROTTLE_PROBE_SEC="1200,2400,3900"`, ceiling 3900s) — F31 also shows probes do NOT reset the timer, so probing is safe.
   - **Contingency Note:** If the 120 turns/60m ceiling ever trips again under strict serialization, upstream reasoning/thinking tokens (DeepLeo CoT generation) may factor into Microsoft's internal token budget, requiring a reduction of the sustained threshold to 110–115 turns/hr.
 - **Root Cause Analysis — Thundering Herd Race Condition:**
   - Under the previous barrier-based `paceTurnVelocity` implementation, multiple concurrent turns evaluated sliding window timestamps at entry nearly simultaneously.
@@ -3056,6 +3061,53 @@ with production bursts layered on sustained volume; whether any per-model allowa
 
 **Evidence paths.** `scripts/bench/throughput-out/mt2-20261010T1847Z/`; runner
 `scripts/bench/throughput_threshold.py`; patch `proxy-experiment-mode-and-telemetry.patch` (applies to `a9b154f`).
+
+
+
+---
+
+### F37 — Two-Layer Turn Governor: hard dual-window log + proportional taper 🟢 (2026-10-13)
+
+**Claim.** Turn pacing should be governed by a **timestamp-exact sliding-window log**, not a
+count-based ramp. The shipped governor has two layers: **(A)** a **hard dual sliding-window log**
+(`<=110` dispatches in any trailing 60 m; `<=8` in any trailing 60 s) whose wait is the exact drain
+time until the violated window's oldest entry leaves; and **(B)** a **proportional-taper soft pace**
+that resists smoothly as the window fills, before the hard caps are hit.
+
+**Empirical grounds.**
+- **Count is the wrong control signal** for a rolling-window cap. The same `count60` can imply
+  wildly different safe intervals: 100 turns **spread evenly** across the hour each exit soon →
+  safe pace ≈ 36 s/turn; 100 turns **all in the last 5 min** exit together in 55 min → must pace
+  ≈ 5.5 min/turn. Only the timestamp lookback `next >= (L-th newest turn) + W` distinguishes them;
+  a `pace = f(count60)` rule mis-paces one case or the other.
+- **The old count-based ramps applied zero friction below the warn**, letting the proxy spend ~90
+  turns in ~2 min at min-spacing (~40/min). The remote saw a burst, and because its counter is
+  **account-wide** while we count only our own share, this is a plausible cause of past
+  `PerUserThrottled` trips.
+- **The remote's burst ceiling is ~10–17/min** (~9/min safely tolerated) — see
+  [`docs/plans/designs/pacing-expert-brief.md`](plans/designs/pacing-expert-brief.md). The old
+  10-minute bucket at 35/10m (= 3.5/min) was ~3–5× over-conservative and bit on long-horizon tasks.
+
+**Conservation law (why there is no free burst).** A rolling-window cap is a budget: any burst is
+repaid inside the same window as a stall or a taper; a burst is only "free" when the window is
+idle. Simulation: an 8-turn burst at 1.5 s saves `8 × (32.7 − 1.5) ≈ 250 s`, which reappears as a
+~262 s stall when the window hits 110 at 55.6 min instead of 60 — the taper spreads this smoothly
+(110 lands ~58.6 min, ~45 s max interval, no cliff). A **token bucket** (capacity C + refill
+`window/max`) was considered and rejected: it yields a stable 32.7 s steady state and a bounded
+burst, but the burst is still repaid as a stall under sustained load, and it overlaps/duplicates
+the burst-window lookback.
+
+**The invariant.** Steady-state sustained rate = `window/max = 3600/110 ≈ 32.7 s/turn` (110/hr).
+
+**Shipped (`packages/proxy-lib/src/handler.ts`, `turnPaceWait`).**
+- **Layer A — hard dual sliding-window log:** `<=110` dispatches in any trailing `M365_SUSTAINED_WINDOW_MS` (= 3600000, 60 m) and `<=8` in any trailing `M365_BURST_WINDOW_MS` (= 60000, 60 s), both timestamp-based. When full, `hardWait = max(1 s, oldest-in-window + W − now)`.
+- **Layer B — proportional-taper soft pacing:** `debt = count − (now−oldest)/(window/max)`; `amortized = (oldest+window−now)/(max−count)`; `pace = amortized × min(1, debt/burstAllowance)` capped at `ceilingMs`; `softWait = max(0, pace − sinceLast)`. Returns `max(hardWait, softWait)`, floored by the 1500 ms min-spacing.
+- **Knobs:** `M365_SUSTAINED_MAX_TURNS=110`, `M365_SUSTAINED_WINDOW_MS=3600000`, `M365_BURST_WINDOW_MS=60000`, `M365_BURST_MAX_TURNS=8`, `M365_PACE_BURST_ALLOWANCE=6`, `M365_PACE_CEILING_MS=45000`.
+- **Removed:** the old 10-minute burst bucket (35/10m). The 10m turn count is now **informational only** (dashboard "Turn rate · 10m"); the governor's hard windows are 60 m and 60 s.
+- **Unchanged:** Priority FIFO serialization + 1500 ms wire spacing (`M365_MIN_TURN_SPACING_MS`), forcing-retry priority (`attempt > 0`), live recalculation at dispatch (F34).
+
+**Related.** Supersedes F33's dual-horizon ramps; extends F34's Priority FIFO gatekeeper; the
+sustained cap remains the conservative local policy bounded by F35/F36 (125 and 135 both tripped).
 
 
 

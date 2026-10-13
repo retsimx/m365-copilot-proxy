@@ -153,11 +153,13 @@ prompt is tuned. The layers, in handler order:
   while follow-up turns (`turn > 0`) proceed unthrottled without delay.
 - **Circuit Breaker Local Shielding & HTTP 429 Rate Limiting:** When upstream throttling
   (`PerScenarioThrottled` or `PerUserThrottled`) or repeated empties across **distinct conversations** are detected,
-  the proxy arms a cooldown (1800s default for scenario throttling, 1200s for user throttling). While active,
-  the proxy intercepts requests locally and returns **`HTTP 429 Too Many Requests`** with a client header capped
-  at **`Retry-After: 60`** (`M365_MAX_RETRY_AFTER_SEC = 60`), sending **zero traffic to Microsoft** so the upstream
-  token bucket recharges. Standard OpenAI clients (OpenCode, Pi) auto-pause and loop their retry timers cleanly
-  without aborting the turn.
+  the proxy arms a cooldown (1800s for `PerScenarioThrottled`; for `PerUserThrottled` an escalating probe ladder
+  20m → 40m → 65m, `M365_USER_THROTTLE_PROBE_SEC = "1200,2400,3900"`). Each window's expiry is a safe probe
+  opportunity and a clean response resets the ladder — per F31, probes do not reset the account's rolling recovery
+  timer. While active, the proxy intercepts requests locally and returns **`HTTP 429 Too Many Requests`** with a
+  client header capped at **`Retry-After: 60`** (`M365_MAX_RETRY_AFTER_SEC = 60`), sending **zero traffic to
+  Microsoft** so the upstream token bucket recharges. Standard OpenAI clients (OpenCode, Pi) auto-pause and loop
+  their retry timers cleanly without aborting the turn.
 
 > The JSON tool format and the few-shot block were **removed** this cycle (0/5 on real
 > agentic tasks). Tool calling is fenced-only; behavioural framing lives in the per-request
@@ -165,7 +167,7 @@ prompt is tuned. The layers, in handler order:
 
 ## Fenced-parsing hardening (Oct 2026)
 
-Real Claude tool-shapes exposed four parser gaps, all fixed in `packages/core/src/fenced.ts`:
+Real Claude tool-shapes exposed five parser gaps, all fixed in `packages/core/src/fenced.ts`:
 
 - **Glued / mid-line fence openers.** M365 emits `prose```read` (the opener glued to the end of
   a prose line). The streaming prose-gate matched only *own-line* fences, so the fence — and
@@ -184,6 +186,13 @@ Real Claude tool-shapes exposed four parser gaps, all fixed in `packages/core/sr
   prose was long (`prose.length >= 350`), so a legit "prose + ```` ```bash ```` + prose" reply was
   returned as text. The length heuristic was removed; only document-level signals (≥4 fences, or
   tutorial headings) downgrade now.
+- **Quoted ` ``` ` inside a shell body.** `restoreM365Fences` Pass 2 split a ` ``` ` **inside a
+  quoted shell argument** (`grep -q '```suggestion' "$OUT"`) as M365's glued closing fence,
+  truncating the command and tripping the post-fence guard abort (live 2026-10-12, cid
+  `c3f86119`). The mid-line scan is now **quote-aware for shell blocks**
+  (`indexOfUnquotedBackticks`): a ` ``` ` inside `'…'`/`"…"` is data, never a closing fence. Bug
+  report `.agents/results/bugs/bug-20261012-fenced-quoted-backticks.md`; guardrail
+  [`checklists/fenced-parsing.md`](checklists/fenced-parsing.md).
 
 Also: **self-authored result simulation** is rejected — the stripper matches `<tool_output>` as
 well as the legacy `<tool_response>` (salvage the real call, drop the fabricated suffix, reset

@@ -62,6 +62,12 @@ These are what actually move compliance. In rough order of importance:
    (```` ```bash ```` or ```` ```shell ```` fences) for the user to execute eliminates the
    refusal reflex across all active models (GPT-6 Astra, GPT-5.6, GPT-5.5, Claude Sonnet,
    and even recovers the default `magic` tone to 100% tool-call compliance). ([hyp §18, §19].)
+10. **Write + confirm — a silent write is success.** Agent/orchestrator configs require a file
+   write to be followed by a one-line confirmation (`wc -l '<path>'` or `wc -c '<path>'`) and
+   state that *"a file write prints nothing; a silent result is success — do not repeat the
+   write."* Without it a silent `cat >` returns `(no output)`, which the model reads as failure
+   and answers by re-writing the file; the confirmation line gives it visible evidence the file
+   exists and is non-empty. (Session 2026-10-13; opencode `m365*` agent configs.)
 
 ## What does NOT work (confirmed dead-ends — don't re-litigate)
 

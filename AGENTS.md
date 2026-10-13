@@ -41,14 +41,18 @@ Hard-won defaults for working on this proxy. Internalize these before touching a
      a 30-minute (1800s) cooldown. The proxy enforces a continuous token bucket + 15s stagger queue for
      fresh conversations (`turn === 0`) to cap thread creation at 4/min.
    - **Hourly turn volume (`PerUserThrottled`):** Tracks total turns dispatched across the account.
-    The proxy's local ~115 turns / 60-minute rolling cap is **conservative local policy, not a
-    confirmed Microsoft threshold** (see hypotheses F35/F36; deployed cap is now **115** — the conservative default; 125 and 135 both tripped upstream on 2026-10-11/12): a 2026-10 campaign ran 151 turns
+    The proxy's local ~110 turns / 60-minute rolling cap is **conservative local policy, not a
+    confirmed Microsoft threshold** (see hypotheses F35/F36/F37): a 2026-10 campaign ran 151 turns
      (~120/hr) per model for 75 min with no throttle, while a separate smoke tripped `PerUserThrottled`
-     at ~140 account turns/60m and blocked **both** models (existing and fresh conversations). Tripping
-     it arms a 20-minute (1200s) cooldown (`M365_USER_THROTTLE_COOLDOWN_SEC`). The proxy protects this
-     with a Dual-Horizon Progressive Leaky Bucket and a serialized Priority FIFO Turn Gatekeeper
+     at ~140 account turns/60m and blocked **both** models (existing and fresh conversations); 125 and
+     135 both tripped upstream on 2026-10-11/12. Tripping
+     it arms an escalating probe ladder — 20m → 40m → 65m (`M365_USER_THROTTLE_PROBE_SEC="1200,2400,3900"`).
+     Full recovery needs ~62 min of quiet (F31) and probes do not reset the timer, so each window's expiry is a
+     safe probe opportunity. The proxy protects this with a **Two-Layer Turn Governor** (a hard dual
+     sliding-window dispatch log — 110/60m and 8/60s, timestamp-exact — plus a proportional-taper soft
+     pace) and a serialized Priority FIFO Turn Gatekeeper
      (`paceTurnVelocity`) with 1500ms minimum turn spacing (`M365_MIN_TURN_SPACING_MS = 1500`), where
-     forcing retries jump to the head of the queue.
+     forcing retries jump to the head of the queue. See F37.
    Never fire concurrent requests, and never loop fresh conversations back-to-back. Space experiment
    runs out (generous cooldowns between threads). A real pi/openclaw session — one long thread, many
    messages — is cheap; it's our *experiments* (a new thread per task) or unthrottled subagents that
@@ -196,22 +200,28 @@ pnpm test:live      # M365_LIVE=1; live tests that hit real M365 (uses quota)
   - **Hourly turn volume (`PerUserThrottled`, docs/hypotheses.md §17 F31/F34; F35):** Microsoft
     enforces an **account-wide** turn-volume ceiling shared by all models (observed 2026-10: throttling
     Sonnet blocked GPT-5.6 on both existing and fresh conversations). The exact ceiling is **not pinned**;
-    the sustained cap is **conservative local policy** (currently deployed at **115** turns/60m — the code default; 125 and 135 both tripped upstream on 2026-10-11/12; F36), not a confirmed upstream number.
+    the sustained cap is **conservative local policy** (currently deployed at **110** turns/60m — the code default; 125 and 135 both tripped upstream on 2026-10-11/12; F36/F37), not a confirmed upstream number.
   - **Before raising local burst/sustained caps:** monitor queue delay, achieved turn rate, retries and
     explicit throttles on `/api/metrics`, ideally split by model and agent attachment, and only raise
     limits if pacing materially delays real work — validating on the tool-enabled path. See
     `docs/m365-copilot-api.md` §7 "Monitoring before changing throughput".
 - **The proxy features a Local Circuit Breaker Shield.** When upstream throttling (`PerScenarioThrottled`
   or `PerUserThrottled`) or repeated empty responses across conversations are detected, the proxy arms
-  a cooldown (1800s for `PerScenarioThrottled`, 1200s for `PerUserThrottled`). The proxy intercepts
+  a cooldown (1800s for `PerScenarioThrottled`; for `PerUserThrottled` an escalating probe schedule
+  20m → 40m → 65m, `M365_USER_THROTTLE_PROBE_SEC="1200,2400,3900"` — F31: probes are safe). The proxy intercepts
   subsequent requests locally and returns **`HTTP 429 Too Many Requests`** with a client header capped at
   **`Retry-After: 60`** (`M365_MAX_RETRY_AFTER_SEC`). This sends **zero traffic to Microsoft** during
   the cooldown window, allowing Microsoft's token bucket to recharge while standard OpenAI clients
   (OpenCode, Pi) automatically pause and retry without aborting the turn.
-- **Priority FIFO Turn Gatekeeper & Wire Pacing (`paceTurnVelocity`):** Serializes all backend turns
-  through a live-recalculating FIFO queue. Turns enforce a minimum 1500ms wire spacing
-  (`M365_MIN_TURN_SPACING_MS = 1500`) to prevent thundering herd bursts. Forcing retries (`attempt > 0`)
-  queue with `{ priority: true }`, jumping ahead of normal turns while preserving FIFO among retries.
+- **Two-Layer Turn Governor & Priority FIFO Gatekeeper (`paceTurnVelocity`):** Turn pacing is a hard
+  dual sliding-window dispatch log — `<=110` per trailing 60m and `<=8` per trailing 60s, both
+  timestamp-exact — layered with a proportional-taper soft pace (`debt = count - ideal`, capped at
+  `M365_PACE_CEILING_MS = 45000`) that resists as the window fills, before the hard caps are reached.
+  The old 35/10m burst bucket is **removed** (the remote tolerates ~10–17/min); the 10m turn count is
+  informational only. All backend turns serialize through a live-recalculating FIFO queue, enforce a
+  minimum 1500ms wire spacing (`M365_MIN_TURN_SPACING_MS = 1500`) to prevent thundering herd bursts,
+  and forcing retries (`attempt > 0`) queue with `{ priority: true }`, jumping ahead of normal turns
+  while preserving FIFO among retries. See F37.
 - **New Session Stagger Queue:** The proxy enforces a 15-second spacing queue for initial turns
   (`turn === 0`, `M365_NEW_SESSION_SPACING_MS = 15000`), capping fresh session creation to 4/min to
   prevent parallel dispatch drops while follow-up turns (`turn > 0`) run unthrottled.
