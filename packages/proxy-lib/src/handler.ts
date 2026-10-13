@@ -22,6 +22,7 @@ import {
   noteRequestOutcome,
   isDegradationBackoff,
   getRemainingDegradationCooldownMs,
+  getDegradationEscalationLevel,
   triggerDegradationBackoff,
   getImageArtifactToken,
   fetchImageBytes,
@@ -1190,10 +1191,10 @@ export async function handleChatCompletion(
         recordThrottle(Date.now(), errCode);
         const throttleSec =
           errCode === "PerUserThrottled"
-            ? Number(process.env.M365_USER_THROTTLE_COOLDOWN_SEC ?? 1200)
+            ? userThrottleProbeSec()
             : Number(process.env.M365_THROTTLE_COOLDOWN_SEC ?? 1800);
         const errMsg = copilotStream.result?.message ?? "We're currently experiencing high traffic. Please try again later.";
-        log.warn(`Upstream M365 rate limit detected: ${errCode} (${errMsg}) — arming ${throttleSec}s cooldown and fast-failing with 429`);
+        log.warn(`Upstream M365 rate limit detected: ${errCode} (${errMsg}) — arming ${throttleSec}s cooldown (probe escalation level ${getDegradationEscalationLevel() + 1}) and fast-failing with 429`);
         triggerDegradationBackoff(throttleSec * 1000, errCode);
         session.reset();
         return { error: degradationShieldResponse(throttleSec) };
@@ -1802,6 +1803,23 @@ function degradationShieldResponse(remainingSec: number): Response {
     },
     { "Retry-After": clientRetryAfterSec.toString() },
   );
+}
+
+/** PerUserThrottled cooldown, escalating per successive throttle episode.
+ *
+ *  F31 (docs/hypotheses.md) measured full upstream recovery at ~62 min of absolute quiet,
+ *  and that probes during the window do NOT reset the timer (a pure rolling leaky bucket).
+ *  So probing is SAFE, and this is a probe schedule: each throttle without an intervening
+ *  clean response steps to the next, longer quiet window; the window's expiry is the next
+ *  probe opportunity (the next real client request). A clean response resets the level.
+ *  Config: M365_USER_THROTTLE_PROBE_SEC="1200,2400,3900" (seconds). */
+function userThrottleProbeSec(): number {
+  const schedule = (process.env.M365_USER_THROTTLE_PROBE_SEC ?? "1200,2400,3900")
+    .split(",")
+    .map((s) => Number(s.trim()))
+    .filter((n) => Number.isFinite(n) && n > 0);
+  if (schedule.length === 0) return Number(process.env.M365_USER_THROTTLE_COOLDOWN_SEC ?? 3900);
+  return schedule[Math.min(getDegradationEscalationLevel(), schedule.length - 1)];
 }
 
 /** Terminal error returned when a model produces an empty response (e.g. daily quota / priority access exhausted).

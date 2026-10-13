@@ -179,6 +179,24 @@ describe("createBackoffController", () => {
     expect(controller.getRemainingCooldownMs()).toBe(15_000);
   });
 
+  it("escalates the raw level per arm() and survives window expiry (probe) until a clean response", () => {
+    const { controller, advance } = setup();
+    controller.arm(1_200_000, "PerUserThrottled"); // episode 1 -> 20m probe window
+    expect(controller.getRawLevel()).toBe(1);
+    expect(controller.getLevel()).toBe(1);
+
+    advance(1_200_001);                        // window elapses: this is the probe opportunity
+    expect(controller.getLevel()).toBe(0);     // masked once healthy (not backing off)...
+    expect(controller.getRawLevel()).toBe(1);  // ...but the escalation persists
+
+    controller.arm(2_400_000, "PerUserThrottled"); // failed probe -> episode 2 -> 40m
+    expect(controller.getRawLevel()).toBe(2);
+
+    controller.note(false, "c1");              // clean response resets the escalation
+    expect(controller.getRawLevel()).toBe(0);
+    expect(controller.getLevel()).toBe(0);
+  });
+
   it("passes reason to onTrigger when armed, and undefined when triggered via note", () => {
     const triggers: Array<{ distinctConversations: number; cooldownMs: number; level: number; reason?: string }> = [];
     const { controller } = setup({

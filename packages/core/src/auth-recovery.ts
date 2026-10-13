@@ -66,6 +66,9 @@ export interface BackoffController {
   getRemainingCooldownMs: () => number;
   /** Current backoff escalation level (0 if healthy). */
   getLevel: () => number;
+  /** Raw escalation level: persists across a cooldown expiry (survives the window) until a
+   *  clean response resets it — used to pick the next, longer probe window. */
+  getRawLevel: () => number;
   getReason: () => string | undefined;
 }
 
@@ -117,7 +120,11 @@ export function createBackoffController(opts: BackoffOptions): BackoffController
 
     arm(cooldownMs, reason) {
       const t = now();
-      level = Math.max(level, 1);
+      // Each arm is a new throttle episode (a clean response resets `level`), so the
+      // escalation climbs: the caller reads the level to pick the next probe window
+      // (20m -> 40m -> 65m). F31: probes do NOT reset the upstream timer, so probing is
+      // safe — a failed probe simply re-arms at the next, longer window.
+      level += 1;
       backoffUntil = Math.max(backoffUntil, t + cooldownMs);
       lastReason = reason;
       empties = [];
@@ -143,6 +150,10 @@ export function createBackoffController(opts: BackoffOptions): BackoffController
 
     getLevel() {
       return now() < backoffUntil ? level : 0;
+    },
+
+    getRawLevel() {
+      return level;
     },
 
     getReason() {
@@ -195,6 +206,13 @@ export function getRemainingDegradationCooldownMs(): number {
 export function getDegradationLevel(): number {
   if (disabled()) return 0;
   return defaultController.getLevel();
+}
+
+/** Escalation level that survives a cooldown expiry (reset only by a clean response) —
+ *  the index of the next probe window. See F31 probe escalation. */
+export function getDegradationEscalationLevel(): number {
+  if (disabled()) return 0;
+  return defaultController.getRawLevel();
 }
 
 export function getDegradationBackoffReason(): string | undefined {
