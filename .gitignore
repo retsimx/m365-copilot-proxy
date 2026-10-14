@@ -44,3 +44,7 @@ scripts/harness/out/
 
 # design + plan docs are session-local working notes; never published
 docs/plans/
+
+# local RE data + agent scratch (never published)
+data/
+.agents/
