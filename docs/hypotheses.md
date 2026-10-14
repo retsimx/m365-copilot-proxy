@@ -3151,6 +3151,50 @@ endpoint wait (BA=0 → 285.8 s) — hence `BA = 6` retained.
 tests `packages/proxy-lib/src/governor-gcra.test.ts` (+ fixture `__fixtures__/governor-trace-2026-10-13.json`)
 and `docs/m365-copilot-api.md` §7.
 
+### F39 — `PerUserThrottled` trips are non-local: local-only pacing models refuted; shared-account load is the necessary cause 🟢 (2026-10-14)
+
+**Question.** Can the observed `PerUserThrottled` trips be explained by *any* local turn-pacing rule
+(window / bucket / reaper / ticks / weighted / two-horizon) — i.e. is 110/60 m too high, or is the
+cause outside the proxy?
+
+**Method.** A pre-registered discrete-event simulator replayed the full observed history and asked
+whether a **single** frozen parameter set reproduces BOTH the positives (every trip rejected) AND the
+negatives (every clean turn admitted). Data: `data/m365-throttle-history/` (12,775 proxy turns, 21
+detections → 7 events, 2026-09-30→10-14) extended with client-side history — `~/.local/share/opencode/`:
+18 clustered 429 blocks 2026-08-19→10-13, and 2,562 M365 sessions from `opencode.db` (the proxy log was
+rotated/purged; the client logs/DB were not). Run: `.agents/results/simulator/run.sh 42`
+(grid hash `c1ac5be138ee9c60`).
+
+**Result 1 — no local-only model works.** 6,393 pre-registered local grid points (H1 window, H1 bucket,
+H2 reaper, H3 ticks, H6 weighted, H7 two-horizon) → **0 pass** (finite-grid caveat: not a proof over an
+infinite space). The single-window raw-count family is contradicted *directly*: the clean/trip overlap
+(trip c60 **equals** the last-admitted clean turn at 10-12 09:10 = 118 and 10-13 = 108; 10-10 **c5
+reversal**, trip 73 < last-admitted 82) — **no monotone local count rule can admit the clean turns and
+reject the trips**. Clean trailing-60 m reaches **136** (10-10 23:52, 10-11 07:28) while trips occur at
+**108–121**.
+
+**Result 2 — the missing variable is a bursty shared-account load.** Stationary Poisson and fixed-episode
+external loads are refuted (0 of 20 seeds, every row). Only an **event-aligned latent load** (H5)
+reproduces the set: H1 window **W = 62 min, R = 150** on an account ledger needing ~29–42 unobserved turns
+in the pre-trip windows and ~0 in clean windows (F35 measured ~27 unrelated turns in one trip). This is an
+**existence / non-identifiable** result (R ∈ 150–300 all pass; R trades 1:1 with O(t); W pinned only weakly
+by the F31 recovery bracket) — **compatibility, not calibration and not prediction.**
+
+**Result 3 — the reaper question closed, negatively.** A periodic reaper with P ≤ 15 min is refuted
+(10-01: proxy c60 stayed ≥ 120 for **21 continuous min** before the trip); a *fast* reaper (P ≤ 1 min) is
+**indistinguishable** from synchronous admission (0.03 % of turns differ); H4 (reap-before-refill) is
+non-identifiable (no phase reference).
+
+**Decision.** Keep the governor exactly as shipped: **110 / 60 m, 8 / 60 s, GCRA, 1500 ms spacing, lossless
++ reactive circuit breaker.** Do **not** add a reaper/refresh timer, change the accounting basis (start vs
+finish), or re-tune the taper. **Changing the local cap shifts *where* trips occur, not *whether*** — the
+trips are non-local. The only real lever is **account-level**: instrument every client (incl. the docker
+`aiprovider` collectors) into one ledger so `O(t)` becomes measured — then a fixed 110 can become adaptive
+(run higher when the account is quiet; back off when others are active).
+
+**Evidence.** `.agents/results/simulator/{report.md,preregistration.json,scorecard.tsv}` (+ `out/audit.md`);
+`data/m365-throttle-history/README.md`.
+
 ---
 
 ## 24. October 11 2026 — The token-prediction prior: one-call-per-turn + a post-fence abort guard (Claude agent path) 🟢
