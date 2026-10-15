@@ -3195,6 +3195,28 @@ trips are non-local. The only real lever is **account-level**: instrument every 
 **Evidence.** `.agents/results/simulator/{report.md,preregistration.json,scorecard.tsv}` (+ `out/audit.md`);
 `data/m365-throttle-history/README.md`.
 
+### F40 — Empty ("none") upstream reply = daily model-quota exhaustion; streaming path flattened the exhausted error to `upstream_error` 🟢 (2026-10-15)
+
+**Observation.** On 2026-10-15 an agent-less `claude-sonnet-5.5` session degraded from clean to
+**all-empty** turn results at a sharp boundary (last non-empty 01:49:43Z; every close after =
+`answer length: 0`). The webapp showed *"Sonnet access used for today. You're now using Auto. You can use
+Sonnet again tomorrow."* — i.e. **daily Sonnet entitlement exhausted**, not account-wide `PerUserThrottled`
+(GPT-5.6-with-agent kept working; `circuitBreaker.isArmed=false`; no `PerScenario`/`PerUser` frame;
+WS carried only an `EarlyProgress` filler + per-conversation `throttling` counter + `ReferencesListComplete`
++ prompt echo + empty `type:3` completion).
+
+**Fix (already-present logic, one real gap).** The empty path already returns
+`model_exhausted`/`model_quota_exhausted` (`handler.ts` `modelExhaustedResponse`) — and opencode already
+received the message on the wire. But the **early-flush SSE** (`stream:true`) branch re-labelled *every*
+`p.kind === "error"` as `type:"upstream_error"`, discarding the specific type/code, so the harness couldn't
+distinguish "capacity exhausted" from a transient fault. **Shipped:** the SSE error chunk now preserves the
+upstream `error.type`/`error.code` (`packages/proxy-lib/src/handler.ts`). Regression test
+(`handler-shielding.test.ts` "preserves the exhausted error type/code…", red→green).
+
+**Note.** The client loop seen in the incident was opencode's parent agent re-spawning the `m365sonnet`
+subagent after each subagent failure — harness-side, not a proxy defect. `model_exhausted` is model-agnostic
+(opus/61/sonnet share the same empty path); it was never opus/61-specific.
+
 ---
 
 ## 24. October 11 2026 — The token-prediction prior: one-call-per-turn + a post-fence abort guard (Claude agent path) 🟢

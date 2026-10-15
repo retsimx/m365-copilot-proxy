@@ -1759,10 +1759,21 @@ export async function handleChatCompletion(
       clearInterval(hb);
       try {
         if (p.kind === "error") {
+          // HTTP 200 is already committed (early-flush SSE), so surface the failure as an
+          // in-stream error chunk. Preserve the specific error `type`/`code` (e.g.
+          // model_exhausted / model_quota_exhausted) rather than flattening every failure to
+          // a generic `upstream_error`, so the harness can distinguish "capacity exhausted"
+          // from a transient upstream fault and react accordingly.
           let message = "upstream error";
-          try { message = (JSON.parse(await p.resp.text())?.error?.message) || message; } catch {}
-          // HTTP 200 is already committed, so surface the failure as an in-stream error chunk.
-          send({ ...base, error: { message, type: "upstream_error" } });
+          let type = "upstream_error";
+          let code: string | undefined;
+          try {
+            const err = JSON.parse(await p.resp.text())?.error;
+            if (err?.message) message = err.message;
+            if (err?.type) type = err.type;
+            if (typeof err?.code === "string") code = err.code;
+          } catch {}
+          send({ ...base, error: { message, type, ...(code ? { code } : {}) } });
         } else if (p.kind === "tools") {
           // Forward prose that preceded the fence if the gated stream didn't already
           // send it (fully-buffered / non-gated turns), then emit the tool calls.

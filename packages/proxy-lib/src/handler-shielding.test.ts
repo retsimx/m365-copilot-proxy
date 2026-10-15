@@ -153,6 +153,50 @@ describe("Handler Degradation Circuit Breaker & 429 Retry-After Shielding", () =
     expect(refreshSpy).not.toHaveBeenCalled();
   }, 15000);
 
+  it("preserves the exhausted error type/code in the in-stream error chunk (not a generic upstream_error)", async () => {
+    vi.spyOn(core, "isDegradationBackoff").mockReturnValue(false);
+    vi.spyOn(core, "getRemainingDegradationCooldownMs").mockReturnValue(90_000);
+
+    // Empty upstream reply (e.g. daily model quota / priority access exhausted) on a
+    // streaming request — the HTTP status is committed to 200 up front, so the failure
+    // must be surfaced as an in-stream error chunk that keeps the specific type/code.
+    vi.spyOn(core.ModelSession.prototype, "run").mockResolvedValue({
+      [Symbol.asyncIterator]: async function* () {},
+      fullText: "",
+      hasContent: false,
+      throttle: { current: 33, max: 600 },
+      scores: null,
+      turnCount: 1,
+    } as any);
+
+    const pool = new SessionPool();
+    const body = {
+      model: "claude-sonnet-5.5",
+      messages: [{ role: "user" as const, content: "Hello streaming exhaustion" }],
+      stream: true,
+    };
+
+    const response = await handleChatCompletion(body, pool);
+
+    // Status is committed to 200 before the turn's outcome is known (early-flush SSE).
+    expect(response.status).toBe(200);
+
+    const text = await response.text();
+    const errorChunk = text
+      .split("\n")
+      .filter((line) => line.startsWith("data: "))
+      .map((line) => line.slice(6))
+      .filter((payload) => payload !== "[DONE]")
+      .map((payload) => JSON.parse(payload))
+      .find((chunk) => chunk.error);
+
+    expect(errorChunk).toBeDefined();
+    // The specific exhaustion signal must survive — NOT flattened to `upstream_error`.
+    expect(errorChunk.error.type).toBe("model_exhausted");
+    expect(errorChunk.error.code).toBe("model_quota_exhausted");
+    expect(errorChunk.error.message).toContain("exhausted its daily quota or priority access for today");
+  }, 20000);
+
   it("returns HTTP 429 when conversation quota limit is reached (600/600)", async () => {
     vi.spyOn(core, "isDegradationBackoff").mockReturnValue(false);
 
