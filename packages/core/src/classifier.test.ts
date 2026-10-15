@@ -1,10 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import {
-  CLASSIFIER_MODEL_ID,
+  CLASSIFIER_NLI_MODEL_ID,
   CLASSIFIER_LABELS,
   CLASSIFIER_HYPOTHESIS_TEMPLATE,
+  CLASSIFIER_LOCAL_MODEL_DIR,
+  CLASSIFIER_POSITIVE_LABEL,
   classifyTurnResponse,
-  setClassifierPipelinePromise,
+  setClassifierBackend,
   resetClassifierCache,
   warmupClassifier,
 } from "./classifier.js";
@@ -12,12 +17,12 @@ import {
 describe("Classifier Module", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    setClassifierPipelinePromise(null);
+    setClassifierBackend(null);
     resetClassifierCache();
   });
 
   afterEach(() => {
-    setClassifierPipelinePromise(null);
+    setClassifierBackend(null);
     resetClassifierCache();
   });
 
@@ -25,9 +30,9 @@ describe("Classifier Module", () => {
   // Constants
   // ---------------------------------------------------------------------------
 
-  describe("exported constants", () => {
-    it("CLASSIFIER_MODEL_ID is the expected NLI model", () => {
-      expect(CLASSIFIER_MODEL_ID).toBe("Xenova/nli-deberta-v3-base");
+  describe("exported configuration", () => {
+    it("falls back to the expected zero-shot NLI model", () => {
+      expect(CLASSIFIER_NLI_MODEL_ID).toBe("Xenova/nli-deberta-v3-base");
     });
 
     it("CLASSIFIER_LABELS has refusal as index 0 and deliverable as index 1", () => {
@@ -38,14 +43,29 @@ describe("Classifier Module", () => {
     it("CLASSIFIER_HYPOTHESIS_TEMPLATE contains a {} placeholder", () => {
       expect(CLASSIFIER_HYPOTHESIS_TEMPLATE).toContain("{}");
     });
+
+    it("CLASSIFIER_LOCAL_MODEL_DIR points somewhere under the app config dir by default", () => {
+      expect(typeof CLASSIFIER_LOCAL_MODEL_DIR).toBe("string");
+      expect(CLASSIFIER_LOCAL_MODEL_DIR.length).toBeGreaterThan(0);
+    });
+
+    it("CLASSIFIER_POSITIVE_LABEL matches refusal but not non-refusal", () => {
+      const re = new RegExp(CLASSIFIER_POSITIVE_LABEL, "i");
+      expect(re.test("refusal")).toBe(true);
+      expect(re.test("non-refusal")).toBe(false);
+    });
   });
 
   // ---------------------------------------------------------------------------
-  // Helpers
+  // Helpers — fake backends
   // ---------------------------------------------------------------------------
 
-  function makePipeline(label: string) {
-    return vi.fn().mockResolvedValue({ labels: [label, "other"] });
+  function seqBackend(label: string) {
+    return { kind: "seq" as const, pipe: vi.fn().mockResolvedValue([{ label, score: 0.9 }]) };
+  }
+
+  function nliBackend(topLabel: string) {
+    return { kind: "nli" as const, pipe: vi.fn().mockResolvedValue({ labels: [topLabel, "other"] }) };
   }
 
   // ---------------------------------------------------------------------------
@@ -54,19 +74,19 @@ describe("Classifier Module", () => {
 
   describe("classifyTurnResponse — empty input", () => {
     it("returns DELIVERABLE for empty string without calling the pipeline", async () => {
-      const fakePipe = makePipeline(CLASSIFIER_LABELS[0]);
-      setClassifierPipelinePromise(Promise.resolve(fakePipe));
+      const b = seqBackend("refusal");
+      setClassifierBackend(Promise.resolve(b));
 
       expect(await classifyTurnResponse("")).toBe("DELIVERABLE");
-      expect(fakePipe).not.toHaveBeenCalled();
+      expect(b.pipe).not.toHaveBeenCalled();
     });
 
     it("returns DELIVERABLE for whitespace-only string", async () => {
-      const fakePipe = makePipeline(CLASSIFIER_LABELS[0]);
-      setClassifierPipelinePromise(Promise.resolve(fakePipe));
+      const b = seqBackend("refusal");
+      setClassifierBackend(Promise.resolve(b));
 
       expect(await classifyTurnResponse("   \n\t  ")).toBe("DELIVERABLE");
-      expect(fakePipe).not.toHaveBeenCalled();
+      expect(b.pipe).not.toHaveBeenCalled();
     });
 
     it("returns DELIVERABLE for null", async () => {
@@ -79,40 +99,58 @@ describe("Classifier Module", () => {
   });
 
   // ---------------------------------------------------------------------------
-  // Normal classification paths
+  // Local sequence-classifier backend (preferred)
   // ---------------------------------------------------------------------------
 
-  describe("classifyTurnResponse — classification via injected pipeline", () => {
-    it("returns REFUSAL when pipeline labels[0] is the refusal label", async () => {
-      const fakePipe = makePipeline(CLASSIFIER_LABELS[0]);
-      setClassifierPipelinePromise(Promise.resolve(fakePipe));
+  describe("classifyTurnResponse — local sequence head", () => {
+    it("returns REFUSAL when the top label is 'refusal'", async () => {
+      const b = seqBackend("refusal");
+      setClassifierBackend(Promise.resolve(b));
 
       const result = await classifyTurnResponse(
-        "I cannot run commands because I do not have access to a shell."
+        "I cannot run commands because I do not have access to a shell.",
       );
 
       expect(result).toBe("REFUSAL");
-      expect(fakePipe).toHaveBeenCalledTimes(1);
-      const [text, labels, opts] = fakePipe.mock.calls[0];
-      expect(text).toBe("I cannot run commands because I do not have access to a shell.");
+      expect(b.pipe).toHaveBeenCalledTimes(1);
+      expect(b.pipe.mock.calls[0][0]).toBe("I cannot run commands because I do not have access to a shell.");
+    });
+
+    it("returns DELIVERABLE when the top label is 'non-refusal'", async () => {
+      const b = seqBackend("non-refusal");
+      setClassifierBackend(Promise.resolve(b));
+
+      expect(await classifyTurnResponse("The command exited with code 1.")).toBe("DELIVERABLE");
+    });
+
+    it("accepts a single-object result (not wrapped in an array)", async () => {
+      const b = { kind: "seq" as const, pipe: vi.fn().mockResolvedValue({ label: "refusal", score: 0.8 }) };
+      setClassifierBackend(Promise.resolve(b));
+
+      expect(await classifyTurnResponse("nope")).toBe("REFUSAL");
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Zero-shot NLI fallback backend
+  // ---------------------------------------------------------------------------
+
+  describe("classifyTurnResponse — NLI fallback", () => {
+    it("returns REFUSAL when the top NLI label is the refusal label", async () => {
+      const b = nliBackend(CLASSIFIER_LABELS[0]);
+      setClassifierBackend(Promise.resolve(b));
+
+      expect(await classifyTurnResponse("cannot do it")).toBe("REFUSAL");
+      const [, labels, opts] = b.pipe.mock.calls[0];
       expect(labels).toEqual(CLASSIFIER_LABELS);
       expect(opts.hypothesis_template).toBe(CLASSIFIER_HYPOTHESIS_TEMPLATE);
     });
 
-    it("returns DELIVERABLE when pipeline labels[0] is the deliverable label", async () => {
-      const fakePipe = makePipeline(CLASSIFIER_LABELS[1]);
-      setClassifierPipelinePromise(Promise.resolve(fakePipe));
+    it("returns DELIVERABLE when the top NLI label is the deliverable label", async () => {
+      const b = nliBackend(CLASSIFIER_LABELS[1]);
+      setClassifierBackend(Promise.resolve(b));
 
-      const result = await classifyTurnResponse("The command exited with code 1.");
-      expect(result).toBe("DELIVERABLE");
-    });
-
-    it("trims surrounding whitespace before passing text to the pipeline", async () => {
-      const fakePipe = makePipeline(CLASSIFIER_LABELS[1]);
-      setClassifierPipelinePromise(Promise.resolve(fakePipe));
-
-      await classifyTurnResponse("  hello world  ");
-      expect(fakePipe.mock.calls[0][0]).toBe("hello world");
+      expect(await classifyTurnResponse("here is the report")).toBe("DELIVERABLE");
     });
   });
 
@@ -121,19 +159,15 @@ describe("Classifier Module", () => {
   // ---------------------------------------------------------------------------
 
   describe("classifyTurnResponse — fail-open on errors", () => {
-    it("returns DELIVERABLE when the pipeline promise rejects (load failure)", async () => {
-      setClassifierPipelinePromise(Promise.reject(new Error("model load failed")));
-
-      const result = await classifyTurnResponse("Some text");
-      expect(result).toBe("DELIVERABLE");
+    it("returns DELIVERABLE when the backend promise rejects (load failure)", async () => {
+      setClassifierBackend(Promise.reject(new Error("model load failed")));
+      expect(await classifyTurnResponse("Some text")).toBe("DELIVERABLE");
     });
 
     it("returns DELIVERABLE when the pipeline call itself throws", async () => {
-      const fakePipe = vi.fn().mockRejectedValue(new Error("inference error"));
-      setClassifierPipelinePromise(Promise.resolve(fakePipe));
-
-      const result = await classifyTurnResponse("Some text");
-      expect(result).toBe("DELIVERABLE");
+      const b = { kind: "seq" as const, pipe: vi.fn().mockRejectedValue(new Error("inference error")) };
+      setClassifierBackend(Promise.resolve(b));
+      expect(await classifyTurnResponse("Some text")).toBe("DELIVERABLE");
     });
   });
 
@@ -142,90 +176,76 @@ describe("Classifier Module", () => {
   // ---------------------------------------------------------------------------
 
   describe("classifyTurnResponse — memoisation", () => {
-    it("calls pipeline only once for repeated identical text", async () => {
-      const fakePipe = makePipeline(CLASSIFIER_LABELS[1]);
-      setClassifierPipelinePromise(Promise.resolve(fakePipe));
+    it("calls the pipeline only once for repeated identical text", async () => {
+      const b = seqBackend("non-refusal");
+      setClassifierBackend(Promise.resolve(b));
 
-      const r1 = await classifyTurnResponse("Identical message");
-      const r2 = await classifyTurnResponse("Identical message");
-      const r3 = await classifyTurnResponse("  Identical message  ");
+      await classifyTurnResponse("Identical message");
+      await classifyTurnResponse("Identical message");
+      await classifyTurnResponse("  Identical message  ");
 
-      expect(r1).toBe("DELIVERABLE");
-      expect(r2).toBe("DELIVERABLE");
-      expect(r3).toBe("DELIVERABLE");
-      expect(fakePipe).toHaveBeenCalledTimes(1);
+      expect(b.pipe).toHaveBeenCalledTimes(1);
     });
 
     it("shares the in-flight promise for concurrent calls with identical text", async () => {
       let resolveCall!: (v: any) => void;
       const pending = new Promise((res) => { resolveCall = res; });
-      const fakePipe = vi.fn().mockImplementation(() => pending);
-      setClassifierPipelinePromise(Promise.resolve(fakePipe));
+      const b = { kind: "seq" as const, pipe: vi.fn().mockImplementation(() => pending) };
+      setClassifierBackend(Promise.resolve(b));
 
       const p1 = classifyTurnResponse("concurrent");
       const p2 = classifyTurnResponse("concurrent");
-
-      resolveCall({ labels: [CLASSIFIER_LABELS[0], CLASSIFIER_LABELS[1]] });
+      resolveCall([{ label: "refusal", score: 0.9 }]);
 
       const [r1, r2] = await Promise.all([p1, p2]);
       expect(r1).toBe("REFUSAL");
       expect(r2).toBe("REFUSAL");
-      expect(fakePipe).toHaveBeenCalledTimes(1);
+      expect(b.pipe).toHaveBeenCalledTimes(1);
     });
 
     it("resetClassifierCache causes a fresh inference on the next call", async () => {
-      const fakePipe = makePipeline(CLASSIFIER_LABELS[1]);
-      setClassifierPipelinePromise(Promise.resolve(fakePipe));
+      const b = seqBackend("non-refusal");
+      setClassifierBackend(Promise.resolve(b));
 
       await classifyTurnResponse("Cache invalidation test");
-      expect(fakePipe).toHaveBeenCalledTimes(1);
+      expect(b.pipe).toHaveBeenCalledTimes(1);
 
       resetClassifierCache();
-
       await classifyTurnResponse("Cache invalidation test");
-      expect(fakePipe).toHaveBeenCalledTimes(2);
+      expect(b.pipe).toHaveBeenCalledTimes(2);
     });
 
     it("evicts a failed promise so a subsequent call can retry", async () => {
-      const fakePipe = vi
-        .fn()
-        .mockRejectedValueOnce(new Error("transient inference error"))
-        .mockResolvedValueOnce({ labels: [CLASSIFIER_LABELS[1], CLASSIFIER_LABELS[0]] });
-      setClassifierPipelinePromise(Promise.resolve(fakePipe));
+      const b = {
+        kind: "seq" as const,
+        pipe: vi
+          .fn()
+          .mockRejectedValueOnce(new Error("transient inference error"))
+          .mockResolvedValueOnce([{ label: "non-refusal", score: 0.9 }]),
+      };
+      setClassifierBackend(Promise.resolve(b));
 
-      // First call: inference throws → fail-open → DELIVERABLE
-      const r1 = await classifyTurnResponse("Retry after failure");
-      expect(r1).toBe("DELIVERABLE");
-
-      // Wait a tick for the catch handler to evict the cache entry
-      await Promise.resolve();
-
-      // Second call: cache miss → retries → DELIVERABLE (second mock value)
-      const r2 = await classifyTurnResponse("Retry after failure");
-      expect(r2).toBe("DELIVERABLE");
-      expect(fakePipe).toHaveBeenCalledTimes(2);
+      expect(await classifyTurnResponse("Retry after failure")).toBe("DELIVERABLE");
+      await Promise.resolve(); // let the catch handler evict the cache entry
+      expect(await classifyTurnResponse("Retry after failure")).toBe("DELIVERABLE");
+      expect(b.pipe).toHaveBeenCalledTimes(2);
     });
 
     it("evicts oldest entry when cache reaches MAX_CLASSIFIER_CACHE_SIZE (100)", async () => {
-      const fakePipe = makePipeline(CLASSIFIER_LABELS[1]);
-      setClassifierPipelinePromise(Promise.resolve(fakePipe));
+      const b = seqBackend("non-refusal");
+      setClassifierBackend(Promise.resolve(b));
 
-      for (let i = 0; i < 100; i++) {
-        await classifyTurnResponse(`Prompt ${i}`);
-      }
-      expect(fakePipe).toHaveBeenCalledTimes(100);
+      for (let i = 0; i < 100; i++) await classifyTurnResponse(`Prompt ${i}`);
+      expect(b.pipe).toHaveBeenCalledTimes(100);
 
-      // "Prompt 1" is still cached — no extra call
-      await classifyTurnResponse("Prompt 1");
-      expect(fakePipe).toHaveBeenCalledTimes(100);
+      await classifyTurnResponse("Prompt 1"); // still cached
+      expect(b.pipe).toHaveBeenCalledTimes(100);
 
-      // Inserting entry 101 evicts "Prompt 0" (oldest)
-      await classifyTurnResponse("Prompt 100");
-      expect(fakePipe).toHaveBeenCalledTimes(101);
+      await classifyTurnResponse("Prompt 100"); // evicts "Prompt 0"
+      expect(b.pipe).toHaveBeenCalledTimes(101);
 
-      // "Prompt 0" was evicted — re-classifying it calls the pipeline again
-      await classifyTurnResponse("Prompt 0");
-      expect(fakePipe).toHaveBeenCalledTimes(102);
+      await classifyTurnResponse("Prompt 0"); // evicted → re-classified
+      expect(b.pipe).toHaveBeenCalledTimes(102);
     });
   });
 
@@ -234,15 +254,65 @@ describe("Classifier Module", () => {
   // ---------------------------------------------------------------------------
 
   describe("warmupClassifier", () => {
-    it("resolves without throwing even when the pipeline load fails", async () => {
-      setClassifierPipelinePromise(Promise.reject(new Error("load error")));
+    it("resolves without throwing even when the backend load fails", async () => {
+      setClassifierBackend(Promise.reject(new Error("load error")));
       await expect(warmupClassifier()).resolves.toBeUndefined();
     });
 
-    it("resolves without throwing when the pipeline loads successfully", async () => {
-      const fakePipe = makePipeline(CLASSIFIER_LABELS[1]);
-      setClassifierPipelinePromise(Promise.resolve(fakePipe));
+    it("resolves without throwing when the backend loads successfully", async () => {
+      setClassifierBackend(Promise.resolve(seqBackend("non-refusal")));
       await expect(warmupClassifier()).resolves.toBeUndefined();
     });
   });
+});
+
+// ---------------------------------------------------------------------------
+// Gated acceptance suite — the REAL classifier against the curated corpora.
+//
+// These exercise the actual model (local ModernBERT head, else the NLI fallback),
+// not the mock, so they are opt-in: run with M365_CLASSIFIER_ACCEPTANCE=1.
+// They are the acceptance test for refusals.txt / antirefusals.txt — validation
+// of the corpus lives HERE, not in the regex-heuristic unit tests.
+// ---------------------------------------------------------------------------
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const ACCEPTANCE = process.env.M365_CLASSIFIER_ACCEPTANCE === "1";
+
+function loadCorpus(file: string): string[] {
+  return readFileSync(join(__dirname, "..", "..", "..", file), "utf8")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0 && !l.startsWith("#"))
+    .map((l) => l.replace(/\\n/g, "\n"));
+}
+
+describe.skipIf(!ACCEPTANCE)("refusal corpus acceptance (real classifier)", () => {
+  beforeEach(() => {
+    setClassifierBackend(null); // force a real model load
+    resetClassifierCache();
+  });
+  afterEach(() => {
+    setClassifierBackend(null);
+    resetClassifierCache();
+  });
+
+  it("classifies every known refusal (refusals.txt) as REFUSAL", async () => {
+    const refusals = loadCorpus("refusals.txt");
+    expect(refusals.length).toBeGreaterThan(0);
+    const misses: string[] = [];
+    for (const r of refusals) {
+      if ((await classifyTurnResponse(r)) !== "REFUSAL") misses.push(r.replace(/\s+/g, " ").slice(0, 120));
+    }
+    expect(misses).toEqual([]);
+  }, 900_000);
+
+  it("does not flag any known deliverable (antirefusals.txt) as REFUSAL", async () => {
+    const antirefusals = loadCorpus("antirefusals.txt");
+    expect(antirefusals.length).toBeGreaterThan(0);
+    const falsePositives: string[] = [];
+    for (const a of antirefusals) {
+      if ((await classifyTurnResponse(a)) === "REFUSAL") falsePositives.push(a.replace(/\s+/g, " ").slice(0, 120));
+    }
+    expect(falsePositives).toEqual([]);
+  }, 900_000);
 });

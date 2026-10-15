@@ -234,40 +234,43 @@ pnpm test:live      # M365_LIVE=1; live tests that hit real M365 (uses quota)
   returns **HTTP 200** with the refusal as assistant content (session context
   reset) — refusals no longer fail closed. The remote-artifact `file_mutation_without_local_tool`
   502 is unchanged.
-- **Structural Clause NLP Analysis** (`packages/core/src/tools.ts`): All natural language
-  heuristics for tool refusals, confabulations, and unearned mutation claims use clause-boundary
-  segmentation (`[Tool Anchor] + [Negation] + [Availability State]`). This avoids false positives
-  on filenames with dots (e.g. `test_candidate_claim.py`), detects transitive provision verbs
-  (`expose`, `mount`, `offer`), existence verbs (`exist`), truncation surrenders, and shell error
-  deferrals.
+- **Structural Clause NLP Analysis** (`packages/core/src/tools.ts`): The remaining natural-language
+  heuristic — the **remote-artifact** detector (`looksLikeRemoteArtifactCompletion`) — uses
+  clause-boundary segmentation (`[Tool Anchor] + [Negation] + [Availability State]`) to avoid false
+  positives on filenames with dots (e.g. `test_candidate_claim.py`). The **confabulation regex was
+  removed** (2026-10-15, hypotheses F42): `looksLikeConfabulation`, `hasClauseRefusal` and
+  `CONFABULATION_PATTERNS` (~60 regexes) were brittle and redundant once the classifier owned the
+  refusal decision. `isProseDocument`'s "a refusal is never a document" guard now calls
+  `classifyTurnResponse` (so `isProseDocument` is `async`).
 - **Delta Turn Tool Definitions Injection:** Follow-up turns proactively re-inject the `<tools>`
   block into `formatDeltaMessages`. M365 reasoning models (`DeepLeo`) require continuous tool
   context; without it, follow-up turns often confabulate that tools are no longer available.
 - **Assistant-simulated `<tool_response>` tags are rejected & flush session context:** When
   a model produces a hallucinated simulation with fake `<tool_response>` tags, the proxy strips
   them and resets the session to force a clean full-history replay on the next turn.
-- **In-Process NLI Turn Classifier (`packages/core/src/classifier.ts`):** On every tool-mode turn
-  that returns no tool call, distinguishes genuine prose deliverables (security audits, test
-  diagnostics) from tool confabulations with a zero-shot NLI pipeline — `Xenova/nli-deberta-v3-base`
-  (`dtype:"q8"`, CPU, via `@huggingface/transformers`/`onnxruntime-node`), no network, ~100 ms/turn.
-  Labels are *claim-vs-result* (`["the assistant claiming it cannot perform the task", "the assistant
-  providing its actual answer or results"]`, hypothesis template `"This message shows {}."`). Chosen
-  on a 198-item balanced clean benchmark (~99 refusals / 99 deliverables): **92.4%** accuracy vs the
-  prior `gemma4:e2b` SLM's **88.9%**, ~**34× faster** (~100 ms vs ~3.4 s; the SLM also serialised, no
-  parallelism). `REFUSAL` forces an in-conversation retry (hard-capped at 3); `DELIVERABLE` returns
-  as-is. The `claim-vs-result` framing alone lifted the same model 86.9% → 92.4% over a naive
-  `refusal/success` framing. Max input is `max_position_embeddings: 512` tokens (~2,000 chars of prose,
-  fewer for dense code) — the classifier sees only the message head. Fine for refusals (short: median
-  ~200 chars, p95 ~600, max ~1,100 observed); long deliverables get head-truncated (normally still
-  DELIVERABLE).
+- **Refusal Classifier (`packages/core/src/classifier.ts`):** On every tool-mode turn that returns no
+  tool call, decides `REFUSAL` (forces an in-conversation retry, hard-capped at 3) vs `DELIVERABLE`
+  (returns as-is). Two backends, tried in order: **(1)** a locally-built fine-tuned ModernBERT head
+  (8k context, `natong19/refusal_classifier`) — preferred; **(2)** fallback to the bundled zero-shot
+  NLI (`Xenova/nli-deberta-v3-base`, `max_position_embeddings: 512`, `dtype:"q8"`, CPU). In-process
+  via `@huggingface/transformers`/`onnxruntime-node`, no network. Build + install the head via
+  [`docs/classifier-model.md`](docs/classifier-model.md); path via `M365_CLASSIFIER_MODEL`
+  (default `~/.config/opencode-m365/models/natong19`); refusal label via `M365_CLASSIFIER_POSITIVE_LABEL`
+  (default `^refus`).
+  - **Why the head:** the NLI fallback is high-recall but **mislabels ~59% of legitimate deliverables
+    as refusals** on the in-repo `refusals.txt`/`antirefusals.txt` corpora — and *every* false refusal
+    fires the spurious "refusal detected → identical retry" loop. The ModernBERT head is **0%
+    deliverable-FP** on the same corpora (at the cost of some refusal recall). Validate any model with
+    `M365_CLASSIFIER_ACCEPTANCE=1 npx vitest run packages/core/src/classifier.test.ts`, which asserts
+    every `refusals.txt` entry is REFUSAL and **no** `antirefusals.txt` entry is.
   - *History:* regex (`looksLikeConfabulation`, brittle/over-grown, ~86% false positives on real
     prose) → SLM (`gemma4:e2b`, high precision/zero false-retries but slow ~3.4 s and weaker recall,
-    88.9%) → in-process NLI classifier (92.4%, ~100 ms). Other NLI candidates rejected on the same
-    benchmark: `onnx-community/deberta-v3-large-zeroshot-v2.0-c` (missed a plain refusal),
-    `Xenova/bart-large-mnli` (missed a plain success), `onnx-community/ModernBERT-large-zeroshot-v2.0`
-    (79.8%, strong REFUSAL bias, 2× slower), `Xenova/mobilebert-uncased-mnli` (84.8%),
-    `protectai/distilroberta-base-rejection-v1` (58.1% — a *safety*-rejection model, blind to
-    *capability* refusals).
+    88.9%) → zero-shot NLI classifier (92.4% on a 198-item benchmark, ~100 ms) → **fine-tuned
+    ModernBERT head + NLI fallback** (2026-10-15; hypotheses F41–F42). Rejected NLI candidates:
+    `onnx-community/deberta-v3-large-zeroshot-v2.0-c`, `Xenova/bart-large-mnli`,
+    `onnx-community/ModernBERT-large-zeroshot-v2.0` (79.8%, strong REFUSAL bias),
+    `Xenova/mobilebert-uncased-mnli` (84.8%), `protectai/distilroberta-base-rejection-v1` (58.1% — a
+    *safety*-rejection model, blind to *capability* refusals).
 - **Refusal Retry & Fallthrough:** When a retry happens, the assistant content concatenates each
   attempt separated by `\n\n--- REFUSAL DETECTED - RETRY N/3 ---\n\n` (or
   `--- REMOTE ARTIFACT DETECTED - RETRY N/3 ---`); it is streamed as a content delta on the SSE path

@@ -1434,7 +1434,7 @@ export async function handleChatCompletion(
 
     // Document guard: if model returned an instructional document full of fences,
     // convert it to plain text before evaluating confabulation/retries.
-    if (isProseDocument(parsed)) {
+    if (await isProseDocument(parsed)) {
       log.info(`Response is a prose document (${parsed.toolCalls.length} embedded fences), returning as text instead of executing`);
       parsed = { hasToolCalls: false, toolCalls: [], textContent: fullText };
     }
@@ -1495,7 +1495,7 @@ export async function handleChatCompletion(
       conv.sentMessageCount = body.messages.length;
       fullText = restoreM365Fences(retry.fullText, specs ?? new Map());
       parsed = parseToolCalls(fullText, body.tools);
-      if (isProseDocument(parsed)) {
+      if (await isProseDocument(parsed)) {
         log.info(`Response is a prose document (${parsed.toolCalls.length} embedded fences), returning as text instead of executing`);
         parsed = { hasToolCalls: false, toolCalls: [], textContent: fullText };
       }
@@ -1517,7 +1517,7 @@ export async function handleChatCompletion(
       conv.sentMessageCount = body.messages.length;
       fullText = restoreM365Fences(retry.fullText, specs ?? new Map());
       parsed = parseToolCalls(fullText, body.tools);
-      if (isProseDocument(parsed)) {
+      if (await isProseDocument(parsed)) {
         parsed = { hasToolCalls: false, toolCalls: [], textContent: fullText };
       }
       log.info(`After corrective retry: hasToolCalls=${parsed.hasToolCalls}, count=${parsed.toolCalls.length}`);

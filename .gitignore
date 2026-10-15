@@ -48,3 +48,7 @@ docs/plans/
 # local RE data + agent scratch (never published)
 data/
 .agents/
+
+# locally-built classifier model bundles (e.g. models/natong19/) — large, never published.
+# Install path is configurable via M365_CLASSIFIER_MODEL; see docs/classifier-model.md.
+models/

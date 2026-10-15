@@ -75,7 +75,6 @@ export {
   formatToolChoiceInstruction,
   getMessageContent,
   parseToolCalls,
-  looksLikeConfabulation,
   looksLikeRemoteArtifactCompletion,
   isProseDocument,
   type Message,
@@ -105,11 +104,13 @@ export {
 export { createLogger, trunc, LOG_PATH } from "./log.js";
 
 export {
-  CLASSIFIER_MODEL_ID,
+  CLASSIFIER_NLI_MODEL_ID,
+  CLASSIFIER_LOCAL_MODEL_DIR,
+  CLASSIFIER_POSITIVE_LABEL,
   CLASSIFIER_LABELS,
   CLASSIFIER_HYPOTHESIS_TEMPLATE,
   classifyTurnResponse,
   warmupClassifier,
-  setClassifierPipelinePromise,
+  setClassifierBackend,
   resetClassifierCache,
 } from "./classifier.js";

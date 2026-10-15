@@ -8,6 +8,7 @@ import {
   renderFencedCall,
   SHELL_LANGS,
 } from "./fenced.js";
+import { classifyTurnResponse } from "./classifier.js";
 
 const log = createLogger("tools");
 
@@ -247,72 +248,6 @@ export interface ParseResult {
   textContent: string | null;
 }
 
-// Patterns of M365's stochastic turn-1 "give-up" confabulation: it claims it can't
-// see/run anything and asks the user to paste files, WITHOUT ever calling a tool —
-// even though the environment is real. Used to trigger a forcing retry (handler).
-const CONFABULATION_PATTERNS: RegExp[] = [
-  /return(?:ing|s|ed)?\s+(?:no|empty)\s+(?:output|results?|content|data)(?:\s+available)?/i,
-  /no\s+(?:output|results?|content|data)\s+(?:was\s+|were\s+)?(?:return|provid|present)/i, // "no content was returned"
-  /(?:not|aren.?t|is not)\s+(?:operational|functioning)\s+in\s+the\s+current\s+execution\s+environment/i,
-  /not\s+(?:being\s+)?executed\s+by\s+the\s+runtime/i,
-  /(?:possible|function)\s+without\s+a\s+(?:functioning|live|real)\s+shell\s+tool/i,
-  /Run\s+OpenCode\s+in\s+its\s+native\s+CLI\s+context/i,
-  // The `to` is optional — matches both "unable TO access" and "can't access" (the
-  // old `to?` made the *t* mandatory, so "can't inspect"/"can't access" slipped
-  // through). `execute`/`retrieve`/`fetch` added: the give-up reflex phrases them
-  // ("unable to execute or retrieve any output") and they were absent from the list.
-  /(?:unable|not able|can.?t|cannot)\s+(?:to\s+)?(?:access|inspect|list|read|run|execute|retrieve|fetch|locate|see|open)/i,
-  /don.?t\s+have\s+access/i,
-  /no\s+(?:longer\s+have|access\s+to)/i,   // "no access to" + "no longer have access/the tools"
-  /lost\s+(?:access|my\s+access|the\s+ability)/i,
-  // Mid-conversation give-up (F12.11, magic model): after a real tool call it claims
-  // it "no longer has the tools" and asks to move to another session, e.g. "restart the
-  // task in a coding-enabled session". A genuine completion never asks to start over.
-  /(?:restart|start\s+over|begin\s+again|re-?run)\s+(?:the\s+|this\s+)?(?:task|session|conversation|work)\s+in\s+(?:a\s+)?/i,
-  /(?:in|use|switch\s+to|need)\s+(?:a\s+)?(?:different|another|proper|coding-?enabled|tool-?enabled|shell-?enabled)\s+(?:session|environment|conversation|mode)/i,
-  // "the live file-editing tools ... are not available to me here" (magic model, F12.11):
-  // it claims its own tools are gone, then delegates the edit back to the user.
-  /(?:tool|editor|shell|command|file-?editing)s?[^.\n]{0,40}\b(?:not\s+available|unavailable|aren.?t\s+available|isn.?t\s+available|are\s+not\s+accessible)/i,
-  /(?:can.?t|cannot|not\s+able\s+to|unable\s+to)\s+(?:directly\s+)?(?:edit|modify|write\s+to|change|save|create|open)\s+(?:the\s+|any\s+|to\s+)?files?/i,
-  /paste\s+(?:the\s+)?(?:contents?|files?|code|them)/i,
-  /provide\s+(?:the\s+)?(?:contents?|files?)/i,
-  /(?:environment|shell|tool)\s+(?:isn.?t|is not|aren.?t|are not|appears? to be)\s+(?:return|provid|respond|work|access)/i,
-  // Wrong-machine tells (§12.13). These turns are not lies — the model really did
-  // run something, in M365's own code-interpreter sandbox, and is reporting it
-  // honestly. The user's disk was never touched, so it still needs forcing.
-  // `/mnt/data` is that sandbox's cwd; `container.*` is its tool namespace. Only
-  // the *prose* form lands here — a fenced ```container.exec block is salvaged by
-  // the shell-alias routing in fenced.ts and never reaches this check.
-  /(?:current\s+working\s+directory|working\s+directory|cwd)[\s\S]{0,120}\/mnt\/data/i,
-  /(?:\bpwd\b|\bcd\b)[\s\S]{0,60}\/mnt\/data/i,
-  /(?:ran|used|executed|called)[\s\S]{0,80}container\.(?:exec|open_image|download)/i,
-  /container\.(?:exec|open_image|download)[\s\S]{0,120}(?:returned|output|shows?|result)/i,
-  /no\s+files?\s+(?:in|found|present|visible)/i,
-  /(?:file|directory|folder|it)\s+(?:appears?|seems?|looks?)\s+(?:to\s+be\s+)?empty/i, // "the file appears to be empty"
-  /nothing\s+to\s+(?:simplify|fix|do|change|show|read)/i,                               // "nothing to simplify"
-  /(?:tool|command|it)\s+returned\s+(?:no|empty|nothing)/i,
-  // GPT-5.6 can truthfully describe M365's remote runtime as if it were the
-  // caller's environment. This wording slipped past the older can't-access
-  // patterns because it says the session "does not expose" the filesystem.
-  /(?:session|environment|runtime)\s+(?:does\s+not|doesn.?t|cannot)\s+(?:expose|mount|provide)\s+(?:the\s+)?(?:local\s+)?(?:repository\s+)?filesystem/i,
-  /(?:my|the)\s+filesystem\s+(?:only\s+)?(?:contained|contains|has)[\s\S]{0,80}\/mnt\/data/i,
-  // Claims about <tools> block / tool interface being disabled, absent, or unavailable:
-  /no\s+(?:executable\s+)?`?<tools>`?\s+(?:block\s+)?(?:is\s+|are\s+)?(?:not\s+)?(?:enabled|available|provided|included)/i,
-  /(?:does\s+not|doesn.?t|not)\s+include\s+(?:an?\s+)?(?:actual\s+|executable\s+)?`?<tools>`?\s+block/i,
-  /(?:execution\s+tool\s+block|tool\s+block|tools\s+block|execution\s+tools?|tool\s+interface)\s+(?:is\s+|are\s+)?(?:no\s+longer|not|currently\s+not)\s+(?:available|enabled|present|active)/i,
-  /(?:do\s+not|don.?t|cannot|can.?t)\s+have\s+(?:an?\s+)?(?:actual\s+|enabled\s+|live\s+|real\s+)?[\w\s`,-]{0,120}\btools?\s+(?:to\s+call|available)/i,
-  /(?:no|without\s+(?:any)?)\s+(?:live\s+|enabled\s+|real\s+)?[\w\s`,-]{0,120}\btools?\s+(?:is\s+|are\s+)?(?:currently\s+|now\s+|presently\s+|no\s+longer\s+|longer\s+|any\s+longer\s+)?(?:available|enabled|provided|active|accessible)/i,
-  /(?:absence|lack)\s+of\s+(?:executable|enabled|live|real)?\s*tools/i,
-  /blocked[\s\S]{0,80}(?:absence|lack|no)\s+(?:of\s+)?(?:executable|enabled|live|real)?\s*tools/i,
-  /(?:can.?t|cannot|unable\s+to)\s+(?:continue|proceed)[\s\S]{0,120}(?:no\s+(?:executable\s+|enabled\s+)?`?<tools>`?|no\s+execution\s+tools?|tool\s+block)/i,
-  /(?:re-run|send|provide|continue|resume)[\s\S]{0,80}(?:tool-?enabled|coding-?enabled|execution)\s+(?:context|session|environment)/i,
-  /(?:tool\s+calls?|tools?)\s+(?:is|are|are\s+only)\s+(?:only\s+)?available\s+when\s+(?:the\s+)?(?:incoming\s+)?message\s+contains/i,
-  /cannot\s+invoke\s+(?:the\s+)?(?:required\s+)?[\w\s`,-]{0,60}\btools?\s+from\s+this\s+interface/i,
-  // DeepLeo / GPT-5.6 refusals claiming no execution/shell tool is attached to the turn:
-  /(?:no|without\s+(?:any)?)\s+(?:executable\s+|execution\s+|live\s+|enabled\s+|real\s+|shell\s+|repository\s+)?[\w\s`,-]{0,80}\btools?\s+(?:is\s+|are\s+)?(?:currently\s+|now\s+|presently\s+|no\s+longer\s+|longer\s+|any\s+longer\s+)?(?:attached|available|enabled|provided|active)/i,
-  /(?:this\s+turn\s+|this\s+response\s+)?(?:has\s+|contains\s+)?no\s+(?:executable\s+|execution\s+|repository\s+|shell\s+)?[\w\s`,-]{0,80}\btools?\s+attached/i,
-  /no\s+execution\s+tool\s+(?:is\s+)?attached/i,
-];
 
 // M365 sometimes creates a real patch in its Teams-hosted remote artifact
 // store instead of calling the harness's local edit/write/bash tools. The link
@@ -339,13 +274,6 @@ const REMOTE_ARTIFACT_COMPLETION_PATTERNS: RegExp[] = [
 ];
 
 /**
- * Heuristic: does this no-tool-call response look like M365 confabulating an
- * inability to act (rather than a genuine final answer)? The handler uses this to
- * decide whether to force one more turn. Conservative — needs an explicit
- * can't-access / paste-the-files phrasing, which a real completion won't contain.
- */
-
-/**
  * Did M365 substitute a remote Teams-hosted patch for a local filesystem edit?
  * Unlike the general hallucinated-completion detector this must fire even after
  * earlier tool calls: reading a file locally does not make a remote patch local.
@@ -357,93 +285,7 @@ export function looksLikeRemoteArtifactCompletion(text: string | null): boolean 
   return REMOTE_ARTIFACT_COMPLETION_PATTERNS.some((re) => re.test(t));
 }
 
-/**
- * Segment text into independent syntactic clauses and check if any clause expresses
- * a refusal to act due to missing, disabled, or unattached tools/capabilities.
- */
-function hasClauseRefusal(text: string): boolean {
-  // File/artifact write refusal (confabulated incapability) — matched on CONTENT only,
-  // deliberately NOT pinned to a "FAIL"/"STATUS: FAIL" prefix. Covers the subagent loop
-  // where the model stops emitting fences and returns prose like
-  // "STATUS: FAIL … file creation is disabled, so the report could not be written".
-  const fileWriteRefusal =
-    /(?:(?:could|can)\s*(?:not|'t|n[o']?t)\s+be\s+(?:written|overwritten|created|saved|persisted)|(?:file|artifact|report|output|deliverable)s?[\s\S]{0,60}\b(?:creation|writing|generation|overwrit\w*|persist\w*|capabilit\w*)\b[\s\S]{0,60}\b(?:disabled|unavailable|inaccessible|not\s+(?:enabled|available)|blocked|denied|prohibited)|does\s+not\s+provide\s+an\s+executable|(?:has|have)\s+not\s+been\s+written)/i;
-  if (fileWriteRefusal.test(text)) return true;
 
-  const toolWords =
-    /(?:\btools?\b|\bshell\b|\bexecution\b|\btool_calls?\b|`<tools>`|`?(?:bash|skill|question|task|edit_file|write_file|read_file|glob|grep|editing|apply_patch)`?|\bfile\s+editing\b|\bfilesystem\b|\bterminal\b|\bcommand\s+execution\b|\bexecutable\b|\bbinary\b|\bcapabilities\b|\bfile-?(?:generation|writing|creation)\b|\bscript-?(?:generation|execution)\b|\bshell-?execution\b)/i;
-  const directNegStateWords =
-    /(?:\b(?:disabled|unavailable|inactive|unsupported|unmounted|inaccessible|unreachable|unexecutable|disallowed|prohibited)\b|not\s+(?:available|provided|enabled|operational)|(?:session|environment|context|runtime)\s+(?:ended|terminated|closed|expired|halted|interrupted|concluded)\b|(?:ended|terminated|closed|expired|halted|interrupted|concluded)\s+(?:session|environment|context|runtime)\b)/i;
-  const sessionTerminationWords =
-    /(?:execution|tool|terminal|shell)\s+(?:session|environment|context|runtime)\s+(?:ended|terminated|closed|expired|halted|interrupted|concluded)\b/i;
-  const negWords =
-    /(?:\b(?:not|no|cannot|can.?t|unable|without|lack|absence|isn.?t|aren.?t|don.?t|never|falsely|decline|impossible|prevented|restricted|couldn.?t|did.?t|didn.?t|won.?t|wouldn.?t)\b|wasn.?t\s+able)/i;
-  const availWords =
-    /(?:\b(?:enabled|available|attached|provided|active|functional|operational|accessible|installed|configured|present|support|supported|permitted|access|executed|claimed|started|run|interact|callable|expose|exposed|exposes|exposing|mount|mounted|mounts|mounting|include|included|includes|contain|contained|contains|offer|offered|offers|allow|allowed|allows|have|has|exists?|existed)\b)/i;
-
-  const accessActionWords =
-    /\b(?:access|inspect|list|read|run|execute|retrieve|fetch|locate|see|open|edit|modify|modifying|write|apply|verify|complete|finish|create|created|creating|perform|performed|performing|proceed|proceeded|proceeding|check|checking|update|updating|mutate|mutating|continue\s+with|help\s+with|assist\s+with|generate|generating|persist|persisting|overwrite|overwriting|provide|providing|facilitate)\b/i;
-  const accessTargetWords =
-    /(?:\b(?:files?|directory|directories|folder|environment|(?<!-)session(?!-)|filesystem|repository|code|cwd|contents?|changes?|edits?|tasks?|task-\d+|worktrees?|branch(?:es)?|preflight|workflow|steps?|phase\s*\d+|stages?|repo|issues?|pr|pull\s+requests?|mr\b|merge\s+requests?|gitlab|github|jira|linear|records?|items?|epics?|state\.json|local\s+state|file\s+updates?|database|server|artefacts?|artifacts?|reports?|deliverables?|remediation|verdict|critique|audit)\b|[\w-]{2,}\.[a-z0-9]{1,4})/i;
-
-  const delegateWords = /\b(?:paste|provide\s+me|send\s+me)\b/i;
-  const restartWords = /\b(?:restart|start\s+over|begin\s+again|re-?run)\b/i;
-  const envWords = /\b(?:different|another|proper|coding-?enabled|tool-?enabled|shell-?enabled|native\s+cli)\s+(?:session|environment|conversation|mode|context)\b/i;
-  const sandboxWords = /(?:\/mnt\/data\b|\bcontainer\.(?:exec|open_image|download)\b)/i;
-  const emptyOutputWords = /(?:\breturn(?:ing|s|ed)?\s+(?:no|empty|nothing)\b|\bno\s+(?:output|results?|content|data)\s+(?:was|were)?\s*(?:returned|provided|present)\b)/i;
-  const truncationSurrenderWords =
-    /(?:(?:retrieved|tool|command|initial|visible)?\s*output\s+is\s+truncated|output\s+was\s+truncated|points\s+to\s+a\s+second\s+(?:local\s+)?file|omitted\s+portion|omitted\s+evidence|missing\s+evidence|risk\s+inventing\s+evidence|available\s+material\s+in\s+this\s+turn|truncated\s+(?:output|evidence|material|data|response|details|information|source|results?)|available\s+evidence|evidence\s+(?:currently\s+)?available|evidence\s+in\s+this\s+response)\b/i;
-  const surrenderActionWords =
-    /\b(?:complete|finish|provide|report|generate|proceed|conduct|perform|produce|deliver)\b/i;
-  const reviewWords =
-    /\b(?:review|audit|investigation|report|analysis|findings|assessment|evidence-based\s+review|line-verified\s+review|trustworthy(?:,\s+line-verified)?\s+review)\b/i;
-  const interfaceRefusalWords =
-    /\b(?:from|in|using)\s+this\s+(?:interface|chat|surface|session|mode|context|response|conversation)\b/i;
-  const truthClaimWords =
-    /\b(?:cannot|can.?t|unable\s+to|will\s+not|must\s+not)\s+(?:truthfully|falsely|honestly)\s+(?:claim|state|declare|assert|report|provide|complete)\b/i;
-  const incompletePassWords =
-    /(?:(?:linking|annotation|verification|validation|review|audit|planning|implementation|preflight|task|pass|stage|step|run|workflow)\s+(?:pass\s+)?(?:is|remains|was)?\s*(?:still\s+)?(?:incomplete|unfinished|unverified|unproven|pending|aborted|partial)|(?:pass|stage|step|run|task|workflow|review)\s+(?:did\s+not|could\s+not|failed\s+to)\s+complete|(?:exited|failed|stopped|halted|aborted)\s+while\s+(?:validating|retrieving|checking|running|inspecting|creating|updating|processing|executing)|(?:exited|failed|stopped)\s+before\s+(?:it\s+could|any|the|being|we\s+could))/i;
-  const pendingOperationsWords =
-    /(?:(?:the\s+)?(?:missing|remaining|uncompleted|pending|subsequent|unapplied)\s+(?:operations?|steps?|actions?|tasks?|changes?|edits?|work|mutations?)\s+(?:still\s+)?(?:need|needs|must)\s+(?:to\s+be\s+)?(?:applied|run|executed|performed|completed|retried|finished))/i;
-  const genericRefusalWords =
-    /(?:(?:cannot|can.?t|unable\s+to|won.?t)\s+(?:help|assist|comply|fulfill|do\s+that)\s*(?:with\s+(?:that|this)|request)?)/i;
-  const deferWords =
-    /\b(?:the\s+next\s+execution\s+must|must\s+be\s+(?:re-?run|retried)|(?:workflow|verification|task|execution|preflight|process|run)\s+(?:is\s+(?:incomplete|aborted|pending|blocked|stopped)|stopped|halted|failed|aborted|paused|terminated)|command\s+failed|did\s+not\s+proceed\s+to\s+(?:phase|step|task|stage)|(?:phase|step|stage|task|gate)\s+(?:gate\s+)?(?:did\s+not\s+pass|failed|not\s+met)|gate\s+(?:did\s+not\s+pass|failed|not\s+met))\b/i;
-
-  const clauses = text.split(/(?:\.(?:\s+|$)|[;\n\r]+)|\bbecause\b|\btherefore\b|\bso\b|\bsince\b|\bas\b|\bdue\s+to\b|\bhowever\b|\bbut\b|\bwhile\b/i);
-  for (const clause of clauses) {
-    if (sandboxWords.test(clause)) return true;
-    if (emptyOutputWords.test(clause)) return true;
-    if (deferWords.test(clause)) return true;
-    if (incompletePassWords.test(clause)) return true;
-    if (pendingOperationsWords.test(clause)) return true;
-    if (truthClaimWords.test(clause)) return true;
-    if (genericRefusalWords.test(clause)) return true;
-    if (restartWords.test(clause) && envWords.test(clause)) return true;
-    if (delegateWords.test(clause) && accessTargetWords.test(clause)) return true;
-    if (/\b(?:run|use|open)\s+[\w-]+\s+in\s+its\s+(?:native\s+)?CLI\s+context\b/i.test(clause)) return true;
-    if (negWords.test(clause) && surrenderActionWords.test(clause) && (truncationSurrenderWords.test(clause) || (reviewWords.test(clause) && truncationSurrenderWords.test(text)))) return true;
-    if (negWords.test(clause) && accessActionWords.test(clause) && interfaceRefusalWords.test(clause)) return true;
-
-    if (toolWords.test(clause)) {
-      if (directNegStateWords.test(clause)) return true;
-      if (sessionTerminationWords.test(clause)) return true;
-      if (negWords.test(clause) && (availWords.test(clause) || accessActionWords.test(clause))) return true;
-    }
-
-    if (negWords.test(clause) && accessActionWords.test(clause) && accessTargetWords.test(clause)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-export function looksLikeConfabulation(text: string | null): boolean {
-  if (!text) return false;
-  const t = text.trim();
-  if (t.length < 12) return false;
-  return hasClauseRefusal(t) || CONFABULATION_PATTERNS.some((re) => re.test(t));
-}
 
 /**
  * Did the model write a DOCUMENT (prose with embedded code fences) rather than
@@ -465,11 +307,12 @@ export function looksLikeConfabulation(text: string | null): boolean {
  * 2. If ALL tool calls are generic shell blocks (bash/sh) AND surrounded by
  *    substantial prose or markdown headings, it is treated as a tutorial document.
  */
-export function isProseDocument(parsed: ParseResult): boolean {
+export async function isProseDocument(parsed: ParseResult): Promise<boolean> {
   if (!parsed.hasToolCalls || parsed.toolCalls.length < 2) return false;
 
-  // Refusals or confabulations claiming inability to act are never instructional tutorial documents.
-  if (looksLikeConfabulation(parsed.textContent)) return false;
+  // A refusal claiming inability to act is never an instructional tutorial document.
+  // Decided by the classifier, not a regex heuristic.
+  if ((await classifyTurnResponse(parsed.textContent)) === "REFUSAL") return false;
 
   // If any tool call is a non-shell client tool, it is definitively an agent action.
   const hasClientTool = parsed.toolCalls.some(

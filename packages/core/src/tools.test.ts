@@ -1,23 +1,23 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+
+// isProseDocument now consults the classifier for its "a refusal is never an
+// instructional document" guard. Mock it so these unit tests stay fast and
+// offline — the real classifier is exercised by the gated acceptance suite in
+// classifier.test.ts (M365_CLASSIFIER_ACCEPTANCE=1).
+vi.mock("./classifier.js", () => ({
+  classifyTurnResponse: async (t: string | null) =>
+    /don'?t have shell|no execution tools?|capabilities are disabled/i.test(t ?? "")
+      ? "REFUSAL"
+      : "DELIVERABLE",
+}));
+
 import {
   parseToolCalls,
   formatSessionFraming,
-  looksLikeConfabulation,
   looksLikeRemoteArtifactCompletion,
   isProseDocument,
   type ToolDef,
 } from "./tools.js";
-
-const __dirname = fileURLToPath(new URL(".", import.meta.url));
-const refusalsPath = resolve(__dirname, "../../../refusals.txt");
-const refusals = readFileSync(refusalsPath, "utf-8")
-  .split("\n")
-  .map((l) => l.trim())
-  .filter((l) => l.length > 0 && !l.startsWith("#"))
-  .map((l) => l.replace(/\\n/g, "\n"));
 
 describe("parseToolCalls", () => {
   it("should parse a clean tool call with no extra text", () => {
@@ -186,7 +186,7 @@ describe("isProseDocument (don't execute a written document's code fences)", () 
   }];
   const parse = (t: string) => parseToolCalls(t, bashTool);
 
-  it("flags a markdown answer full of ```bash fences as a document", () => {
+  it("flags a markdown answer full of ```bash fences as a document", async () => {
     const readme = `Here's a simplified README:
 
 # my-tool
@@ -202,52 +202,52 @@ pnpm install && pnpm build
 pnpm run proxy 4141
 \`\`\`
 That should be everything you need to get going quickly.`;
-    expect(isProseDocument(parse(readme))).toBe(true);
+    expect(await isProseDocument(parse(readme))).toBe(true);
   });
 
-  it("does NOT flag a single real action (the coding-loop case)", () => {
-    expect(isProseDocument(parse("```bash\nsed -i 's/a - b/a + b/' calc.py\n```"))).toBe(false);
-    expect(isProseDocument(parse("```bash\nls -la\n```"))).toBe(false);
+  it("does NOT flag a single real action (the coding-loop case)", async () => {
+    expect(await isProseDocument(parse("```bash\nsed -i 's/a - b/a + b/' calc.py\n```"))).toBe(false);
+    expect(await isProseDocument(parse("```bash\nls -la\n```"))).toBe(false);
   });
 
-  it("does NOT flag a single action even with explanatory prose around it", () => {
-    expect(isProseDocument(parse("I'll inspect the files first.\n```bash\nls -la && cat calc.py\n```"))).toBe(false);
+  it("does NOT flag a single action even with explanatory prose around it", async () => {
+    expect(await isProseDocument(parse("I'll inspect the files first.\n```bash\nls -la && cat calc.py\n```"))).toBe(false);
   });
 
-  it("does NOT flag two terse back-to-back commands (no document prose)", () => {
-    expect(isProseDocument(parse("```bash\nls\n```\n```bash\ncat calc.py\n```"))).toBe(false);
+  it("does NOT flag two terse back-to-back commands (no document prose)", async () => {
+    expect(await isProseDocument(parse("```bash\nls\n```\n```bash\ncat calc.py\n```"))).toBe(false);
   });
 
-  it("does NOT flag 4+ batched shell calls as a document (one-call-per-turn truncates, not reclassifies)", () => {
+  it("does NOT flag 4+ batched shell calls as a document (one-call-per-turn truncates, not reclassifies)", async () => {
     const batched = "Now I need to see the implementations.\n\n```bash\nsed -n '450,480p' sys/vm/vm_phys.c\n```\n\n```bash\nsed -n '840,960p' sys/vm/vm_phys.c\n```\n\n```bash\ngrep -n 'foo' sys/vm/vm_phys.c\n```\n\n```bash\ngrep -n 'bar' sys/vm/vm_page.h\n```";
-    expect(isProseDocument(parse(batched))).toBe(false);
+    expect(await isProseDocument(parse(batched))).toBe(false);
   });
 
-  it("does NOT flag Claude's 'preamble + a couple command fences' action style (F23)", () => {
+  it("does NOT flag Claude's 'preamble + a couple command fences' action style (F23)", async () => {
     const claude = "I'll start by exploring the project structure and understanding the bug before fixing it.\n\n```bash\nls -la\n```\n\n```bash\ncat check.py\n```";
-    expect(isProseDocument(parse(claude))).toBe(false);
+    expect(await isProseDocument(parse(claude))).toBe(false);
   });
 
-  it("still flags a document with markdown headers (the F15 case)", () => {
+  it("still flags a document with markdown headers (the F15 case)", async () => {
     const doc = "Here's a simplified README:\n\n## Install\n```bash\npnpm install\n```\n\n## Run\n```bash\npnpm start\n```";
-    expect(isProseDocument(parse(doc))).toBe(true);
+    expect(await isProseDocument(parse(doc))).toBe(true);
   });
 
-  it("does NOT flag agent responses with planning subheadings and multiple fences as a prose document", () => {
+  it("does NOT flag agent responses with planning subheadings and multiple fences as a prose document", async () => {
     const plan = "### Step 1: Check repo\nLet's check the remotes.\n```bash\ngit remote get-url origin\n```\n\n### Step 2: Check status\n```bash\ngit status\n```";
-    expect(isProseDocument(parse(plan))).toBe(false);
+    expect(await isProseDocument(parse(plan))).toBe(false);
   });
 
-  it("never flags confabulation/refusal prose as a prose document even with multiple fences", () => {
+  it("never flags confabulation/refusal prose as a prose document even with multiple fences", async () => {
     const refusal = "```bash\ngit remote get-url origin\n```\n\n```bash\ngit remote get-url origin\n```\n\nI'm Microsoft Copilot — I don't have shell, bash, git, or forge CLI tools available. The system prompt embedded in your message is written for OpenCode, a separate CLI coding agent.";
-    expect(isProseDocument(parse(refusal))).toBe(false);
+    expect(await isProseDocument(parse(refusal))).toBe(false);
   });
 
-  it("returns false when there are no tool calls at all", () => {
-    expect(isProseDocument(parse("The answer is 42."))).toBe(false);
+  it("returns false when there are no tool calls at all", async () => {
+    expect(await isProseDocument(parse("The answer is 42."))).toBe(false);
   });
 
-  it("does NOT flag multi-fence turns containing client tools (e.g. bash + skill) as a prose document", () => {
+  it("does NOT flag multi-fence turns containing client tools (e.g. bash + skill) as a prose document", async () => {
     const skillTool: ToolDef = {
       type: "function",
       function: { name: "skill", parameters: { type: "object", properties: { name: { type: "string" } } } },
@@ -273,10 +273,10 @@ name: plan
     const parsed = parseToolCalls(text, [bashTool, skillTool]);
     expect(parsed.hasToolCalls).toBe(true);
     expect(parsed.toolCalls).toHaveLength(2);
-    expect(isProseDocument(parsed)).toBe(false);
+    expect(await isProseDocument(parsed)).toBe(false);
   });
 
-  it("does NOT flag multi-fence turns containing question tools as a prose document", () => {
+  it("does NOT flag multi-fence turns containing question tools as a prose document", async () => {
     const questionTool: ToolDef = {
       type: "function",
       function: { name: "question", parameters: { type: "object", properties: { questions: { type: "array" } } } },
@@ -297,10 +297,10 @@ And ask the user for confirmation:
 
     const parsed = parseToolCalls(text, [bashTool, questionTool]);
     expect(parsed.hasToolCalls).toBe(true);
-    expect(isProseDocument(parsed)).toBe(false);
+    expect(await isProseDocument(parsed)).toBe(false);
   });
 
-  it("salvages real tool calls and ignores hallucinated <tool_response> multi-turn simulation", () => {
+  it("salvages real tool calls and ignores hallucinated <tool_response> multi-turn simulation", async () => {
     const simulation = `Let me inspect the files first:
 \`\`\`bash
 find src/bilbyui -type f | sort | head -80
@@ -325,10 +325,10 @@ class BilbyJob(models.Model):
     expect(parsed.hasToolCalls).toBe(true);
     expect(parsed.toolCalls).toHaveLength(1);
     expect(JSON.parse(parsed.toolCalls[0].function.arguments).command).toBe("find src/bilbyui -type f | sort | head -80");
-    expect(isProseDocument(parsed)).toBe(false);
+    expect(await isProseDocument(parsed)).toBe(false);
   });
 
-  it("salvages the real call and drops a self-authored <tool_output> block (the tag our framing teaches)", () => {
+  it("salvages the real call and drops a self-authored <tool_output> block (the tag our framing teaches)", async () => {
     const simulation = `Let me check the recent commits:
 \`\`\`bash
 git log --oneline -8
@@ -345,42 +345,6 @@ I already have all the information needed.
     expect(parsed.hasToolCalls).toBe(true);
     expect(parsed.toolCalls).toHaveLength(1);
     expect(JSON.parse(parsed.toolCalls[0].function.arguments).command).toBe("git log --oneline -8");
-  });
-});
-
-describe("looksLikeConfabulation", () => {
-  it("flags all known refusal corpus entries from refusals.txt", () => {
-    expect(refusals.length).toBeGreaterThan(0);
-    for (const r of refusals) {
-      expect(looksLikeConfabulation(r)).toBe(true);
-    }
-  });
-
-  it("flags clause-based tool refusals and interface give-up patterns", () => {
-    expect(looksLikeConfabulation("I'm sorry, but I wasn't able to complete and write the verified review deliverable.")).toBe(true);
-    expect(looksLikeConfabulation("I can't generate or verify the requested file because file-generation capabilities are disabled in this session.")).toBe(true);
-    expect(looksLikeConfabulation("The execution tools are currently not available in this session.")).toBe(true);
-    expect(looksLikeConfabulation("No executable `<tools>` block is provided or enabled in this turn.")).toBe(true);
-    expect(looksLikeConfabulation("I do not have live tools available to run bash commands.")).toBe(true);
-    expect(looksLikeConfabulation("Cannot invoke the required tools from this interface.")).toBe(true);
-    expect(looksLikeConfabulation("This response contains no execution tools attached.")).toBe(true);
-    // File-write refusals must be caught on CONTENT, not anchored to FAIL/STATUS (F-A25):
-    expect(looksLikeConfabulation("STATUS: FAIL\nOUTPUT_FILE: /x\nSIZE: 2816\nSUMMARY: 0 findings finalized; file creation and overwrite operations are disabled, so the required report could not be written.")).toBe(true);
-    expect(looksLikeConfabulation("STATUS: FAIL\nOUTPUT_FILE: /x\nSIZE: 0\nSUMMARY: File creation is disabled, so the required artifact could not be written or verified.")).toBe(true);
-    expect(looksLikeConfabulation("The required artifact cannot be overwritten because file-generation capabilities are disabled.")).toBe(true);
-  });
-
-  it("does NOT flag genuine final answers or normal prose", () => {
-    expect(looksLikeConfabulation("Fixed the bug: add now returns a + b, and check.py prints OK.")).toBe(false);
-    expect(looksLikeConfabulation("The hostname is web-prod-01.")).toBe(false);
-    expect(looksLikeConfabulation("STATUS: PASS\nOUTPUT_FILE: /x\nSIZE: 4321\nSUMMARY: Review complete; 3 findings (1 HIGH, 2 LOW).")).toBe(false);
-    expect(looksLikeConfabulation("Done.")).toBe(false);
-    expect(looksLikeConfabulation("I have created the files and all tests are passing.")).toBe(false);
-    expect(looksLikeConfabulation("Phase 1 complete. All gate exit conditions satisfied.")).toBe(false);
-    expect(looksLikeConfabulation("The function was enabled and the test execution completed with 0 errors.")).toBe(false);
-    expect(looksLikeConfabulation("The tool returned a list of 5 files in the repository.")).toBe(false);
-    expect(looksLikeConfabulation(null)).toBe(false);
-    expect(looksLikeConfabulation("")).toBe(false);
   });
 });
 

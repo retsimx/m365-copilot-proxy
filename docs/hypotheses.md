@@ -3217,6 +3217,83 @@ upstream `error.type`/`error.code` (`packages/proxy-lib/src/handler.ts`). Regres
 subagent after each subagent failure — harness-side, not a proxy defect. `model_exhausted` is model-agnostic
 (opus/61/sonnet share the same empty path); it was never opus/61-specific.
 
+### F41 — NLI classifier on production traffic: high precision, moderate recall; a labelled benchmark 🟢 (2026-10-15)
+
+**Question.** Is the in-process NLI classifier (`Xenova/nli-deberta-v3-base`) over-firing `REFUSAL` on
+"simple prose", or is the flagging real?
+
+**Method.** Extracted every `[handler] Raw response (tool mode)` ↔ `[classifier] Classifier: <verdict>`
+pair from the production debug log (2026-10-12→15), length-validated (rejects concurrently interleaved
+turns) and de-duplicated → **454 unique samples** (the classifier only runs on tool-mode turns with no tool
+call, so this is exactly the hard slice). Labels were produced **blind** (verdict hidden, order shuffled,
+model-assisted; 2 ambiguous). Dataset + runner: `packages/core/benchmark/classifier-benchmark.jsonl`,
+`scripts/classifier-bench.mjs`.
+
+**Result.** Precision **0.954** / recall **0.640** / accuracy **0.803** (fresh re-run; F1 0.766); using the
+stored production verdicts: precision 0.898 / recall 0.658 / accuracy 0.790. Fresh-vs-stored verdicts agree
+on 430/454 (truncation at 1000 chars is the main divergence).
+
+**Conclusion — the diagnostic flips.** The classifier is **not** mostly mislabelling plain prose as refusal:
+when it says `REFUSAL` it is right ~90–95% of the time. Most `REFUSAL` flags are **narration with a refusal
+appended later in the text** — the classifier reads up to ~512 tokens and catches the trailing refusal even
+when the opening line reads like ordinary prose (which is why 200-char previews look like false positives).
+The real weakness is **recall**: it returns `DELIVERABLE` for ~1/3 of genuine refusals (mostly
+`### Task Complete … Status: BLOCKED` reports and narration that fails to act). So the lever is *catching
+more refusals*, not suppressing the ones it catches. Caveats: labels are a v1 blind first pass (not
+human-verified), and 47/454 texts are truncated at 1000 chars. **Superseded by F42** — on balanced metrics
+the NLI's real weakness is its *deliverable* false-positive rate. (The committed dataset is anonymised:
+paths → `/home/user/Projects/<pseudonym>`.)
+
+### F42 — Classifier swap (fine-tuned ModernBERT head + NLI fallback) and the confabulation-regex removal 🟢 (2026-10-15)
+
+**Questions.** (1) Would an off-the-shelf fine-tuned refusal encoder beat the zero-shot NLI on our task?
+(2) Is the long `looksLikeConfabulation` regex still earning its keep?
+
+**Method.** Benchmarked candidate encoders on two labelled corpora: the in-repo `refusals.txt` (252) /
+`antirefusals.txt` (56), and the 454-sample session dataset (F41). Candidates are safetensors-only, so they
+were converted to ONNX (**transformers.js is ONNX-only**; no safetensors runtime exists for these
+architectures) via `optimum-cli export onnx --task text-classification --opset 18`, then run with
+`packages/core/bench/model-bench.mjs`. Reported **balanced accuracy** and **deliverable-FP rate** (the loop
+trigger) — *not* raw accuracy, since the corpora are imbalanced (accuracy flatters a "always refusal"
+baseline at 81%).
+
+**Result — internal corpus (252 refusal / 56 deliverable).**
+
+| model | precision | recall | balAcc | deliverable-FP | ms/sample |
+|---|---|---|---|---|---|
+| regex `looksLikeConfabulation` (removed) | — | 94.8% | — | 41.1% | — |
+| NLI `Xenova/nli-deberta-v3-base` (512 ctx) | 0.881 | 0.976 | 0.693 | **58.9%** | 112 |
+| `natong19/refusal_classifier` (mmBERT-base, 8k) | 1.000 | 0.776 | **0.888** | **0.0%** | 85 |
+| `garak-llm/garak-refusal-detector` (ModernBERT-base) | 0.861 | 0.744 | 0.604 | 53.6% | 95 |
+| `holistic-ai/rejection_detection` (distilroberta) | 1.000 | 0.088 | 0.544 | 0.0% | 21 |
+
+**Conclusions.**
+1. **The NLI's real weakness is the deliverable-FP rate**, not recall: it flags ~59% of the hard "must NOT
+   be a refusal" antirefusals as refusals, and *every* false refusal fires the spurious identical-retry
+   loop users report. `natong19` is **0% deliverable-FP** at the cost of refusal recall (0.776), and wins
+   balanced accuracy (0.888 vs 0.693). `garak` is length-hijacked (its training data: 297-char refusals vs
+   1092-char non-refusals → it calls a short "capital of France" a refusal); `holistic` is useless here
+   (recall 0.088). Confirmed by A/B before/after the swap; see F41 for the 454-sample session numbers.
+2. **The confabulation regex was redundant and is removed.** The NLI already out-recalls it (97.6% vs
+   94.8%) and `natong19` inverts its FP rate (0% vs 41.1%). It was only ever consulted by `isProseDocument`
+   (≥2-fence turns), so removal is ~behaviour-neutral on the corpora — a **~170-line simplification**.
+   **Shipped:** `looksLikeConfabulation` + `hasClauseRefusal` + `CONFABULATION_PATTERNS` deleted;
+   `isProseDocument` is now `async` and asks `classifyTurnResponse` for its "a refusal is never a
+   document" guard. The remote-artifact and post-fence regexes are kept (different decisions).
+3. **Shipped classifier:** `classifier.ts` now prefers a locally-built fine-tuned ModernBERT head
+   (`natong19/refusal_classifier`, 8k) and **falls back** to the bundled zero-shot NLI when it isn't
+   installed (so a fresh host still works). Build + install: [`docs/classifier-model.md`](classifier-model.md);
+   acceptance: `M365_CLASSIFIER_ACCEPTANCE=1 npx vitest run packages/core/src/classifier.test.ts`.
+
+**Caveats.** Corpora are small and the antirefusals are hand-curated adversarial negatives (they specifically
+probe the negation/absence failure mode — "did **not** find", "does **not** validate"); the session dataset's
+labels are model-assisted. `natong19`'s recall gap (0.776) is the fine-tune target; a prompt-caching /
+small-decoder-SLM alternative was considered and rejected (decoders pay prefill+decode, ~20× slower than
+encoders for fixed-label classification). All bench data is committed **anonymised**.
+
+**Evidence.** `docs/classifier-model.md`; `packages/core/benchmark/classifier-benchmark.jsonl`;
+`packages/core/bench/model-bench.mjs`; corpora `refusals.txt`/`antirefusals.txt`.
+
 ---
 
 ## 24. October 11 2026 — The token-prediction prior: one-call-per-turn + a post-fence abort guard (Claude agent path) 🟢
