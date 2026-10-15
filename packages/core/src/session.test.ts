@@ -4,6 +4,7 @@ import {
   isThrottled,
   classifyBotMessage,
   createBotMessageRouter,
+  createAnswerAccumulator,
 } from "./session.js";
 import { MessageUpdate } from "./schemas.js";
 
@@ -197,6 +198,52 @@ describe("createBotMessageRouter (design 002 §4.2)", () => {
     route({ author: "bot", text: "mkdir -p …", contentType: "Code" });
     expect(answered).toEqual([]);
     expect(reasoned).toEqual([]);
+  });
+});
+
+describe("createAnswerAccumulator — no output accepted after the Stop frame", () => {
+  it("accumulates and streams deltas normally before stop()", () => {
+    const emitted: string[] = [];
+    const acc = createAnswerAccumulator((e) => emitted.push(e));
+    // advance() takes the NEXT FULL TEXT (answer + delta), as session.run calls it.
+    acc.advance("Here is the ");
+    acc.advance("Here is the result.");
+    expect(acc.answer).toBe("Here is the result.");
+    expect(emitted.join("")).toBe("Here is the result.");
+    expect(acc.hasContent).toBe(true);
+    expect(acc.stopped).toBe(false);
+  });
+
+  it("drops every frame after stop() — the post-Stop M365 UI text never reaches the answer", () => {
+    const emitted: string[] = [];
+    const acc = createAnswerAccumulator((e) => emitted.push(e));
+    acc.advance("```bash\ngrep -n foo sys/conf.h\n```");
+
+    acc.stop(); // caller aborted / post-fence guard fired → Stop frame sent
+
+    // M365 keeps emitting after the Stop (its own UI text); none of it may be kept.
+    acc.advance("\n\n<tool");
+    acc.advance("\n\nYou have stopped this conversation.");
+    acc.advance("\n\nYou have stopped this conversation.");
+
+    expect(acc.answer).toBe("```bash\ngrep -n foo sys/conf.h\n```");
+    expect(emitted.join("")).toBe("```bash\ngrep -n foo sys/conf.h\n```");
+    expect(acc.stopped).toBe(true);
+  });
+
+  it("hasContent stays false when only post-stop frames arrive", () => {
+    const acc = createAnswerAccumulator(() => {});
+    acc.stop();
+    acc.advance("You have stopped this conversation.");
+    expect(acc.answer).toBe("");
+    expect(acc.hasContent).toBe(false);
+  });
+
+  it("stop() is idempotent", () => {
+    const acc = createAnswerAccumulator(() => {});
+    acc.stop();
+    acc.stop();
+    expect(acc.stopped).toBe(true);
   });
 });
 

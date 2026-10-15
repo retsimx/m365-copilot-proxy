@@ -148,6 +148,45 @@ export function foldStreamText(
 }
 
 /**
+ * Accumulates the streamed answer, folding token deltas and full-text snapshots
+ * (see {@link foldStreamText}) and streaming each newly-appended suffix.
+ *
+ * `stop()` makes it accept **no further input**. This is called once the Stop frame
+ * has been sent (caller aborted / post-fence guard fired): M365 keeps emitting for a
+ * moment afterwards, and its post-stop UI text (e.g. `"You have stopped this
+ * conversation."`) would otherwise be folded into the answer, returned as content,
+ * and left in the conversation — where the model then reproduces it on later turns.
+ */
+export function createAnswerAccumulator(onDelta: (emit: string) => void) {
+  let answer = "";
+  let receivedContent = false;
+  let stopped = false;
+  return {
+    advance(next: string): void {
+      if (stopped) return; // ignore all frames after the Stop frame
+      const r = foldStreamText(answer, next);
+      if (r.answer !== answer) {
+        answer = r.answer;
+        receivedContent = true;
+      }
+      if (r.emit) onDelta(r.emit);
+    },
+    stop(): void {
+      stopped = true;
+    },
+    get stopped(): boolean {
+      return stopped;
+    },
+    get answer(): string {
+      return answer;
+    },
+    get hasContent(): boolean {
+      return receivedContent;
+    },
+  };
+}
+
+/**
  * Attach a native custom action/plugin to a conversation and drive the confirm→invoke
  * round-trip over the WS (docs/hypotheses.md §12.6, H-NATIVE-6/7). All fields are
  * best-effort passthroughs modelled on the decompiled client; the exact inline-def
@@ -317,12 +356,11 @@ export class CopilotSession {
     const nativeActions = this.nativeActions;
 
     return new Promise((resolve, reject) => {
-      // The authoritative reconstructed answer. M365 streams a MIX of token-level
-      // DeltaUpdates and full-text MessageUpdate snapshots (empirically the FIRST
-      // token often arrives only as a snapshot, not a delta), so we can't just
-      // concatenate deltas — we fold both into this one string. See `advance`.
-      let answer = "";
-      let receivedContent = false;
+      // The authoritative reconstructed answer is the `acc` accumulator (created
+      // below, after `onDelta`). M365 streams a MIX of token-level DeltaUpdates and
+      // full-text MessageUpdate snapshots (empirically the FIRST token often arrives
+      // only as a snapshot, not a delta), so we fold both — and `acc.stop()` makes it
+      // refuse all further input once the Stop frame is sent.
       let throttleInfo: { current: number; max: number } | null = null;
       let contentOrigin: string | null = null;
       let messageType: string | null = null;
@@ -366,6 +404,8 @@ export class CopilotSession {
           queue.push(text);
         }
       };
+      // Fold the streamed answer; refuses all input once `stop()` is called (on abort).
+      const acc = createAnswerAccumulator(onDelta);
       const onDone = () => {
         streamDone = true;
         if (waiting) {
@@ -407,16 +447,9 @@ export class CopilotSession {
         }
       };
 
-      // Fold a token delta OR a full-text snapshot into `answer` and stream the
-      // newly-appended suffix (see foldStreamText for the prefix-safe rules).
-      const advance = (next: string) => {
-        const r = foldStreamText(answer, next);
-        if (r.answer !== answer) {
-          answer = r.answer;
-          receivedContent = true;
-        }
-        if (r.emit) onDelta(r.emit);
-      };
+      // Fold-and-stream is owned by `acc` (see createAnswerAccumulator); it gates on
+      // `stop()` (called from `onAbort`) so no output is accepted after the Stop frame.
+      const advance = acc.advance;
 
       // Route answer vs reasoning (chain-of-thought) frames. Owns the CoT dedupe
       // set; the reasoning callback fires as steps arrive, exactly like onDelta,
@@ -428,10 +461,10 @@ export class CopilotSession {
 
       const stream: CopilotStream = {
         get fullText() {
-          return answer;
+          return acc.answer;
         },
         get hasContent() {
-          return receivedContent;
+          return acc.hasContent;
         },
         get throttle() {
           return throttleInfo;
@@ -498,7 +531,6 @@ export class CopilotSession {
       });
 
       let handshakeDone = false;
-      let stopped = false;
 
       // Cancellation: when the caller's signal aborts (HTTP client disconnected),
       // cancel the in-flight M365 turn the same way the real UI does — send the
@@ -506,8 +538,8 @@ export class CopilotSession {
       // hard-close fallback). Before the handshake completes there's nothing to
       // stop, so just close.
       const onAbort = () => {
-        if (stopped) return;
-        stopped = true;
+        if (acc.stopped) return;
+        acc.stop();
         try {
           if (ws.readyState === WebSocket.OPEN && handshakeDone) {
             log.info("Aborted — sending Stop frame to cancel the turn");
@@ -578,8 +610,8 @@ export class CopilotSession {
 
       ws.on("close", () => {
         clearAbort();
-        log.info("WS closed, answer length:", answer.length);
-        log.debug("Final response:", trunc(answer, 1000));
+        log.info("WS closed, answer length:", acc.answer.length);
+        log.debug("Final response:", trunc(acc.answer, 1000));
         onDone();
       });
 
@@ -822,7 +854,7 @@ export class CopilotSession {
           for (const arg of base.arguments) {
             const delta = DeltaUpdate.safeParse(arg);
             if (delta.success) {
-              advance(answer + delta.data.writeAtCursor);
+              acc.advance(acc.answer + delta.data.writeAtCursor);
               continue;
             }
 
