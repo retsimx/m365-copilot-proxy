@@ -167,7 +167,7 @@ prompt is tuned. The layers, in handler order:
 
 ## Fenced-parsing hardening (Oct 2026)
 
-Real Claude tool-shapes exposed five parser gaps, all fixed in `packages/core/src/fenced.ts`:
+Real Claude tool-shapes exposed six parser gaps, all fixed in `packages/core/src/fenced.ts`:
 
 - **Glued / mid-line fence openers.** M365 emits `prose```read` (the opener glued to the end of
   a prose line). The streaming prose-gate matched only *own-line* fences, so the fence — and
@@ -193,6 +193,14 @@ Real Claude tool-shapes exposed five parser gaps, all fixed in `packages/core/sr
   (`indexOfUnquotedBackticks`): a ` ``` ` inside `'…'`/`"…"` is data, never a closing fence. Bug
   report `.agents/results/bugs/bug-20261012-fenced-quoted-backticks.md`; guardrail
   [`checklists/fenced-parsing.md`](checklists/fenced-parsing.md).
+- **Bare inner fence in a `write`/`edit` body.** A body embedding a language-less ` ``` `
+  block (the ordinary Markdown form) was truncated at that **opener** — `OPEN_FENCE_REGEX`
+  needs an info-string, so it fell through to the close path — writing a partial file AND
+  tripping the post-fence abort (live 2026-10-17, cid `95e5e391`; the model re-wrote the
+  report four times). A clean bare fence is now recognised as an inner opener via
+  `hasBareFenceFollower` lookahead (stops at a new tool fence / result tag); a bare fence with
+  inline trailing prose is still the closer. Bug report
+  `.agents/results/bugs/bug-20261017-fenced-bare-inner-fence-truncation.md`.
 
 Also: **self-authored result simulation** is rejected — the stripper matches `<tool_output>` as
 well as the legacy `<tool_response>` (salvage the real call, drop the fabricated suffix, reset

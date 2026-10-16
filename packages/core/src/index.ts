@@ -96,6 +96,7 @@ export {
   createProseStreamGate,
   createFenceBodyState,
   feedToolBodyLine,
+  hasBareFenceFollower,
   type FencedToolSpec,
   type FenceBodyState,
   type ProseStreamGate,

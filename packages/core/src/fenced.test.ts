@@ -932,6 +932,39 @@ EOF
     expect(leftover.trim()).toBe("");
   });
 
+  // Regression (2026-10-17, live CP-7 write session): a `write` body whose embedded
+  // code block opens with a BARE ``` (no info-string) — the ordinary Markdown form —
+  // was truncated at that opener. OPEN_FENCE_REGEX requires a language token, so a
+  // bare opener fell through to the close path and ended the tool body early, writing
+  // a partial file AND tripping the post-fence contamination guard. The fix treats a
+  // bare fence as an inner-fence opener when a later bare fence follows before any new
+  // tool call / result tag.
+  it("does not truncate a write body whose nested code fence opens BARE (no language)", () => {
+    const text = [
+      "```write_file",
+      "path: result.md",
+      "",
+      "# Result",
+      "",
+      "Programmatic diff run inside the fixtures directory:",
+      "",
+      "```",
+      "a111 -> b222: NetworkSNR 10.5 -> 11.0",
+      "```",
+      "",
+      "## MORE CONTENT AFTER THE BARE BLOCK",
+      "This must be preserved.",
+      "```",
+    ].join("\n");
+
+    const { calls, leftover } = parseFencedToolCalls(text, specs);
+    expect(calls).toHaveLength(1);
+    const args = JSON.parse(calls[0].function.arguments);
+    expect(args.content).toContain("a111 -> b222");
+    expect(args.content).toContain("MORE CONTENT AFTER THE BARE BLOCK");
+    expect(leftover.trim()).toBe("");
+  });
+
   it("parses a write body with MULTIPLE nested code fences, closing only at the real tool fence", () => {
     const text = [
       "```write_file",

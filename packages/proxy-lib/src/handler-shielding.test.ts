@@ -1616,6 +1616,30 @@ describe("hasPostFenceContamination (post-fence abort guard)", () => {
     expect(hasPostFenceContamination(text, guardSpecs)).toBe(false);
   });
 
+  // Regression (2026-10-17): same class as above but the embedded block opens with a
+  // BARE ``` (no language). The guard mistook that opener for the tool call's closer
+  // and aborted the turn mid-write, truncating the file.
+  it("does NOT flag a write body whose nested code fence opens BARE (no language)", () => {
+    const text = [
+      "```write_file",
+      "path: result.md",
+      "",
+      "# Result",
+      "",
+      "Programmatic diff run inside the fixtures directory:",
+      "",
+      "```",
+      "a111 -> b222: NetworkSNR 10.5 -> 11.0",
+      "```",
+      "",
+      "## MORE CONTENT AFTER THE BARE BLOCK",
+      "This should be preserved.",
+      "```",
+      "",
+    ].join("\n");
+    expect(hasPostFenceContamination(text, guardSpecs)).toBe(false);
+  });
+
   it("does NOT flag a non-tool code fence (```c) followed by prose — only tool fences are calls", () => {
     // Regression: the model wrote a prose analysis containing a ```c block (no call).
     // The guard's own-line regex matched ANY fence, latched onto the ```c as the

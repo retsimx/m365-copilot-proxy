@@ -19,6 +19,7 @@ import {
   createProseStreamGate,
   createFenceBodyState,
   feedToolBodyLine,
+  hasBareFenceFollower,
   noteRequestOutcome,
   isDegradationBackoff,
   getRemainingDegradationCooldownMs,
@@ -288,15 +289,18 @@ export function hasPostFenceContamination(text: string, specs?: Map<string, Fenc
   // regex below would otherwise miss — causing the guard to latch onto a nested
   // ```lang block inside the body and abort a legitimate write (2026-10-12).
   const src = specs ? restoreM365Fences(text, specs) : text;
+  const lines = src.split(/\r?\n/);
   let inFence = false;
   let fencesClosed = 0;
   let outerFenceLen = 3;
   let bodyState = createFenceBodyState();
-  for (const line of src.split(/\r?\n/)) {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
     if (inFence) {
       // feedToolBodyLine returns true only when a bare ``` with no open inner fence or
-      // heredoc closes the OUTER tool fence.
-      if (feedToolBodyLine(line, bodyState, outerFenceLen, false)) {
+      // heredoc closes the OUTER tool fence. A bare ``` that opens a plain Markdown block
+      // inside a write/edit body (no language token) is body content, not the closer.
+      if (feedToolBodyLine(line, bodyState, outerFenceLen, false, hasBareFenceFollower(lines, i, specs))) {
         inFence = false;
         fencesClosed++;
       }

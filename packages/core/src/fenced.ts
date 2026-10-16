@@ -351,6 +351,28 @@ const CLOSE_FENCE_REGEX = /^ {0,3}`{3,}([ \t].*)?$/;
 function isLabelToken(label: string, specs: Map<string, FencedToolSpec>): boolean {
   return specs.has(label) || SHELL_LANGS.has(label);
 }
+const RESULT_TAG_REGEX = /<(?:tool_output|tool_response|assistant)\b/i;
+
+/** Lookahead used while walking a tool-call body: does a later BARE fence close an
+ *  inner Markdown code block before any new tool call or self-authored result tag
+ *  appears? A bare ``` with no language token is ambiguous — it can be the tool
+ *  call's closer, or the opener of a plain fenced block inside a `write` body.
+ *  When a later bare fence follows, the current one is the inner opener (body
+ *  content); otherwise it is the tool call's closer. */
+export function hasBareFenceFollower(
+  lines: string[],
+  index: number,
+  specs?: Map<string, FencedToolSpec>,
+): boolean {
+  for (let j = index + 1; j < lines.length; j++) {
+    const l = lines[j];
+    if (RESULT_TAG_REGEX.test(l)) return false;
+    const open = l.match(OPEN_FENCE_REGEX);
+    if (open && (specs?.has(open[3]) || SHELL_LANGS.has(open[3]))) return false;
+    if (CLOSE_FENCE_REGEX.test(l)) return true;
+  }
+  return false;
+}
 const HEREDOC_OPEN_REGEX = /(?:^|[^<])<<-?\s*['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?/;
 
 const SEARCH_REPLACE_REGEX =
@@ -664,6 +686,7 @@ export function feedToolBodyLine(
   state: FenceBodyState,
   outerFenceLen: number,
   isEdit: boolean,
+  bareFollower: boolean = false,
 ): boolean {
   if (state.heredocs.length > 0) {
     if (line.trim() === state.heredocs[state.heredocs.length - 1]) state.heredocs.pop();
@@ -691,6 +714,18 @@ export function feedToolBodyLine(
     const n = close[2].length;
     if (state.inner.length > 0 && n >= state.inner[state.inner.length - 1]) {
       state.inner.pop();
+      return false;
+    }
+    // A bare fence with no open inner is ambiguous: it either closes the tool call
+    // or OPENS a plain (language-less) Markdown block inside a write/edit body — the
+    // ordinary way a report embeds a code sample. Inline prose after the backticks
+    // (`…``` — next I'll …`) marks a real closer with glued trailing prose; a CLEAN
+    // bare fence followed by another bare fence (before any new tool call / result
+    // tag) is an inner opener. Without this, a body like `…\n```\ncode\n```\n…` was
+    // truncated at the first bare ``` (live 2026-10-17).
+    const trailing = (close[3] ?? "").trim();
+    if (!trailing && bareFollower) {
+      state.inner.push(n);
       return false;
     }
     return n >= outerFenceLen;
@@ -753,7 +788,7 @@ export function parseFencedToolCalls(
       // SEARCH/REPLACE regions are all body content. feedToolBodyLine tracks that state
       // (in one shared place with the post-fence guard) and returns true only when a bare
       // ``` with no open inner fence or heredoc closes the OUTER tool fence.
-      if (feedToolBodyLine(line, bodyState, fenceLen, !!toolSpec?.editPair)) {
+      if (feedToolBodyLine(line, bodyState, fenceLen, !!toolSpec?.editPair, hasBareFenceFollower(lines, i, specs))) {
         // Closing fence reached (possibly with prose glued after it on the same line).
         const inner = blockLines.join("\n");
         const args = parseFencedInner(toolSpec!, inner);
