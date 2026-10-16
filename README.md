@@ -378,6 +378,7 @@ All configuration and cache files reside in `~/.config/opencode-m365/`:
 | `M365_CLASSIFIER_MODEL` | `~/.config/opencode-m365/models/natong19` | Path to the local fine-tuned ModernBERT refusal head (8k ctx). Falls back to the bundled zero-shot NLI if absent — see [docs/classifier-model.md](docs/classifier-model.md). |
 | `M365_CLASSIFIER_POSITIVE_LABEL` | `^refus` | Regex matching the local head's refusal label (`refusal`, not `non-refusal`). |
 | `M365_CLASSIFIER_ACCEPTANCE` | `0` | Set to `1` to run the gated corpus acceptance suite (real classifier vs `refusals.txt`/`antirefusals.txt`). |
+| `M365_EXHAUSTION_TTL_SEC` | `3600` | After a model returns empty on every retry (daily-quota exhaustion), block it for this many seconds and short-circuit later requests with a NON-retryable **403** (no M365 turn) so the client fails the tool immediately instead of churning. `0` disables. See hypotheses F40. |
 | **Degradation Backoff** | | |
 | `M365_NO_BACKOFF` | `0` | Set to `1` to disable pacing backoff on empty/throttled responses. |
 | `M365_BACKOFF_THRESHOLD` | `3` | Consecutive empty/throttled responses across distinct conversations before triggering backoff. |

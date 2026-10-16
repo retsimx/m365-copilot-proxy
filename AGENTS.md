@@ -282,6 +282,14 @@ pnpm test:live      # M365_LIVE=1; live tests that hit real M365 (uses quota)
   `M365_CLASSIFIER_TIMEOUT_MS`, `M365_CLASSIFIER_MAX_TOKENS`, `M365_DISABLE_CONFAB_DETECTION`,
   `M365_DISABLE_STALL_RETRY`. Content-policy refusals are no longer special-cased (the old
   `looksLikeSafetyRefusal` → HTTP 400 `content_policy_refusal` fast-fail was removed).
+- **Model-quota exhaustion → non-retryable 403 + short-circuit:** an empty reply after **all**
+  `MAX_RETRIES` (2) quick retries — i.e. 3 consecutive empties — marks the model exhausted and returns
+  **HTTP 403** (`type:"model_exhausted"`, `code:"model_quota_exhausted"`), **not 502** (the AI SDK
+  retries only 408/409/429/5xx, so a 403 is terminal → the client fails the tool/subagent instead of
+  re-issuing). The model is then remembered for `M365_EXHAUSTION_TTL_SEC` (default **3600s**); later
+  requests for it short-circuit with the same 403 and **zero upstream turns**. Expiry is **lazy** —
+  evaluated on the next request, no timer — and a process restart also clears it. Single empties are
+  NOT exhaustion (they get the quick retry); the trigger is `MAX_RETRIES` reached. See hypotheses F40.
 
 
 ## Verifying changes end-to-end

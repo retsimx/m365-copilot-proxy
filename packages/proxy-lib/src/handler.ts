@@ -1074,6 +1074,14 @@ export async function handleChatCompletion(
   const { session } = conv;
   const hasTools = body.tools && body.tools.length > 0 && body.tool_choice !== "none";
   const model = body.model;
+
+  // Short-circuit a model already known exhausted (daily quota): answer with an
+  // immediate, NON-streamed 403 — no M365 turn. Non-retryable, so the client fails
+  // the tool/subagent at once instead of re-issuing a full paced turn each retry.
+  if (model && isModelExhausted(model)) {
+    log.warn(`Model '${model}' is marked exhausted — short-circuiting with 403 (no upstream turn)`);
+    return modelExhaustedResponse(model, null);
+  }
   // Track A (§3.3): recognise tool fences byte-identically to the parser so the
   // prose gate can seal at the first *known* tool fence. Built once per request.
   const specs = hasTools ? buildSpecMap(body.tools ?? []) : undefined;
@@ -1383,12 +1391,14 @@ export async function handleChatCompletion(
         text = "Please continue."; // M365 already has context
       } else {
         // Final empty after retries: the model did not respond or has exhausted its daily quota.
-        // Fail closed immediately with HTTP 502 so the client terminates the turn instead of retrying.
+        // Mark it exhausted (short-circuits later requests) and fail closed with a non-retryable 403.
+        markModelExhausted(model);
         conv.session.reset();
         conv.sentMessageCount = 0;
         return { error: modelExhaustedResponse(model, t) };
       }
     }
+    markModelExhausted(model);
     conv.session.reset();
     conv.sentMessageCount = 0;
     return { error: modelExhaustedResponse(model, null) };
@@ -1939,15 +1949,54 @@ function userThrottleProbeSec(): number {
   return schedule[Math.min(getDegradationEscalationLevel(), schedule.length - 1)];
 }
 
+// --- Per-model exhaustion short-circuit ------------------------------------
+// A daily model-quota exhaustion (empty responses) does not reset within the day,
+// so retrying the same model is futile and each retry costs a full paced M365 turn.
+// Once we observe an exhaustion we remember it for M365_EXHAUSTION_TTL_SEC and
+// short-circuit later requests for that model with an immediate, NON-streamed 403.
+// The client (AI SDK) retries 408/409/429/5xx but NOT other 4xx — so a 403 is
+// terminal: the tool/subagent fails at once instead of churning.
+const exhaustedModels = new Map<string, number>();
+
+function modelExhaustionTtlMs(): number {
+  return Math.max(0, Number(process.env.M365_EXHAUSTION_TTL_SEC ?? 3600)) * 1000; // default 1h
+}
+/** Remember that `model` is exhausted (daily quota) for the configured TTL. */
+export function markModelExhausted(model: string): void {
+  if (!model) return;
+  const ttl = modelExhaustionTtlMs();
+  if (ttl <= 0) return; // short-circuit disabled (M365_EXHAUSTION_TTL_SEC=0)
+  exhaustedModels.set(model, Date.now() + ttl);
+}
+/**
+ * Is `model` currently blocked by the exhaustion short-circuit? Lazily purges an
+ * expired entry — the block lifts `M365_EXHAUSTION_TTL_SEC` after it was last set,
+ * evaluated on the next request (there is no timer).
+ */
+export function isModelExhausted(model: string): boolean {
+  const until = exhaustedModels.get(model);
+  if (until === undefined) return false;
+  if (Date.now() >= until) {
+    exhaustedModels.delete(model);
+    return false;
+  }
+  return true;
+}
+/** Test hook. */
+export function resetModelExhaustion(): void {
+  exhaustedModels.clear();
+}
+
 /** Terminal error returned when a model produces an empty response (e.g. daily quota / priority access exhausted).
- *  Returns HTTP 502 with no Retry-After so the client immediately terminates the turn and does NOT loop or retry. */
+ *  Returns HTTP 403 — a NON-retryable status (the AI SDK retries only 408/409/429/5xx) — so the client
+ *  immediately terminates the turn / tool instead of looping or retrying. */
 function modelExhaustedResponse(
   modelName: string = "selected model",
   throttle: { current: number; max: number } | null = null,
 ): Response {
   const detail = throttle ? ` (throttle ${throttle.current}/${throttle.max})` : "";
   return jsonResponse(
-    502,
+    403,
     {
       error: {
         message: `M365 Copilot returned an empty response${detail} with model '${modelName}'. The selected model has exhausted its daily quota or priority access for today. Please choose another available model or wait until tomorrow to use this model again. Do not resume this session with this model.`,

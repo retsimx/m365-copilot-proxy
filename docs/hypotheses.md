@@ -3217,6 +3217,20 @@ upstream `error.type`/`error.code` (`packages/proxy-lib/src/handler.ts`). Regres
 subagent after each subagent failure — harness-side, not a proxy defect. `model_exhausted` is model-agnostic
 (opus/61/sonnet share the same empty path); it was never opus/61-specific.
 
+**Update (2026-10-15, same day).** The client was *retrying* the exhaustion, so two follow-ups shipped:
+1. **Non-retryable status: 502 → 403.** The AI SDK computes `isRetryable = status ∈ {408,409,429} ∪ ≥500`
+   (`@ai-sdk/provider` APICallError default), so **502 was retried**. A 403 is terminal — the client fails
+   the tool/subagent instead of re-issuing.
+2. **Per-model short-circuit.** After exhaustion the model is remembered for `M365_EXHAUSTION_TTL_SEC`
+   (default **3600s**); later requests short-circuit with the same 403 and **zero upstream turns**. Observed
+   before the fix: `daf951e6` re-issued every ~3.5 min, each paying 3 paced empties (~1.5–3 min) because the
+   block didn't exist. Expiry is **lazy** (evaluated on the next request; no timer; a restart also clears it).
+   Trigger is **`MAX_RETRIES` reached** (3 consecutive empties), *not* a single empty — the quick retries
+   recover transient empties (observed: empty → retry → 298-char tool call).
+   Tests (`handler-shielding.test.ts`): 403 is non-retryable; short-circuit sends no upstream turn; TTL lazy
+   expiry; per-model isolation; a transient empty that recovers does NOT mark; `TTL=0` disables. The
+   opencode-side "does a 403 actually terminate the tool" is a **deploy-time observation, not a unit test**.
+
 ### F41 — NLI classifier on production traffic: high precision, moderate recall; a labelled benchmark 🟢 (2026-10-15)
 
 **Question.** Is the in-process NLI classifier (`Xenova/nli-deberta-v3-base`) over-firing `REFUSAL` on

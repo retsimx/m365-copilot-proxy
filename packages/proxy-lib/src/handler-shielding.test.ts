@@ -12,6 +12,9 @@ import {
   resetTurnQueue,
   hasPostFenceContamination,
   turnPaceWait,
+  markModelExhausted,
+  isModelExhausted,
+  resetModelExhaustion,
   type PaceConfig,
 } from "./handler.js";
 import * as core from "@m365-copilot/core";
@@ -21,6 +24,7 @@ describe("Handler Degradation Circuit Breaker & 429 Retry-After Shielding", () =
   beforeEach(() => {
     resetNewSessionPacing();
     resetTurnVelocityPacing();
+    resetModelExhaustion();
     vi.restoreAllMocks();
   });
 
@@ -97,7 +101,11 @@ describe("Handler Degradation Circuit Breaker & 429 Retry-After Shielding", () =
 
     const response = await handleChatCompletion(body, pool);
 
-    expect(response.status).toBe(502);
+    // 403 — NON-retryable (the AI SDK retries only 408/409/429/5xx), so the client
+    // terminates the turn instead of re-issuing it.
+    expect(response.status).toBe(403);
+    expect([408, 409, 429]).not.toContain(response.status);
+    expect(response.status).toBeLessThan(500);
     expect(response.headers.get("Retry-After")).toBeNull();
     const json = await response.json() as any;
     expect(json.error.type).toBe("model_exhausted");
@@ -137,7 +145,7 @@ describe("Handler Degradation Circuit Breaker & 429 Retry-After Shielding", () =
 
     const response = await handleChatCompletion(body, pool);
 
-    expect(response.status).toBe(502);
+    expect(response.status).toBe(403);
     expect(response.headers.get("Retry-After")).toBeNull();
     const json = (await response.json()) as any;
     expect(json.error.type).toBe("model_exhausted");
@@ -152,6 +160,126 @@ describe("Handler Degradation Circuit Breaker & 429 Retry-After Shielding", () =
     expect(resetSpy).toHaveBeenCalled();
     expect(refreshSpy).not.toHaveBeenCalled();
   }, 15000);
+
+  it("short-circuits a model already known exhausted with an immediate non-retryable 403 and NO upstream turn", async () => {
+    vi.spyOn(core, "isDegradationBackoff").mockReturnValue(false);
+    const runSpy = vi.spyOn(core.ModelSession.prototype, "run");
+
+    // A previous request marked this model exhausted (daily quota).
+    markModelExhausted("claude-opus-5.5");
+
+    const pool = new SessionPool();
+    const body = {
+      model: "claude-opus-5.5",
+      messages: [{ role: "user" as const, content: "one more try" }],
+      stream: true, // even a streaming request gets a NON-streamed 403
+    };
+
+    const response = await handleChatCompletion(body, pool);
+
+    expect(response.status).toBe(403);
+    expect(response.headers.get("Content-Type")).toBe("application/json");
+    const json = (await response.json()) as any;
+    expect(json.error.type).toBe("model_exhausted");
+    expect(json.error.code).toBe("model_quota_exhausted");
+    // The whole point: on the retry we send ZERO traffic to Microsoft.
+    expect(runSpy).not.toHaveBeenCalled();
+  });
+
+  // ---- exhaustion short-circuit: the cases the happy path doesn't cover ----
+
+  const emptyStream = () => ({
+    [Symbol.asyncIterator]: async function* () {},
+    fullText: "",
+    hasContent: false,
+    throttle: { current: 3, max: 600 },
+    scores: null,
+    turnCount: 1,
+  } as any);
+  const contentStream = (text: string) => ({
+    [Symbol.asyncIterator]: async function* () { yield text; },
+    fullText: text,
+    hasContent: true,
+    throttle: { current: 1, max: 600 },
+    scores: null,
+    turnCount: 1,
+  } as any);
+  const chatReq = (model: string) => ({
+    model,
+    messages: [{ role: "user" as const, content: "hi" }],
+    stream: false,
+  });
+
+  it("M365_EXHAUSTION_TTL_SEC=0 disables the short-circuit (never marks)", () => {
+    const orig = process.env.M365_EXHAUSTION_TTL_SEC;
+    process.env.M365_EXHAUSTION_TTL_SEC = "0";
+    try {
+      markModelExhausted("m");
+      expect(isModelExhausted("m")).toBe(false);
+    } finally {
+      if (orig === undefined) delete process.env.M365_EXHAUSTION_TTL_SEC;
+      else process.env.M365_EXHAUSTION_TTL_SEC = orig;
+    }
+  });
+
+  it("the block lifts lazily after M365_EXHAUSTION_TTL_SEC (no timer)", () => {
+    const orig = process.env.M365_EXHAUSTION_TTL_SEC;
+    process.env.M365_EXHAUSTION_TTL_SEC = "60";
+    vi.useFakeTimers();
+    try {
+      const t0 = 1_700_000_000_000;
+      vi.setSystemTime(t0);
+      markModelExhausted("m");
+      expect(isModelExhausted("m")).toBe(true);
+      vi.setSystemTime(t0 + 59_000);
+      expect(isModelExhausted("m")).toBe(true); // still within the TTL
+      vi.setSystemTime(t0 + 60_000);
+      expect(isModelExhausted("m")).toBe(false); // lazily purged on access
+      expect(isModelExhausted("m")).toBe(false); // and stays clean
+    } finally {
+      vi.useRealTimers();
+      if (orig === undefined) delete process.env.M365_EXHAUSTION_TTL_SEC;
+      else process.env.M365_EXHAUSTION_TTL_SEC = orig;
+    }
+  });
+
+  it("a transient empty that recovers on the retry does NOT mark exhaustion", async () => {
+    vi.spyOn(core, "isDegradationBackoff").mockReturnValue(false);
+    let calls = 0;
+    vi.spyOn(core.ModelSession.prototype, "run").mockImplementation(
+      async () => (++calls === 1 ? emptyStream() : contentStream("recovered")),
+    );
+    const response = await handleChatCompletion(chatReq("claude-sonnet-5.5") as any, new SessionPool());
+    expect(response.status).toBe(200);
+    expect(calls).toBe(2); // exactly one retry
+    expect(isModelExhausted("claude-sonnet-5.5")).toBe(false);
+  }, 15000);
+
+  it("does NOT block a DIFFERENT model (the block is per-model)", async () => {
+    vi.spyOn(core, "isDegradationBackoff").mockReturnValue(false);
+    markModelExhausted("claude-opus-5.5");
+    const runSpy = vi.spyOn(core.ModelSession.prototype, "run").mockResolvedValue(contentStream("ok"));
+    const response = await handleChatCompletion(chatReq("claude-sonnet-5.5") as any, new SessionPool());
+    expect(response.status).toBe(200);
+    expect(runSpy).toHaveBeenCalled();
+    expect(isModelExhausted("claude-opus-5.5")).toBe(true); // untouched
+  }, 15000);
+
+  it("first exhaustion marks the model; the NEXT request short-circuits with zero upstream turns", async () => {
+    vi.spyOn(core, "isDegradationBackoff").mockReturnValue(false);
+    const runSpy = vi.spyOn(core.ModelSession.prototype, "run").mockResolvedValue(emptyStream());
+    const pool = new SessionPool();
+
+    const r1 = await handleChatCompletion(chatReq("claude-sonnet-5.5") as any, pool);
+    expect(r1.status).toBe(403);
+    expect(isModelExhausted("claude-sonnet-5.5")).toBe(true);
+    const attempts1 = runSpy.mock.calls.length;
+    expect(attempts1).toBeGreaterThan(1); // it retried (MAX_RETRIES) before marking
+
+    const r2 = await handleChatCompletion(chatReq("claude-sonnet-5.5") as any, pool);
+    expect(r2.status).toBe(403);
+    expect(runSpy.mock.calls.length).toBe(attempts1); // ZERO new upstream turns on the retry
+  }, 20000);
 
   it("preserves the exhausted error type/code in the in-stream error chunk (not a generic upstream_error)", async () => {
     vi.spyOn(core, "isDegradationBackoff").mockReturnValue(false);
