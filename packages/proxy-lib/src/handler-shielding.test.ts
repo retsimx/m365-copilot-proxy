@@ -1640,6 +1640,45 @@ describe("hasPostFenceContamination (post-fence abort guard)", () => {
     expect(hasPostFenceContamination(text, guardSpecs)).toBe(false);
   });
 
+  // Regression (2026-10-17 live, freebsd K-8 task-2, cid 95e5e391): the guard runs on the
+  // GROWING buffer after every streamed delta, NOT on the finished message. A `write` body
+  // that embeds a bare ``` block makes the guard see the opener while its matching closer has
+  // not arrived yet — full-text lookahead cannot help mid-stream. The guard mistook the opener
+  // for the tool close and aborted on the first content line of the block, truncating the file
+  // (the model then re-wrote it, which read as "forgetting" its own write). The full-text test
+  // above passes; only this prefix-by-prefix sweep catches the real defect.
+  it("never fires at ANY streamed prefix of a write body containing a bare fenced block", () => {
+    const text = [
+      "I'll write the deliverable now.",
+      "",
+      "```write_file",
+      "path: result.md",
+      "",
+      "# Result",
+      "",
+      "`git diff --stat` in the worktree:",
+      "",
+      "```",
+      " M sys/kern/kern_hibernate.c | 415 ++++-",
+      "```",
+      "",
+      "## MORE CONTENT AFTER THE BARE BLOCK",
+      "This must be preserved.",
+      "```",
+      "",
+    ].join("\n");
+
+    const lines = text.split("\n");
+    let acc = "";
+    for (let i = 0; i < lines.length; i++) {
+      acc += (i > 0 ? "\n" : "") + lines[i];
+      expect(
+        hasPostFenceContamination(acc, guardSpecs),
+        `guard fired mid-stream at line ${i}: ${JSON.stringify(lines[i])}`,
+      ).toBe(false);
+    }
+  });
+
   it("does NOT flag a non-tool code fence (```c) followed by prose — only tool fences are calls", () => {
     // Regression: the model wrote a prose analysis containing a ```c block (no call).
     // The guard's own-line regex matched ANY fence, latched onto the ```c as the

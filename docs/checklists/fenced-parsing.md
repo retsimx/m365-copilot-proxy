@@ -22,5 +22,12 @@ Domain checklist for changes to fence parsing / `restoreM365Fences` / the post-f
   closer. Regression: 2026-10-17, cid `95e5e391` — a Markdown evidence report written via
   `write` was cut at its first bare ` ``` `, the file landed as a stub, and the model re-wrote
   it four times.
+- [ ] **The guard streams.** `hasPostFenceContamination` runs on the growing buffer after
+  every delta, so full-text lookahead CANNOT disambiguate a bare fence there — at open time
+  its closer has not arrived. For a content/edit tool (`spec.bodyParam`/`spec.editPair`) the
+  guard must treat a clean bare fence **optimistically** as an inner opener and never declare
+  the body closed; the parser (full text) does the accurate close. Shell tools keep the strict
+  rule so "call + trailing prose" still aborts. Test the guard with a **prefix-by-prefix**
+  sweep, not only a single full-text call.
 - [ ] **Pin both glued-fence shapes.** Keep the mid-line (`cmd```STATUS: …`) and line-start
   (` ```STATUS: …`) glued-closing-fence tests green when touching Pass 2.

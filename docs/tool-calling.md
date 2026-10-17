@@ -197,9 +197,13 @@ Real Claude tool-shapes exposed six parser gaps, all fixed in `packages/core/src
   block (the ordinary Markdown form) was truncated at that **opener** — `OPEN_FENCE_REGEX`
   needs an info-string, so it fell through to the close path — writing a partial file AND
   tripping the post-fence abort (live 2026-10-17, cid `95e5e391`; the model re-wrote the
-  report four times). A clean bare fence is now recognised as an inner opener via
-  `hasBareFenceFollower` lookahead (stops at a new tool fence / result tag); a bare fence with
-  inline trailing prose is still the closer. Bug report
+  report four times). Two halves: the parser now recognises a clean bare fence as an inner
+  opener via `hasBareFenceFollower` lookahead (stops at a new tool fence / result tag); and,
+  because the abort guard runs on the **growing** buffer after every delta (where the closer
+  has not streamed yet), a content/edit tool's guard treats a clean bare fence
+  **optimistically** as an inner opener and never declares the body closed — the parser does
+  the accurate full-text close. Shell tools keep the strict rule (a bare fence with inline
+  trailing prose is still the closer). Bug report
   `.agents/results/bugs/bug-20261017-fenced-bare-inner-fence-truncation.md`.
 
 Also: **self-authored result simulation** is rejected — the stripper matches `<tool_output>` as

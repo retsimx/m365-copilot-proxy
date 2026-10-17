@@ -293,14 +293,25 @@ export function hasPostFenceContamination(text: string, specs?: Map<string, Fenc
   let inFence = false;
   let fencesClosed = 0;
   let outerFenceLen = 3;
+  // A write/edit body is ARBITRARY file content and routinely embeds a language-less
+  // ``` block. The guard runs on the GROWING buffer after every delta, so when such an
+  // opener streams its matching closer has not arrived yet — full-text lookahead sees no
+  // "later fence" and would mistake the opener for the tool close, aborting on the first
+  // content line and truncating the file (live 2026-10-17, freebsd K-8 task-2, cid
+  // 95e5e391). For a content/edit tool we therefore treat a clean bare fence
+  // OPTIMISTICALLY as an inner opener: the guard never declares such a body closed, and
+  // the parser (which sees the full text) does the accurate close. Shell/other tools keep
+  // the strict rule, so "call + trailing prose" is still aborted.
+  let contentBody = false;
   let bodyState = createFenceBodyState();
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (inFence) {
       // feedToolBodyLine returns true only when a bare ``` with no open inner fence or
-      // heredoc closes the OUTER tool fence. A bare ``` that opens a plain Markdown block
-      // inside a write/edit body (no language token) is body content, not the closer.
-      if (feedToolBodyLine(line, bodyState, outerFenceLen, false, hasBareFenceFollower(lines, i, specs))) {
+      // heredoc closes the OUTER tool fence. For a content body, a clean bare ``` is
+      // treated as an inner opener (optimistic) so it can never be mistaken for the close.
+      const bareFollower = contentBody || hasBareFenceFollower(lines, i, specs);
+      if (feedToolBodyLine(line, bodyState, outerFenceLen, false, bareFollower)) {
         inFence = false;
         fencesClosed++;
       }
@@ -317,6 +328,8 @@ export function hasPostFenceContamination(text: string, specs?: Map<string, Fenc
       if (fencesClosed >= 1) return true;
       inFence = true;
       outerFenceLen = open[1].length;
+      const spec = specs?.get(open[2]);
+      contentBody = !!spec && (spec.bodyParam !== undefined || spec.editPair !== undefined);
       bodyState = createFenceBodyState();
       continue;
     }
