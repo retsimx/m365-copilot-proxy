@@ -3450,3 +3450,33 @@ scratch audit run). `bash`'s documented `workdir`/`timeout` match OpenCode exact
 **Falsification.** Show a harness whose file tools declare neither a `path`- nor `filePath`-family
 param (then `filePathParamName`'s `path` fallback is wrong), or a model that still emits an
 unaliased spelling after the fix.
+
+---
+
+### F44 — Client-injected "you are a subagent" banner undermines the advisor persona; stripped at the proxy 🟢 (2026-10-18)
+
+**Headline.** OpenCode's subagent tool prepends a literal banner to every subagent prompt —
+`["You are a subagent spawned by another session.", prompt].join("\n")` (two call sites in the
+opencode binary). The plugin author assumed every backend wants that context, but for M365 it is
+counter-productive: it recasts the model as an autonomous agent, contradicting the confirmed
+advisor persona ("You write the commands; I run them", [prompt-engineering lever 9]), and it
+primes GPT-family tones to refuse tool use on turn 0 ("I am an AI and cannot execute actions
+autonomously"). It is not a wording problem to wordsmith around — it is a wrong input.
+
+**Fix (deterministic, proxy-side).** `getMessageContent` (`packages/core/src/tools.ts`) strips the
+banner from **user** content only, via an anchored regex
+`/^You are a subagent spawned by another session\.?\s*/i` (tolerates a missing period; refuses to
+touch prose that merely mentions the phrase mid-line). Every user read routes through
+`getMessageContent` — `formatMessages` (turn 0), `formatDeltaMessages` (delta turns/steers), and the
+session `fingerprint` — so a single strip covers all paths and the client is unchanged. The banner
+never reaches M365.
+
+**Evidence.** `packages/core/src/tools.test.ts` → `describe("getMessageContent — harness subagent
+banner")` (7 cases: plain strip, the real banner+advisor shape, array-of-parts, no-banner no-op,
+non-user roles untouched, empty/banner-only, and a `formatMessages` turn-0 integration). Banner
+bytes verified in the opencode binary. Full suite 376 pass.
+
+**Caveat / falsification.** The strip is unconditional, so a user prompt that *deliberately* begins
+with that exact sentence-plus-newline would also be stripped — accepted as negligible (it is the
+harness's own reserved banner). Falsified if a harness banner other than OpenCode's is observed to
+re-introduce the turn-0 refusal reflex; add it to the same strip.

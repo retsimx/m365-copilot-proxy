@@ -14,10 +14,66 @@ vi.mock("./classifier.js", () => ({
 import {
   parseToolCalls,
   formatSessionFraming,
+  formatMessages,
+  getMessageContent,
   looksLikeRemoteArtifactCompletion,
   isProseDocument,
   type ToolDef,
 } from "./tools.js";
+
+// OpenCode's subagent tool prepends this banner to every subagent prompt. For M365 it
+// undercuts the advisor persona and primes turn-0 tool refusals, so the proxy strips it.
+describe("getMessageContent — harness subagent banner", () => {
+  const banner = "You are a subagent spawned by another session.";
+  const realPrompt =
+    "You write the shell commands; I run them on the machine and return the output. Work step-by-step in fenced ```bash blocks.";
+
+  it("strips the banner (and its newline) from a user message", () => {
+    expect(getMessageContent({ role: "user", content: `${banner}\n${realPrompt}` })).toBe(realPrompt);
+  });
+
+  it("strips the banner from the real subagent shape (banner + advisor framing)", () => {
+    const content = `${banner}\nYou write the shell commands; I run them on the machine and return the output. Work step-by-step in fenced \`\`\`bash blocks to inspect, implement, and verify the deliverable at the exact output path. When verified, conclude with the final status block.`;
+    const out = getMessageContent({ role: "user", content });
+    expect(out).not.toContain("spawned by another session");
+    expect(out.startsWith("You write the shell commands")).toBe(true);
+  });
+
+  it("strips the banner when content is an array of parts", () => {
+    const out = getMessageContent({
+      role: "user",
+      content: [{ type: "text", text: `${banner}\n` }, { type: "text", text: realPrompt }],
+    });
+    expect(out).toBe(realPrompt);
+  });
+
+  it("leaves a prompt without the banner untouched", () => {
+    expect(getMessageContent({ role: "user", content: realPrompt })).toBe(realPrompt);
+  });
+
+  it("leaves non-user roles untouched", () => {
+    const content = `${banner}\n${realPrompt}`;
+    expect(getMessageContent({ role: "system", content })).toBe(content);
+    expect(getMessageContent({ role: "tool", content })).toBe(content);
+    expect(getMessageContent({ role: "assistant", content })).toBe(content);
+  });
+
+  it("handles an empty/absent content and a banner-only message", () => {
+    expect(getMessageContent({ role: "user", content: null })).toBe("");
+    expect(getMessageContent({ role: "user" })).toBe("");
+    expect(getMessageContent({ role: "user", content: banner })).toBe("");
+  });
+
+  it("is a no-op for the advisor turn-0 assembly beyond the strip", () => {
+    const tool: ToolDef = {
+      type: "function",
+      function: { name: "bash", description: "Run a shell command.", parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] } },
+    };
+    const prompt = formatMessages([{ role: "user", content: `${banner}\n${realPrompt}` }], [tool]);
+    expect(prompt).not.toContain("spawned by another session");
+    expect(prompt).toContain(realPrompt);
+  });
+});
 
 describe("parseToolCalls", () => {
   it("should parse a clean tool call with no extra text", () => {

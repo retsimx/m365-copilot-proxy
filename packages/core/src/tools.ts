@@ -105,10 +105,27 @@ export function formatToolChoiceInstruction(toolChoice: ToolChoice): string {
   return "";
 }
 
+// --- Harness-injected prompt banners -------------------------------------------
+//
+// OpenCode's subagent tool prepends a literal banner to every subagent prompt
+// (`["You are a subagent spawned by another session.", prompt].join("\n")`, at two
+// call sites in the opencode binary). For an M365 backend that sentence is actively
+// harmful: it recasts the model as an autonomous agent and undercuts the advisor
+// persona ("You write the commands; I run them"), and it primes GPT-family tones to
+// refuse tool use on turn 0 ("I am an AI and cannot execute actions autonomously").
+//
+// The proxy is the right chokepoint — the client is unchanged, and the banner never
+// reaches M365. Only USER content is cleansed (the banner is only ever user-role);
+// both the turn-0 path (`formatMessages`) and the delta path (`formatDeltaMessages`)
+// read user content through here, so one strip covers both.
+const HARNESS_SUBAGENT_BANNER_REGEX = /^You are a subagent spawned by another session\.?\s*/i;
+
 export function getMessageContent(msg: Message): string {
   if (msg.content === null || msg.content === undefined) return "";
-  if (typeof msg.content === "string") return msg.content;
-  return msg.content.map((p) => p.text || "").join("");
+  const raw = typeof msg.content === "string"
+    ? msg.content
+    : msg.content.map((p) => p.text || "").join("");
+  return msg.role === "user" ? raw.replace(HARNESS_SUBAGENT_BANNER_REGEX, "") : raw;
 }
 
 /** A short one-line description of what a tool call did, for labelling its result

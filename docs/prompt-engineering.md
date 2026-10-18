@@ -68,6 +68,27 @@ These are what actually move compliance. In rough order of importance:
    write."* Without it a silent `cat >` returns `(no output)`, which the model reads as failure
    and answers by re-writing the file; the confirmation line gives it visible evidence the file
    exists and is non-empty. (Session 2026-10-13; opencode `m365*` agent configs.)
+11. **Neutralise client-injected "you are an agent" banners.** A harness that prepends
+   autonomous-agent framing to the user text fights the advisor persona and primes RLHF
+   refusals. OpenCode's subagent tool prepends `You are a subagent spawned by another session.`
+   to every subagent prompt; the proxy strips it from user content in `getMessageContent`
+   (both turn 0 and the delta path), so M365 never sees it. See [hyp F44] and the note below.
+   Any client banner that recasts the model as an autonomous agent belongs in this category —
+   strip it at the proxy, don't wordsmith around it.
+
+### Client-injected banners are proxy hygiene, not prompt engineering
+
+Client/plugin authors assume every backend wants to know the model was "spawned by another
+session" or "is an autonomous agent". For M365 that framing is **counter-productive** (lever 9):
+it contradicts the chat-assistant/persona prior and reliably produces turn-0 refusals
+("*I am an AI and cannot execute actions autonomously*") on the GPT-family tones.
+
+Because the proxy is the chokepoint between client and M365, the right fix is a **deterministic
+strip**, not more framing. `getMessageContent` (`packages/core/src/tools.ts`) removes the
+OpenCode subagent banner from **user** content only; every user read — `formatMessages` (turn 0),
+`formatDeltaMessages` (delta turns), and the session `fingerprint` — goes through it, so one strip
+covers all paths and the client needs no change. The regex is anchored to the banner's own line
+(`/^You are a subagent spawned by another session\.?\s*/i`) so it cannot touch ordinary prose.
 
 ## What does NOT work (confirmed dead-ends — don't re-litigate)
 
