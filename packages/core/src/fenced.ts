@@ -299,13 +299,17 @@ function renderAgentToolsBlock(tools: ToolDef[]): string {
     desc += `. \`${p}\` is required.`;
     if (range[0]) desc += " `offset` is an optional line offset";
     if (range[1]) desc += range[0] ? " and `limit` is an optional maximum number of lines returned." : " `limit` is an optional maximum number of lines returned.";
-    if (range[0] || range[1]) desc += " Omit both unless a specific range is needed.";
+    if (range[0] && range[1]) desc += " Omit both unless a specific range is needed.";
+    else if (range[0] || range[1]) desc += " Omit it unless a specific range is needed.";
     blocks.push([desc, " Call structure:", "", `    \`\`\`${readTool.function.name}`, `    ${p}: <the file to read>`, "    ```"].join("\n"));
   }
   if (writeTool) {
     const p = filePathParamName(writeTool);
+    // Only point at the editor when the harness actually declares one — otherwise a
+    // compliant model would emit an `edit` fence that no spec can parse.
+    const editHint = editTool ? ` Use \`${editName}\` for a targeted change to an existing file.` : "";
     blocks.push([
-      `${writeTool.function.name} — create or completely replace a file; it overwrites the whole target. \`${p}\` is required. Place one blank line after the headers, then the complete file content. Use \`${editName}\` for a targeted change to an existing file. Call structure:`,
+      `${writeTool.function.name} — create or completely replace a file; it overwrites the whole target. \`${p}\` is required. Place one blank line after the headers, then the complete file content.${editHint} Call structure:`,
       "",
       `    \`\`\`${writeTool.function.name}`,
       `    ${p}: <the file to create or replace>`,
