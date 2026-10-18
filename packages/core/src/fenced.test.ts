@@ -79,6 +79,88 @@ describe("deriveFencedSpec", () => {
   });
 });
 
+// The <tools> block must document the harness's OWN parameter name and must accept the
+// other harnesses' spelling as a header alias. Regression: the block hardcoded `filePath`
+// (pi's name) while OpenCode v2 declares `path` — every native `read`/`write`/`edit` fence
+// emitted as instructed then failed schema validation (read → `{}`, write leaked the header
+// into the body). Bug 20261018.
+describe("cross-harness file parameter names", () => {
+  const T = (name: string, props: Record<string, { type: string }>, req: string[]): ToolDef => ({
+    type: "function", function: { name, description: "d", parameters: { type: "object", properties: props, required: req } },
+  });
+  // OpenCode v2 schemas (verified against the opencode binary).
+  const opencode = [
+    T("read", { path: { type: "string" }, offset: { type: "number" }, limit: { type: "number" } }, ["path"]),
+    T("write", { path: { type: "string" }, content: { type: "string" } }, ["path", "content"]),
+    T("edit", { path: { type: "string" }, oldString: { type: "string" }, newString: { type: "string" }, replaceAll: { type: "boolean" } }, ["path", "oldString", "newString"]),
+    T("bash", { command: { type: "string" }, workdir: { type: "string" }, timeout: { type: "number" } }, ["command"]),
+  ];
+  const pi = [
+    T("read", { filePath: { type: "string" }, offset: { type: "number" }, limit: { type: "number" } }, ["filePath"]),
+    T("write", { filePath: { type: "string" }, content: { type: "string" } }, ["filePath", "content"]),
+    T("edit", { filePath: { type: "string" }, oldString: { type: "string" }, newString: { type: "string" } }, ["filePath", "oldString", "newString"]),
+  ];
+  const argsOf = (r: { calls: { function: { arguments: string } }[] }) =>
+    JSON.parse(r.calls[0].function.arguments);
+
+  it("documents OpenCode's `path`, never a hardcoded `filePath`", () => {
+    const out = formatFencedToolDefinitions("agent", opencode);
+    expect(out).toContain("path: <the file to read>");
+    expect(out).toContain("path: <the file to create or replace>");
+    expect(out).toContain("path: <the file to change>");
+    expect(out).toContain("`path` is required");
+    expect(out).not.toContain("filePath");
+  });
+
+  it("documents pi's `filePath` when that is the declared name", () => {
+    const out = formatFencedToolDefinitions("agent", pi);
+    expect(out).toContain("filePath: <the file to read>");
+    expect(out).toContain("`filePath` is required");
+    expect(out).not.toContain("path: <the file to read>");
+  });
+
+  it("maps an aliased `filePath:` header onto the harness's `path` param", () => {
+    const r = parseFencedToolCalls("```read\nfilePath: /etc/hostname\n```", buildSpecMap(opencode));
+    expect(r.calls).toHaveLength(1);
+    expect(argsOf(r)).toEqual({ path: "/etc/hostname" });
+  });
+
+  it("write: an aliased path header is not leaked into the file body", () => {
+    const r = parseFencedToolCalls("```write\nfilePath: a.txt\n\nprint(1)\n```", buildSpecMap(opencode));
+    expect(argsOf(r)).toEqual({ path: "a.txt", content: "print(1)" });
+  });
+
+  it("edit: aliased path + replaceAll header with SEARCH/REPLACE body", () => {
+    const r = parseFencedToolCalls(
+      "```edit\nfilePath: a.py\nreplaceAll: true\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE\n```",
+      buildSpecMap(opencode),
+    );
+    expect(argsOf(r)).toEqual({ path: "a.py", replaceAll: true, oldString: "old", newString: "new" });
+  });
+
+  it("accepts the reverse alias: a `path:` header against a pi-shaped `filePath` schema", () => {
+    const r = parseFencedToolCalls("```read\npath: /x\n```", buildSpecMap(pi));
+    expect(argsOf(r)).toEqual({ filePath: "/x" });
+  });
+
+  it("single-param file tool: an aliased header fills the body param without an empty-body clobber", () => {
+    const tools = [T("read", { path: { type: "string" } }, ["path"])];
+    const r = parseFencedToolCalls("```read\nfilePath: /x\n```", buildSpecMap(tools));
+    expect(argsOf(r)).toEqual({ path: "/x" });
+  });
+
+  it("does not alias an unrelated key onto the file param", () => {
+    const r = parseFencedToolCalls("```read\nnonsense: /x\n```", buildSpecMap(opencode));
+    expect(argsOf(r)).toEqual({});
+  });
+
+  it("interpolates the harness's shell tool name into the grounding call", () => {
+    const tools = [T("run_command", { command: { type: "string" } }, ["command"])];
+    const out = formatFencedToolDefinitions("agent", tools);
+    expect(out).toContain("```run_command\npwd && whoami && uname -srm && ls -la .\n```");
+  });
+});
+
 describe("renderFencedCall", () => {
   it("renders a body-only call with no header", () => {
     const out = renderFencedCall(deriveFencedSpec(bash), { command: "ls -la" });

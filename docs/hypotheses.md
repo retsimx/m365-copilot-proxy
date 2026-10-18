@@ -3406,3 +3406,47 @@ correction + ramp in `packages/proxy-lib/src/handler.ts`; tests `fenced.test.ts`
 **Falsification.** Show the model reliably batching independent calls without fabricating between them
 (then batching could return), or show a semantic-only rule (no structural guard) eliminating the
 self-authored `<tool_output>` rate over a long session.
+
+---
+
+### F43 — The `<tools>` block hardcoded pi's `filePath`; OpenCode declares `path` → every native file-tool call failed schema validation 🟢 (2026-10-18)
+
+**Headline.** `renderAgentToolsBlock` (`packages/core/src/fenced.ts`) documented file tools as
+`filePath: <path>` — pi's spelling — while the primary harness (OpenCode v2) declares its
+`read`/`write`/`edit` file parameter as **`path`** (verified in the opencode binary:
+`o({path:t.annotate({description:"File to edit"}), oldString, newString, replaceAll})`, and the
+read schema `path`/`offset`/`limit`). A model obeying the prompt therefore emitted a header the
+derived spec didn't declare; the header loop's `spec.headerParams.includes(key)` was false, it
+`break`s, and the argument was **silently dropped** — `read` → `{}` (harness: *path: Required*),
+`write` dropped `path` **and** leaked the `filePath:` header line into the file body.
+
+**Why it hid.** Claude reflexively falls back to `bash` (`cat`, `sed`, heredocs) on a schema
+error, so the failure read as "the model prefers shell", not "the native tool is broken". Only
+the agent (Claude) framing is affected — the advisor path declares `bash` only.
+
+**Fix (two layers).**
+1. **Document the harness's own names.** The `<tools>` block now derives the tool name *and* the
+   file-param name from the harness schemas (`filePathParamName`, `findToolByAlias`) — no
+   hardcoded `filePath`/`read`. The `read`/`write`/`edit`/`bash` prose rules interpolate the
+   resolved names, so a harness that calls them `read_file`/`run_command` is described in terms
+   it accepts.
+2. **Alias-normalise headers.** `resolveDeclaredParam` maps a model-emitted key onto a declared
+   param through cross-harness alias families (`filePath`/`file_path`/`file` → `path`; `content`
+   family; `old`/`new`; `workdir`/`cwd`; …). A single-param body-only file tool also accepts one
+   leading header naming that param, and an empty body no longer clobbers a header-supplied value.
+
+**Evidence.** `packages/core/src/fenced.test.ts` → `describe("cross-harness file parameter
+names")` (9 cases: both directions, write-leak, edit+replaceAll, single-param, non-alias).
+Repro before the fix: `formatFencedToolDefinitions("agent", opencodeTools)` contained
+`filePath: <the file to read>`; `parseFencedToolCalls("```read\nfilePath: /tmp/a\n```")` → `{}`.
+
+**Audit of the other tools (same pass, no defect found).** `deriveFencedSpec` for the real
+OpenCode schema maps: `bash`→body `command`; `write`→body `content`; `read`→headers
+`path,offset,limit`; `edit`→SEARCH/REPLACE `oldString`/`newString` + headers `path,replaceAll`;
+`glob`/`grep`→headers `pattern,path,…`; `task`→body `prompt`; `todowrite`→body `todos`;
+`question`→body `questions`; `websearch`→body `query`. All parse correctly (verified in a
+scratch audit run). `bash`'s documented `workdir`/`timeout` match OpenCode exactly.
+
+**Falsification.** Show a harness whose file tools declare neither a `path`- nor `filePath`-family
+param (then `filePathParamName`'s `path` fallback is wrong), or a model that still emits an
+unaliased spelling after the fix.

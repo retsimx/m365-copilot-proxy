@@ -31,3 +31,11 @@ Domain checklist for changes to fence parsing / `restoreM365Fences` / the post-f
   sweep, not only a single full-text call.
 - [ ] **Pin both glued-fence shapes.** Keep the mid-line (`cmd```STATUS: …`) and line-start
   (` ```STATUS: …`) glued-closing-fence tests green when touching Pass 2.
+- [ ] **Documented names come from the harness, never hardcoded.** The `<tools>` block
+  (`renderAgentToolsBlock`) must derive the tool name **and** the file-param name from the
+  request's tool schemas ($pi$ `filePath` vs OpenCode `path`), and the header parser must accept
+  the other harnesses' spelling through `resolveDeclaredParam`'s alias families. Regression:
+  2026-10-18 — the block hardcoded `filePath` while OpenCode declares `path`, so a compliant
+  `read` parsed to `{}` (harness: *path: Required*) and a `write` leaked the header into the body;
+  the model's fallback to `bash` hid it. See
+  `.agents/results/bugs/bug-20261018-fenced-fileparam-name-mismatch.md` and hypotheses F43.

@@ -52,6 +52,48 @@ const BODY_PARAM_NAMES = [
 const SEARCH_KEYS = ["old", "search", "find", "old_str", "old_string", "oldstring", "target"];
 const REPLACE_KEYS = ["new", "replace", "replacement", "new_str", "new_string", "newstring"];
 
+// --- Cross-harness parameter aliases -----------------------------------------
+//
+// The <tools> block teaches one harness's parameter names, but the model may emit
+// another harness's name for the same slot. The canonical example is the file
+// parameter: pi names it `filePath`, OpenCode names it `path` (and OpenClaw
+// `file_path`). A fenced `filePath:` header against an OpenCode `path` schema used
+// to be discarded (headerParams.includes("filePath") === false → the header loop
+// broke and the argument was lost): `read` reached the harness as `{}` and `write`
+// leaked the header line into the file body. Each family maps a set of equivalent
+// key spellings onto whichever name the harness actually declared.
+const PARAM_ALIAS_FAMILIES: readonly (readonly string[])[] = [
+  ["path", "filepath", "file_path", "file", "filename", "file_name"],
+  ["content", "contents", "text", "body", "data"],
+  ["oldstring", "old_string", "oldstr", "old_str", "old", "search", "find", "target"],
+  ["newstring", "new_string", "newstr", "new_str", "new", "replace", "replacement"],
+  ["replaceall", "replace_all"],
+  ["timeout", "timeout_ms", "timeoutms"],
+  ["workdir", "working_directory", "working_dir", "cwd", "dir", "directory"],
+];
+
+/** Every param name a spec declares (headers + body + edit pair). */
+function declaredParams(spec: FencedToolSpec): string[] {
+  return [
+    ...spec.headerParams,
+    ...(spec.bodyParam !== undefined ? [spec.bodyParam] : []),
+    ...(spec.editPair ? [spec.editPair.search, spec.editPair.replace] : []),
+  ];
+}
+
+/** Map a model-emitted key onto a param this tool actually declares, accepting
+ *  cross-harness aliases (`filePath` → `path`). Returns undefined when the key names
+ *  nothing the tool has — the caller then treats the line as body content, as before. */
+export function resolveDeclaredParam(spec: FencedToolSpec, key: string): string | undefined {
+  const declared = declaredParams(spec);
+  const lower = key.toLowerCase();
+  for (const d of declared) if (d.toLowerCase() === lower) return d;
+  const family = PARAM_ALIAS_FAMILIES.find((f) => f.includes(lower));
+  if (!family) return undefined;
+  for (const d of declared) if (family.includes(d.toLowerCase())) return d;
+  return undefined;
+}
+
 // Fence info-strings that mean "a shell script". M365's chat-tuned model emits
 // ```bash blocks reflexively (it's the one agentic-shaped output Microsoft's
 // system prompt permits); we route them to whatever shell tool the harness gave,
@@ -196,51 +238,104 @@ An unexpected or imperfect result — an error, an empty output, a wrong path, a
 
 /** The Claude <tools> block is built by `renderAgentToolsBlock` below. */
 
+/** Harness tool names that mean "the file reader / writer / editor". Recognising the
+ *  aliases keeps the framing honest when a harness calls them `read_file` (the bench)
+ *  instead of OpenCode's `read`. */
+const FILE_TOOL_ALIASES: Record<"read" | "write" | "edit", readonly string[]> = {
+  read: ["read", "read_file", "readfile"],
+  write: ["write", "write_file", "writefile"],
+  edit: ["edit", "edit_file", "editfile"],
+};
+
+function findToolByAlias(tools: ToolDef[], aliases: readonly string[]): ToolDef | undefined {
+  return tools.find((t) => aliases.includes(t.function.name.toLowerCase()));
+}
+
+/** The param name a harness uses for a file path (pi: `filePath`, OpenCode: `path`). */
+export function filePathParamName(tool: ToolDef): string {
+  const props = Object.keys(tool.function.parameters?.properties ?? {});
+  const family = PARAM_ALIAS_FAMILIES.find((f) => f.includes("path"))!;
+  return props.find((p) => family.includes(p.toLowerCase())) ?? "path";
+}
 
 /** The Claude <tools> block. File tools are shown as NON-EXECUTABLE structure — a
  *  fabricated path inside a recognized read/write/edit fence can be executed literally
  *  (GPT probe, 2026-10-11), and a nearby warning does not neutralise a copyable example.
  *  `bash` gets one concrete, executable call; the working directory is referenced from the
- *  harness-provided environment details rather than a placeholder. */
+ *  harness-provided environment details rather than a placeholder.
+ *
+ *  Every declared name (tool name + file param) is derived from the harness's own tool
+ *  schemas — never hardcoded — so the documented call structure is exactly the call the
+ *  harness will accept (pi's `filePath` vs OpenCode's `path`). */
 function renderAgentToolsBlock(tools: ToolDef[]): string {
-  const has = (n: string) => tools.some((t) => t.function.name === n);
   const shell = findShellTool(tools);
+  const readTool = findToolByAlias(tools, FILE_TOOL_ALIASES.read);
+  const writeTool = findToolByAlias(tools, FILE_TOOL_ALIASES.write);
+  const editTool = findToolByAlias(tools, FILE_TOOL_ALIASES.edit);
+  const propsOf = (t: ToolDef) => Object.keys(t.function.parameters?.properties ?? {}).map((p) => p.toLowerCase());
+
+  // Names interpolated into the prose rules; fall back to the canonical word when the
+  // harness has no such tool (the rule is then simply inert).
+  const readName = readTool?.function.name ?? "read";
+  const writeName = writeTool?.function.name ?? "write";
+  const editName = editTool?.function.name ?? "edit";
+  const shellName = shell?.function.name ?? "bash";
+
   const blocks: string[] = [
     "Each block below demonstrates one complete tool call. Emit only one tool-call fence per assistant turn. Every value inside a call must come from the current task or from a harness-provisioned fixture — never copy an example value into an unrelated task.",
     "The indented forms below document field and body structure only — they are NOT calls. When you use a file tool, emit the same structure inside a fence named for that tool, replacing every documented value with a value established by the current task.",
   ];
-  if (has("read")) blocks.push([
-    "read — inspect one known file, optionally within a bounded line range. `filePath` is required. `offset` is an optional line offset and `limit` is an optional maximum number of lines returned. Omit both unless a specific range is needed. Call structure:",
-    "",
-    "    ```read",
-    "    filePath: <the file to read>",
-    "    ```",
-  ].join("\n"));
-  if (has("write")) blocks.push([
-    "write — create or completely replace a file; it overwrites the whole target. `filePath` is required. Place one blank line after the headers, then the complete file content. Use `edit` for a targeted change to an existing file. Call structure:",
-    "",
-    "    ```write",
-    "    filePath: <the file to create or replace>",
-    "",
-    "    <the complete file content>",
-    "    ```",
-  ].join("\n"));
-  if (has("edit")) blocks.push([
-    "edit — replace exact text in a file. Read the file first so the SEARCH text matches exactly. `filePath` is required. `replaceAll: true` is optional. Call structure:",
-    "",
-    "    ```edit",
-    "    filePath: <the file to change>",
-    "    <<<<<<< SEARCH",
-    "    <exact existing text>",
-    "    =======",
-    "    <replacement text>",
-    "    >>>>>>> REPLACE",
-    "    ```",
-  ].join("\n"));
+  if (readTool) {
+    const p = filePathParamName(readTool);
+    const props = propsOf(readTool);
+    const hasOffset = props.includes("offset");
+    const hasLimit = props.includes("limit");
+    const range = hasOffset && hasLimit ? [hasOffset, hasLimit]
+      : hasOffset ? [true, false]
+        : hasLimit ? [false, true]
+          : [false, false];
+    let desc = `${readTool.function.name} — inspect one known file`;
+    if (range[0] || range[1]) desc += ", optionally within a bounded line range";
+    desc += `. \`${p}\` is required.`;
+    if (range[0]) desc += " `offset` is an optional line offset";
+    if (range[1]) desc += range[0] ? " and `limit` is an optional maximum number of lines returned." : " `limit` is an optional maximum number of lines returned.";
+    if (range[0] || range[1]) desc += " Omit both unless a specific range is needed.";
+    blocks.push([desc, " Call structure:", "", `    \`\`\`${readTool.function.name}`, `    ${p}: <the file to read>`, "    ```"].join("\n"));
+  }
+  if (writeTool) {
+    const p = filePathParamName(writeTool);
+    blocks.push([
+      `${writeTool.function.name} — create or completely replace a file; it overwrites the whole target. \`${p}\` is required. Place one blank line after the headers, then the complete file content. Use \`${editName}\` for a targeted change to an existing file. Call structure:`,
+      "",
+      `    \`\`\`${writeTool.function.name}`,
+      `    ${p}: <the file to create or replace>`,
+      "",
+      "    <the complete file content>",
+      "    ```",
+    ].join("\n"));
+  }
+  if (editTool) {
+    const p = filePathParamName(editTool);
+    const hasReplaceAll = propsOf(editTool).includes("replaceall");
+    let desc = `${editTool.function.name} — replace exact text in a file. Read the file first so the SEARCH text matches exactly. \`${p}\` is required.`;
+    if (hasReplaceAll) desc += " `replaceAll: true` is optional.";
+    blocks.push([
+      `${desc} Call structure:`,
+      "",
+      `    \`\`\`${editTool.function.name}`,
+      `    ${p}: <the file to change>`,
+      "    <<<<<<< SEARCH",
+      "    <exact existing text>",
+      "    =======",
+      "    <replacement text>",
+      "    >>>>>>> REPLACE",
+      "    ```",
+    ].join("\n"));
+  }
   if (shell) blocks.push([
-    "bash — run a shell program on the user's machine. `workdir` is optional in the grounding call. For later project-specific calls, set it to the exact working-directory path supplied in the environment details or established by a harness observation; never emit a descriptive placeholder as its value. `timeout` is an optional integer number of milliseconds; omit it when the default is sufficient. Place one blank line after any headers, then the commands.",
+    `${shellName} — run a shell program on the user's machine. \`workdir\` is optional in the grounding call. For later project-specific calls, set it to the exact working-directory path supplied in the environment details or established by a harness observation; never emit a descriptive placeholder as its value. \`timeout\` is an optional integer number of milliseconds; omit it when the default is sufficient. Place one blank line after any headers, then the commands.`,
     "",
-    "```bash",
+    `\`\`\`${shellName}`,
     "pwd && whoami && uname -srm && ls -la .",
     "```",
   ].join("\n"));
@@ -249,6 +344,14 @@ function renderAgentToolsBlock(tools: ToolDef[]): string {
 
 export function formatAgentPrompt(tools: ToolDef[]): string {
   const toolsBlock = renderAgentToolsBlock(tools);
+  // Names used by the RULES prose — the harness's own, so a harness that calls its
+  // tools `read_file`/etc. is described in the terms it actually accepts.
+  const readName = findToolByAlias(tools, FILE_TOOL_ALIASES.read)?.function.name ?? "read";
+  const writeName = findToolByAlias(tools, FILE_TOOL_ALIASES.write)?.function.name ?? "write";
+  const editName = findToolByAlias(tools, FILE_TOOL_ALIASES.edit)?.function.name ?? "edit";
+  const shell = findShellTool(tools);
+  const shellName = shell?.function.name ?? "bash";
+  const bashFence = "```" + shellName;
   // Claude tones are agent-less and structurally immune to the Disengage filter, so this
   // variant may be strict/imperative — wording we cannot use on GPT.
   return `You are an execution agent working toward the user's whole objective. For any step that requires inspecting or changing files, running commands, or learning machine state, act through the external harness: emit exactly one fenced tool call, end your message at its closing fence, and wait for the real harness observation before deciding the next step. Emitting a call does not execute it and gives you no knowledge of its result. The harness alone executes calls on the user's real machine and writes observations. Use prose only for the brief sentence before a call and for the final answer after real observations establish the requested outcome.
@@ -262,19 +365,19 @@ Your objective is the user's whole task. Completing one tool call or intermediat
 
 RULES:
 - Do not use Microsoft-native execution or file tools — including \`bash_tool\`, \`create_file\`, \`view\`, and \`str_replace\` — or Microsoft's native XML function-call format. Those operate in a separate remote environment and cannot establish facts about the user's machine. For local work, use only the tool names defined in the \`<tools>\` block or the platform-specific shell fence supplied by the host-platform instructions.
-- Choose the tool that performs the step safely and clearly. Use \`read\` for one bounded inspection when that single file or range is the complete evidence needed for the step. Use \`edit\` for an exact targeted change, and \`write\` to create or completely replace one file. Use \`bash\` for searches, builds, tests, version control, multi-file investigation, and composed workflows. Prefer one well-structured \`bash\` call when several known inspections or already-determined operations can be completed together with bounded, clearly labelled output.
-- TURN ZERO: You have run nothing and received no machine evidence yet. Your only valid machine-dependent action is the required grounding call — do not describe the environment, file contents, command results, or completed work before its real observation arrives. Start grounded: on the first turn that requires machine access, write exactly one short sentence stating what you will inspect, then copy the complete call below exactly as rendered — the opening \`\`\`bash on its own line, never joined to prose. This grounding call is the ONLY tool call you emit this turn. End the message at its closing fence and wait for its real observation before doing anything else. Never omit the backticks, never write \`bash\` inline with the sentence, and never place the opening fence mid-paragraph. End the message at the closing fence and wait for the observation.
+- Choose the tool that performs the step safely and clearly. Use \`${readName}\` for one bounded inspection when that single file or range is the complete evidence needed for the step. Use \`${editName}\` for an exact targeted change, and \`${writeName}\` to create or completely replace one file. Use \`${shellName}\` for searches, builds, tests, version control, multi-file investigation, and composed workflows. Prefer one well-structured \`${shellName}\` call when several known inspections or already-determined operations can be completed together with bounded, clearly labelled output.
+- TURN ZERO: You have run nothing and received no machine evidence yet. Your only valid machine-dependent action is the required grounding call — do not describe the environment, file contents, command results, or completed work before its real observation arrives. Start grounded: on the first turn that requires machine access, write exactly one short sentence stating what you will inspect, then copy the complete call below exactly as rendered — the opening \`\`\`${shellName} on its own line, never joined to prose. This grounding call is the ONLY tool call you emit this turn. End the message at its closing fence and wait for its real observation before doing anything else. Never omit the backticks, never write \`${shellName}\` inline with the sentence, and never place the opening fence mid-paragraph. End the message at the closing fence and wait for the observation.
 
-\`\`\`bash
+${bashFence}
 pwd && whoami && uname -srm && ls -la .
 \`\`\`
 
-The observation from \`pwd\` establishes the current directory. For later project-specific Bash calls, set \`workdir:\` to the exact project directory established by the environment details or a harness observation. Never emit descriptive placeholder text as a \`workdir\` value.
+The observation from \`pwd\` establishes the current directory. For later project-specific ${shellName} calls, set \`workdir:\` to the exact project directory established by the environment details or a harness observation. Never emit descriptive placeholder text as a \`workdir\` value.
 
 Do not describe, assume, or reason about the environment before receiving the observation. For a question that needs no machine access, answer directly.
-- Every tool-call fence must be well formed. Its opening line is three backticks followed immediately by one supported tool name, on its own line and never joined to prose. Header fields use \`name: value\`, one per line. For \`bash\` and \`write\`, place one blank line after the headers before the shell program or file content. \`read\` has headers only. \`edit\` begins its SEARCH/REPLACE block after its headers. The closing three backticks are on their own line. Omit optional headers you do not need. Never omit the backticks, never write the tool name inline with a sentence, and never embed the block mid-paragraph.
+- Every tool-call fence must be well formed. Its opening line is three backticks followed immediately by one supported tool name, on its own line and never joined to prose. Header fields use \`name: value\`, one per line. For \`${shellName}\` and \`${writeName}\`, place one blank line after the headers before the shell program or file content. \`${readName}\` has headers only. \`${editName}\` begins its SEARCH/REPLACE block after its headers. The closing three backticks are on their own line. Omit optional headers you do not need. Never omit the backticks, never write the tool name inline with a sentence, and never embed the block mid-paragraph.
 - Emit exactly ONE tool-call fence per turn, then end the message at its closing fence and wait for the real harness observation. Never emit a second tool fence in the same turn.
-- Minimise unnecessary turns. Gather a complete evidence set for the next decision in each read-only investigation call. When several inspections are already identifiable, combine them in ONE \`bash\` call: inspect multiple known files or ranges, list relevant directories, and run multiple targeted searches together. Label each section and keep output bounded. Do not spend separate turns on independent reads whose paths, patterns, and ranges are already known.
+- Minimise unnecessary turns. Gather a complete evidence set for the next decision in each read-only investigation call. When several inspections are already identifiable, combine them in ONE \`${shellName}\` call: inspect multiple known files or ranges, list relevant directories, and run multiple targeted searches together. Label each section and keep output bounded. Do not spend separate turns on independent reads whose paths, patterns, and ranges are already known.
 - Make the single call substantial but coherent. Read-only commands may be combined when their paths, patterns, ranges, and other arguments are known before the call. Combine mutations only when every target and change is already established by prior observations. Use \`&&\` or explicit error handling when a later command requires an earlier command to succeed. Do not emit generic planning words as commands; use actual project commands established from repository evidence. Keep output targeted, bounded, and clearly labelled. If a later command's selection, arguments, target, content, or safety depends on unseen output, end the turn and wait for the real observation.
 - YOU KNOW NOTHING ABOUT THE USER'S MACHINE UNTIL THE HARNESS SHOWS IT TO YOU. Base every claim about commands, files, paths, machine state, or completed changes on a real harness observation you actually received in this conversation. NEVER invent, reconstruct, remember, predict, or author a command's output or a file's contents. NEVER treat a tool call you emitted, a path named in the task, an instruction, an example, prior knowledge, or your own earlier statement as execution evidence. To learn something, CALL A TOOL AND READ THE REAL OBSERVATION. Authoring a result or presenting assumed content as observed fact is a PROTOCOL VIOLATION.
 - After receiving a real harness observation, you may quote, summarise, and reason from it. Clearly distinguish what the observation directly established from any inference you draw. Claim a change or task complete only when real observations verify the requested outcome.
@@ -534,20 +637,24 @@ function parseFencedInner(spec: FencedToolSpec, inner: string): Record<string, u
   // Header: contiguous "key: value" lines whose key is a known header param,
   // terminated by a blank line (consumed) or the first non-header line (kept).
   let i = 0;
-  if (spec.headerParams.length) {
-    for (; i < lines.length; i++) {
-      const line = lines[i];
-      if (line.trim() === "") { i++; break; }
-      const m = line.match(/^([A-Za-z0-9_]+):[ \t]?(.*)$/);
-      if (m && spec.headerParams.includes(m[1])) {
-        const val = m[2].trim();
-        if (val === "true") args[m[1]] = true;
-        else if (val === "false") args[m[1]] = false;
-        else if (/^-?\d+(\.\d+)?$/.test(val)) args[m[1]] = Number(val);
-        else args[m[1]] = m[2];
-      } else {
-        break;
-      }
+  for (; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim() === "") { i++; break; }
+    const m = line.match(/^([A-Za-z0-9_]+):[ \t]?(.*)$/);
+    const target = m ? resolveDeclaredParam(spec, m[1]) : undefined;
+    const isHeaderParam = target !== undefined && spec.headerParams.includes(target);
+    // A tool whose only param is its body (e.g. a single-`path` read) accepts one
+    // leading header line naming that param, so `filePath: x` isn't swallowed whole
+    // as body text.
+    const isBodyParamHeader = i === 0 && target !== undefined && target === spec.bodyParam;
+    if (m && (isHeaderParam || isBodyParamHeader)) {
+      const val = m[2].trim();
+      if (val === "true") args[target!] = true;
+      else if (val === "false") args[target!] = false;
+      else if (/^-?\d+(\.\d+)?$/.test(val)) args[target!] = Number(val);
+      else args[target!] = m[2];
+    } else {
+      break;
     }
   }
 
@@ -563,20 +670,24 @@ function parseFencedInner(spec: FencedToolSpec, inner: string): Record<string, u
     args[spec.editPair.replace] = sr[2];
   } else if (spec.bodyParam !== undefined) {
     const restTrimmed = rest.trim();
-    if (
-      (restTrimmed.startsWith("[") && restTrimmed.endsWith("]")) ||
-      (restTrimmed.startsWith("{") && restTrimmed.endsWith("}"))
-    ) {
-      try {
-        args[spec.bodyParam] = JSON.parse(restTrimmed);
-      } catch {
-        args[spec.bodyParam] = rest;
+    // A header line may already have supplied this param (e.g. `filePath:` naming a
+    // single-`path` tool); an empty body must not clobber it back to "".
+    if (restTrimmed !== "" || args[spec.bodyParam] === undefined) {
+      if (
+        (restTrimmed.startsWith("[") && restTrimmed.endsWith("]")) ||
+        (restTrimmed.startsWith("{") && restTrimmed.endsWith("}"))
+      ) {
+        try {
+          args[spec.bodyParam] = JSON.parse(restTrimmed);
+        } catch {
+          args[spec.bodyParam] = rest;
+        }
+      } else {
+        // Strip trailing model invocation stop-tokens emitted at stream end
+        args[spec.bodyParam] = typeof rest === "string"
+          ? rest.replace(/(?:<\/?(?:parameter|invoke|tool_call|function_call)[^>]*>\s*)+$/gi, "").trimEnd()
+          : rest;
       }
-    } else {
-      // Strip trailing model invocation stop-tokens emitted at stream end
-      args[spec.bodyParam] = typeof rest === "string"
-        ? rest.replace(/(?:<\/?(?:parameter|invoke|tool_call|function_call)[^>]*>\s*)+$/gi, "").trimEnd()
-        : rest;
     }
   }
 
