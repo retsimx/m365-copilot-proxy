@@ -134,9 +134,6 @@ export interface FencedToolSpec {
   headerParams: string[];
   /** The free-form param carried as the fence body (mutually exclusive with editPair). */
   bodyParam?: string;
-  /** JSON-schema `type` of `bodyParam`. A `string` body is ALWAYS kept verbatim — a
-   *  file whose content happens to be JSON must not be turned into an object. */
-  bodyType?: string;
   /** An (old → new) pair rendered as a SEARCH/REPLACE diff. */
   editPair?: { search: string; replace: string };
   /** A worked example for the Claude agent <tools> block: the call the model emits
@@ -170,7 +167,6 @@ export function deriveFencedSpec(tool: ToolDef): FencedToolSpec {
     name,
     description,
     bodyParam,
-    bodyType: bodyParam ? (properties[bodyParam]?.type as string | undefined) : undefined,
     headerParams: props.filter((p) => p !== bodyParam),
   };
 }
@@ -189,17 +185,6 @@ export function buildSpecMap(tools: ToolDef[]): Map<string, FencedToolSpec> {
     for (const lang of SHELL_LANGS) {
       if (!m.has(lang)) m.set(lang, shellSpec);
     }
-  }
-
-  // File-tool aliasing, same idea: the framing names the harness's own read/write/edit
-  // tool, but the model may emit another harness's spelling (`write` against a harness
-  // that declares `write_file`). Resolve the alias onto the declared tool's spec so the
-  // call still reaches the harness under the name it accepts. Exact names always win.
-  for (const aliases of Object.values(FILE_TOOL_ALIASES)) {
-    const tool = findToolByAlias(tools, aliases);
-    if (!tool) continue;
-    const spec = m.get(tool.function.name)!;
-    for (const alias of aliases) if (!m.has(alias)) m.set(alias, spec);
   }
   return m;
 }
@@ -555,47 +540,6 @@ function indexOfUnquotedBackticks(line: string): number {
   return -1;
 }
 
-/** Every fence info-string we recognise as a tool label, longest first so a longer
- *  label (`shell`, `powershell`, `container.exec`) wins over a shorter suffix (`sh`, `ps1`). */
-function knownLabelList(specs: Map<string, FencedToolSpec>): string[] {
-  return [...new Set([...specs.keys(), ...SHELL_LANGS])].sort((a, b) => b.length - a.length);
-}
-
-/** A known label glued to the end of a line (`…chunk.edit`, `…result.bash`).
- *
- *  M365 renders a turn as a prose message plus a separately-streamed code block; the
- *  block arrives as `info-string\n<body>` with the opening backticks stripped AND with
- *  no newline at the prose boundary. Concatenated, the label sits directly after the
- *  last prose character. A label alone on its line (Pass 2) or already preceded by a
- *  backtick (a well-formed opener) is NOT glued and is left to the other passes. */
-function splitGluedLabel(line: string, labels: string[]): { prose: string; label: string } | null {
-  for (const label of labels) {
-    if (!line.endsWith(label)) continue;
-    // Longest-first, so the FIRST suffix match is the intended label: stop here rather
-    // than falling through to a shorter suffix inside it (`bash` also ends in `sh`).
-    const cut = line.length - label.length;
-    if (cut === 0) return null; // label alone on the line — Pass 2
-    const prev = line[cut - 1];
-    if (prev === "`" || /\s/.test(prev)) return null; // well-formed opener / label after a space
-    // The label must sit after punctuation, never inside a word — otherwise prose that
-    // ends in `finish`, `push`, `hash`, `flush` would be read as a shell label.
-    if (/[A-Za-z0-9_]/.test(prev)) return null;
-    return { prose: line.slice(0, cut), label };
-  }
-  return null;
-}
-
-/** Does `line` look like the first line of this tool's body? Requires the line to be a
- *  header the tool actually declares (so `path:` for a file tool, `workdir:`/`timeout:`
- *  for the shell) or an edit's SEARCH marker — a prose line such as `Note: …` after a
- *  sentence ending in a tool word therefore never qualifies. */
-function startsToolBody(line: string, spec?: FencedToolSpec): boolean {
-  if (!spec) return false;
-  if (spec.editPair && /^<{5,}\s*SEARCH/.test(line)) return true;
-  const m = line.match(/^([A-Za-z0-9_]+):[ \t]?/);
-  return !!m && resolveDeclaredParam(spec, m[1]) !== undefined;
-}
-
 export function restoreM365Fences(text: string, specs: Map<string, FencedToolSpec>): string {
   // Pass 0: M365 escapes `]` as `\]` when it looks like a Markdown link reference
   // (`…]:`), leaking a backslash into code the harness then runs — bash "bad
@@ -624,26 +568,6 @@ export function restoreM365Fences(text: string, specs: Map<string, FencedToolSpe
     } else {
       lines.push(src[i]);
     }
-  }
-
-  // Pass 1.5: M365's split delivery (live 2026-10-20). A turn rendered as a prose
-  // message plus a separately-streamed code block arrives as `…prose` + `label\n<body>`
-  // with the backticks gone and no newline at the boundary, i.e. `…prose.edit\npath: …`.
-  // Neither Pass 1 (no backticks) nor Pass 2 (label not alone on its line) matches, so
-  // the turn degraded to prose and fenced examples INSIDE the body were promoted to
-  // real tool calls. Restore the opener on positive evidence that the label starts a
-  // body: the next line is a header this tool declares (or an edit's SEARCH marker), or
-  // a closing fence follows before any new opener (a shell block whose body starts with
-  // a command). A prose line merely ending in a tool word satisfies neither.
-  const labels = knownLabelList(specs);
-  for (let i = 0; i < lines.length; i++) {
-    const split = splitGluedLabel(lines[i], labels);
-    if (!split) continue;
-    const nextLine = lines[i + 1] ?? "";
-    if (!startsToolBody(nextLine, specs.get(split.label)) && !hasClosingFenceAfter(lines, i)) continue;
-    lines[i] = split.prose;
-    lines.splice(i + 1, 0, "```" + split.label);
-    i++; // skip the opener just inserted
   }
 
   // Pass 2: M365 can drop the opening fence entirely, leaving a bare language
@@ -753,15 +677,9 @@ function parseFencedInner(spec: FencedToolSpec, inner: string): Record<string, u
     // A header line may already have supplied this param (e.g. `filePath:` naming a
     // single-`path` tool); an empty body must not clobber it back to "".
     if (restTrimmed !== "" || args[spec.bodyParam] === undefined) {
-      // Auto-parse a JSON-looking body ONLY when the tool declares a structured param
-      // (question's `questions: array`, a todo list, …). A `string` body is verbatim
-      // data: a `write` of a .json file must reach the harness as text, not as an
-      // object it will reject at schema validation.
-      const structuredBody = spec.bodyType !== "string";
       if (
-        structuredBody &&
-        ((restTrimmed.startsWith("[") && restTrimmed.endsWith("]")) ||
-          (restTrimmed.startsWith("{") && restTrimmed.endsWith("}")))
+        (restTrimmed.startsWith("[") && restTrimmed.endsWith("]")) ||
+        (restTrimmed.startsWith("{") && restTrimmed.endsWith("}"))
       ) {
         try {
           args[spec.bodyParam] = JSON.parse(restTrimmed);
