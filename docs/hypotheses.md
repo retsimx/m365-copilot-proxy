@@ -3480,3 +3480,42 @@ bytes verified in the opencode binary. Full suite 376 pass.
 with that exact sentence-plus-newline would also be stripped — accepted as negligible (it is the
 harness's own reserved banner). Falsified if a harness banner other than OpenCode's is observed to
 re-introduce the turn-0 refusal reflex; add it to the same strip.
+
+---
+
+### F45 — M365 streams the answer one CARD at a time; folding a card snapshot against the whole answer drops the block opener 🟢 (2026-10-20)
+
+**Headline.** The answer is not one text stream. Every paragraph and every fenced block
+is its own card: a **cursor-addressed** `MessageUpdate` opens it with that card's first
+bytes, and `writeAtCursor` deltas continue it. The card snapshot is the card's *own*
+text, not a snapshot of the whole answer. `createAnswerAccumulator` folded it with
+`foldStreamText(answer, cardText)`, which discards it whenever it is shorter than the
+prose already accumulated — so the opening bytes were lost.
+
+**Evidence.** Live prod `debug.log`, 2026-10-20. Four independent turns:
+`05:20:05` card `"```"` + deltas `bash\ncd …` → `…result.bash`; `07:09:37` card `"```"`
++ `edit\npath: …` → `…§3.2.edit`; `07:20:28` card `"```"` + `edit\npath: …` →
+`…chunk.edit`; `22:57:01` card `"```shell\nech"` + deltas `o "=== P…` →
+`…verdict.o "=== PLAN`. The last one proves the mechanism: the label AND the head of the
+command are gone, so no text-level repair can recover them. Scale: 74 of 19,554 tool-mode
+turns carried a glued shape before this fix (58 `.bash`, 9 `.shell`, 5 `.edit`,
+3 `.write`, 1 `.read`; 60 lost the call entirely, 5 produced bogus extra calls — one ran
+`make -C tests/…` from a document body).
+
+**False start (reverted).** `e289f77` repaired the *symptom* in `restoreM365Fences`
+(a label glued to prose ⇒ restore the opener). It worked only when the label survived in
+the deltas (the `"```"` card case) and could never recover `"```shell\nech"`. Reverted in
+`c037649`; the correct fix is in the accumulator.
+
+**Fix (deterministic, proxy-side).** `shouldAccumulateCard` routes only cursor-addressed
+plain-answer messages (not CoT, `Progress`/`EarlyProgress`, or `Code`) to
+`advanceCard(messageId, text)`, which keeps per-card state: a NEW card is appended after
+one newline (materialising the block boundary M365 never sends), a snapshot for the
+CURRENT card adopts growth and ignores an unretractable shorter rewrite. Messages
+without a cursor keep the `foldStreamText` path.
+
+**Caveat / falsification.** If a card's opening frame is lost in transit (reconnect,
+dropped frame) the prefix is still unrecoverable — the reverted text-level repair is not
+restored, so such a turn degrades to prose as before. Falsified if a cursor-addressed
+message ever carries the whole answer (it would then be appended twice), or if a card
+boundary is observed that must NOT become a newline.

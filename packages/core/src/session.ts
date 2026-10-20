@@ -147,6 +147,21 @@ export function foldStreamText(
   return { answer: next, emit: null };
 }
 
+/** Should this bot message be accumulated as the start/continuation of a CARD?
+ *
+ *  M365 addresses the streamed answer per card, not per message: each paragraph or
+ *  fenced block opens with a cursor-addressed `MessageUpdate` carrying that card's
+ *  first bytes (`"```"`, `"```shell\nech"`) and continues with `writeAtCursor` deltas.
+ *  Folding such a card against the whole answer drops it whenever it is shorter than
+ *  the prose already accumulated (see `advanceCard`). Only plain answer text with a
+ *  cursor and a message id qualifies — CoT steps, `Progress`/`EarlyProgress` and
+ *  `Code` frames keep their existing routing — and a message WITHOUT a cursor is a
+ *  full-message snapshot, which must keep the {@link foldStreamText} path.
+ */
+export function shouldAccumulateCard(m: BotMessageLike, hasCursor: boolean): boolean {
+  return hasCursor && Boolean(m.messageId) && classifyBotMessage(m) === "answer";
+}
+
 /**
  * Accumulates the streamed answer, folding token deltas and full-text snapshots
  * (see {@link foldStreamText}) and streaming each newly-appended suffix.
@@ -161,6 +176,10 @@ export function createAnswerAccumulator(onDelta: (emit: string) => void) {
   let answer = "";
   let receivedContent = false;
   let stopped = false;
+  // The card currently being streamed (see advanceCard): its id, and the offset in
+  // `answer` where that card's own text begins.
+  let cardId: string | null = null;
+  let cardBase = 0;
   return {
     advance(next: string): void {
       if (stopped) return; // ignore all frames after the Stop frame
@@ -170,6 +189,38 @@ export function createAnswerAccumulator(onDelta: (emit: string) => void) {
         receivedContent = true;
       }
       if (r.emit) onDelta(r.emit);
+    },
+    /**
+     * Fold a cursor-addressed card snapshot. `text` is THAT CARD's content, not a
+     * snapshot of the whole answer, so it must never be compared against the answer:
+     * a block card's first bytes ("```shell\nech") are shorter than the prose that
+     * already streamed, and the old whole-answer fold discarded exactly those bytes —
+     * leaving "…verdict.o \"=== PLAN" or, when the card held only the opener,
+     * "…chunk.edit\npath: …" (the glued-label shape). See hypotheses F45.
+     *
+     * A NEW card starts a new paragraph or block, so it is separated from the previous
+     * text by one newline — that is what materialises the block boundary M365 never
+     * sends. A snapshot for the CURRENT card is that card's text so far: adopt growth,
+     * and for a shorter rewrite keep what was already streamed (it cannot be retracted).
+     */
+    advanceCard(id: string, text: string): void {
+      if (stopped) return;
+      if (cardId !== id) {
+        const sep = answer.length > 0 && !answer.endsWith("\n") ? "\n" : "";
+        cardBase = answer.length + sep.length;
+        cardId = id;
+        answer = answer + sep + text;
+        if (sep || text) {
+          receivedContent = true;
+          onDelta(sep + text);
+        }
+        return;
+      }
+      const current = answer.slice(cardBase);
+      if (text.length <= current.length) return; // no growth, or an unretractable rewrite
+      answer = answer.slice(0, cardBase) + text;
+      receivedContent = true;
+      if (text.startsWith(current)) onDelta(text.slice(current.length));
     },
     stop(): void {
       stopped = true;
@@ -882,6 +933,15 @@ export class CopilotSession {
                   // messageType'd bot frame (which the plain-chat path drops). Detect
                   // it and auto-approve on the same socket (H-NATIVE-6).
                   maybeResumeAction(m);
+                }
+                // M365 addresses the answer per card: a cursor-addressed message
+                // carries THAT CARD's first bytes ("```", "```shell\nech"), followed by
+                // writeAtCursor deltas. Folding it as a whole-answer snapshot drops it
+                // whenever it is shorter than the prose already streamed — losing the
+                // block opener (hypotheses F45). Keep it as a card start instead.
+                if (m.text && shouldAccumulateCard(m, Boolean(msgUpdate.data.cursor))) {
+                  acc.advanceCard(m.messageId!, m.text);
+                  continue;
                 }
                 routeBotMessage(m);
               }

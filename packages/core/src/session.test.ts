@@ -5,7 +5,9 @@ import {
   classifyBotMessage,
   createBotMessageRouter,
   createAnswerAccumulator,
+  shouldAccumulateCard,
 } from "./session.js";
+import { parseToolCalls } from "./tools.js";
 import { MessageUpdate } from "./schemas.js";
 
 /** Replay a sequence of raw M365 frames (deltas as {d}, snapshots as {s}) through
@@ -244,6 +246,115 @@ describe("createAnswerAccumulator — no output accepted after the Stop frame", 
     acc.stop();
     acc.stop();
     expect(acc.stopped).toBe(true);
+  });
+});
+
+describe("shouldAccumulateCard (cursor-addressed block cards)", () => {
+  it("routes a cursor-addressed plain answer card to the card accumulator", () => {
+    expect(shouldAccumulateCard({ author: "bot", text: "```shell", messageId: "m1" }, true)).toBe(true);
+  });
+
+  it("never routes without a cursor — a full-message snapshot keeps the fold path", () => {
+    expect(shouldAccumulateCard({ author: "bot", text: "```shell", messageId: "m1" }, false)).toBe(false);
+  });
+
+  it("never routes reasoning, Code or EarlyProgress frames", () => {
+    expect(shouldAccumulateCard({ author: "bot", text: "step", messageId: "m", addToChainOfThought: true }, true)).toBe(false);
+    expect(shouldAccumulateCard({ author: "bot", text: "Coding and executing", messageId: "m", contentType: "Code" }, true)).toBe(false);
+    expect(shouldAccumulateCard({ author: "bot", text: "Just a sec…", messageId: "m", contentType: "EarlyProgress" }, true)).toBe(false);
+    expect(shouldAccumulateCard({ author: "bot", text: "progress", messageId: "m", messageType: "Progress" }, true)).toBe(false);
+  });
+
+  it("requires a message id and text", () => {
+    expect(shouldAccumulateCard({ author: "bot", text: "x" }, true)).toBe(false);
+    expect(shouldAccumulateCard({ author: "bot", messageId: "m" }, true)).toBe(false);
+    expect(shouldAccumulateCard({ author: "user", text: "x", messageId: "m" }, true)).toBe(false);
+  });
+});
+
+describe("createAnswerAccumulator — cursor-addressed card starts (split delivery)", () => {
+  // Live 2026-10-20 (issue-autopilot SCM subagent, cid d1bf2be4): M365 opens each
+  // block as its own card — a cursor-addressed MessageUpdate carrying that card's first
+  // bytes ("```", "```shell\nech") followed by writeAtCursor deltas. Feeding the card
+  // text to the whole-answer fold dropped it whenever it was shorter than the prose
+  // already accumulated, so the block lost its opener ("…verdict.edit\npath:") or its
+  // opener AND part of its first line ("…verdict.o \"=== PLAN").
+  it("keeps a block card's opening bytes when the card text is shorter than the prose", () => {
+    const emitted: string[] = [];
+    const acc = createAnswerAccumulator((e) => emitted.push(e));
+
+    acc.advanceCard("prose-card", "Now let me read the plan");
+    acc.advance(acc.answer + " JSON and the verdict.");
+    acc.advanceCard("block-card", "```shell\nech");
+    acc.advance(acc.answer + 'o "=== PLAN" && cat plan.json');
+    acc.advance(acc.answer + "\n```");
+
+    expect(acc.answer).toBe(
+      'Now let me read the plan JSON and the verdict.\n```shell\necho "=== PLAN" && cat plan.json\n```',
+    );
+    expect(emitted.join("")).toBe(acc.answer);
+  });
+
+  it("separates the first card from nothing and later cards by one newline", () => {
+    const acc = createAnswerAccumulator(() => {});
+    acc.advanceCard("a", "First paragraph.");
+    acc.advanceCard("b", "```bash\nls\n```");
+    acc.advanceCard("c", "Trailing line.");
+    expect(acc.answer).toBe("First paragraph.\n```bash\nls\n```\nTrailing line.");
+  });
+
+  it("does not add a second newline when the answer already ends with one", () => {
+    const acc = createAnswerAccumulator(() => {});
+    acc.advanceCard("a", "Paragraph.\n");
+    acc.advanceCard("b", "```bash\nls\n```");
+    expect(acc.answer).toBe("Paragraph.\n```bash\nls\n```");
+  });
+
+  it("extends the same card without duplicating what was already streamed", () => {
+    const emitted: string[] = [];
+    const acc = createAnswerAccumulator((e) => emitted.push(e));
+    acc.advanceCard("a", "```bash");
+    acc.advance(acc.answer + "\nls -la");
+    acc.advanceCard("a", "```bash\nls -la\n```");
+    expect(acc.answer).toBe("```bash\nls -la\n```");
+    expect(emitted.join("")).toBe("```bash\nls -la\n```");
+  });
+
+  it("keeps streamed text when a same-card snapshot is a shorter rewrite", () => {
+    const acc = createAnswerAccumulator(() => {});
+    acc.advanceCard("a", "The first phrasing of the line.");
+    acc.advanceCard("a", "The first phrasing");
+    expect(acc.answer).toBe("The first phrasing of the line.");
+  });
+
+  it("ignores card frames after stop()", () => {
+    const acc = createAnswerAccumulator(() => {});
+    acc.advanceCard("a", "kept");
+    acc.stop();
+    acc.advanceCard("a", "kept and more");
+    acc.advanceCard("b", "new card");
+    expect(acc.answer).toBe("kept");
+  });
+
+  it("produces text that parses as one tool call (end-to-end shape)", () => {
+    const acc = createAnswerAccumulator(() => {});
+    acc.advanceCard("prose", "Reading the plan now.");
+    acc.advanceCard("block", "```");
+    acc.advance(acc.answer + "bash\nwc -l plan.json");
+    acc.advance(acc.answer + "\n```");
+
+    const bashTool = {
+      type: "function" as const,
+      function: {
+        name: "bash",
+        description: "Run a shell command.",
+        parameters: { type: "object" as const, properties: { command: { type: "string" } } },
+      },
+    };
+    const parsed = parseToolCalls(acc.answer, [bashTool]);
+    expect(parsed.toolCalls).toHaveLength(1);
+    expect(parsed.toolCalls[0].function.name).toBe("bash");
+    expect(JSON.parse(parsed.toolCalls[0].function.arguments).command).toBe("wc -l plan.json");
   });
 });
 

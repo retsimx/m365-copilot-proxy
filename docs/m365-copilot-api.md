@@ -265,6 +265,21 @@ Concatenate `writeAtCursor` across deltas → the streamed answer.
 ```
 **Only treat a bot message as content when `messageType` is absent.** Messages *with* a `messageType` are control/meta (see below). We keep whichever of (delta-accumulated) vs (message snapshot) text is longer.
 
+> **Per-card addressing — the answer is streamed one CARD at a time (2026-10-20).**
+> Each paragraph and each fenced code block is its own card. A card opens with a
+> **cursor-addressed** `MessageUpdate` carrying that card's first bytes
+> (`"text":"```"`, `"text":"```shell\nech"`) — `cursor.j` is
+> `$['<messageId>'].adaptiveCards[0].body[0].text`, `cursor.p` is `-1` — and then
+> continues with `writeAtCursor` deltas for that card. The snapshot is **the card's own
+> text, not a snapshot of the whole answer**, so it must not be folded against the
+> accumulated answer: a block card's first bytes are shorter than the prose that already
+> streamed, and the naive fold discards exactly those bytes, losing the opener
+> (`…prose.edit\npath: …`) or the opener *and* the head of the first line
+> (`…verdict.o "=== PLAN`). Messages **without** a cursor are full-message snapshots and
+> keep the fold path. A new card also starts a new block: the consumer must materialise
+> the boundary (one newline) itself, because M365 does not send it. Repair in
+> `session.ts` (`shouldAccumulateCard` / `advanceCard`); see `hypotheses.md` F45.
+
 The final-state bot message (in either the last update frame or the `type:2` stream item) also carries:
 
 | Field | What it is | Useful for |
