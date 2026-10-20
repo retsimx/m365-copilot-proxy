@@ -383,6 +383,17 @@ describe("parseFencedToolCalls", () => {
     expect(args.command).toBe("grep -q \"```lang\" file.txt\ntest -s file.txt");
   });
 
+  it("keeps a string-typed body verbatim — a written JSON file stays text", () => {
+    const content = '{\n  "project": "demo",\n  "steps": ["one", "two"]\n}';
+    const rendered = renderFencedCall(deriveFencedSpec(writeFile), { path: "plan.json", content });
+    const { calls } = parseFencedToolCalls(rendered, specs);
+    expect(calls).toHaveLength(1);
+    const args = JSON.parse(calls[0].function.arguments);
+    // The harness declares `content: string`; handing it an object fails schema validation.
+    expect(typeof args.content).toBe("string");
+    expect(args.content).toBe(content);
+  });
+
   it("round-trips a write_file with a multi-line body", () => {
     const content = "def f():\n    return 1\n\nprint(f())";
     const rendered = renderFencedCall(deriveFencedSpec(writeFile), { path: "f.py", content });

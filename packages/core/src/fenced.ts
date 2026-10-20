@@ -134,6 +134,9 @@ export interface FencedToolSpec {
   headerParams: string[];
   /** The free-form param carried as the fence body (mutually exclusive with editPair). */
   bodyParam?: string;
+  /** JSON-schema `type` of `bodyParam`. A `string` body is ALWAYS kept verbatim — a
+   *  file whose content happens to be JSON must not be turned into an object. */
+  bodyType?: string;
   /** An (old → new) pair rendered as a SEARCH/REPLACE diff. */
   editPair?: { search: string; replace: string };
   /** A worked example for the Claude agent <tools> block: the call the model emits
@@ -167,6 +170,7 @@ export function deriveFencedSpec(tool: ToolDef): FencedToolSpec {
     name,
     description,
     bodyParam,
+    bodyType: bodyParam ? (properties[bodyParam]?.type as string | undefined) : undefined,
     headerParams: props.filter((p) => p !== bodyParam),
   };
 }
@@ -677,9 +681,15 @@ function parseFencedInner(spec: FencedToolSpec, inner: string): Record<string, u
     // A header line may already have supplied this param (e.g. `filePath:` naming a
     // single-`path` tool); an empty body must not clobber it back to "".
     if (restTrimmed !== "" || args[spec.bodyParam] === undefined) {
+      // Auto-parse a JSON-looking body ONLY when the tool declares a structured param
+      // (question's `questions: array`, a todo list, …). A `string` body is verbatim
+      // data: writing a .json file must reach the harness as text, not as an object it
+      // rejects at schema validation.
+      const structuredBody = spec.bodyType !== "string";
       if (
-        (restTrimmed.startsWith("[") && restTrimmed.endsWith("]")) ||
-        (restTrimmed.startsWith("{") && restTrimmed.endsWith("}"))
+        structuredBody &&
+        ((restTrimmed.startsWith("[") && restTrimmed.endsWith("]")) ||
+          (restTrimmed.startsWith("{") && restTrimmed.endsWith("}")))
       ) {
         try {
           args[spec.bodyParam] = JSON.parse(restTrimmed);
