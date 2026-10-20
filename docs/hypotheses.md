@@ -3480,3 +3480,42 @@ bytes verified in the opencode binary. Full suite 376 pass.
 with that exact sentence-plus-newline would also be stripped — accepted as negligible (it is the
 harness's own reserved banner). Falsified if a harness banner other than OpenCode's is observed to
 re-introduce the turn-0 refusal reflex; add it to the same strip.
+
+---
+
+### F45 — M365 delivers a fenced block as its own streamed unit; a naive concat glues the info-string to the prose 🟢 (2026-10-20)
+
+**Headline.** When a tool-mode answer contains prose *and* a fenced call, M365 can split the
+answer into two protocol events: the prose as a `messages[]` snapshot (trailing whitespace
+trimmed, **no** newline) and the call as a separate `writeAtCursor` delta run whose text is
+`info-string\n<body>` with the opening backticks stripped. The proxy concatenated them raw
+(`session.ts` `acc.advance(acc.answer + writeAtCursor)`), producing `…prose.edit\npath: …`.
+`restoreM365Fences` repaired only a glued opener *with* backticks (Pass 1) and a bare label on
+its *own* line (Pass 2), so this third shape fell through: the turn became prose, and fenced
+examples *inside* the (unparsed) body were promoted to real top-level tool calls.
+
+**Evidence.** Live prod `debug.log`, 2026-10-20. Frames show the prose card then deltas
+`"edit\npath: /home/…"` / `"write\npath: …"`. Scale: **74 of 19,554** tool-mode turns carry the
+glued shape — 58 `.bash`, 9 `.shell`, 5 `.edit`, 3 `.write`, 1 `.read`; **60 lost the call
+entirely** (classifier `DELIVERABLE` → returned as prose, no retry), **5 produced >1 call**,
+9 still produced one. Worst observed: a dropped §8 `edit` whose body contained ```` ```bash ````
+verification examples — the parser took 3 shell calls, the one-call rule kept the first, and the
+proxy ran `make -C tests/sys/kern/hibernate …` from the *documentation* while the edit was lost;
+a separate turn dropped a complete 47,287-char `write` of a JSON plan.
+
+**Fix (deterministic, proxy-side).** `restoreM365Fences` Pass 1.5 splits a known label glued to
+the end of a prose line and restores its opener, accepting the split only on positive evidence:
+the next line is a header the tool actually declares (or an edit's `<<<<<<< SEARCH`), **or** a
+closing fence follows before any new opener (shell block whose body starts with a command).
+Guards: never split when the label is preceded by a backtick (would eat a well-formed
+```` ```bash ```` opener) or by a word character (`finish`, `push`, `hash` must not read as `sh`).
+Also in the same change: `buildSpecMap` aliases `read`/`write`/`edit` ↔ `*_file` (the framing
+already documents both spellings, but the spec map keyed only on declared names), and a
+`string`-typed body is no longer JSON-auto-parsed — a `write` of a `.json` file previously
+arrived as an object and failed harness schema validation.
+
+**Caveat / falsification.** If the *body* itself is cut by the ~12k-char output ceiling (F9), the
+recovered call is emitted with partial args and the tools path hardcodes
+`finish_reason:"tool_calls"` (no `length` signal) — the call is then merely truncated rather than
+lost. Falsified if a glued label appears with the backticks intact (that is Pass 1's case) or if a
+split label is ever observed without either a declared header or a closing fence.

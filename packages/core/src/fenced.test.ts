@@ -545,6 +545,170 @@ echo "hello"
   });
 });
 
+// Regression (2026-10-20, live prod): M365 renders a turn as a prose message plus a
+// separately-streamed code block. The block's text arrives as `info-string\n<body>`
+// with the opening backticks stripped AND with no newline at the prose boundary, so
+// `…prose.` + `edit\npath: …` concatenates into `…prose.edit\npath: …`. Neither repair
+// matched, the turn degraded to prose, and fenced examples INSIDE the body could be
+// promoted to real tool calls. Fixtures are generic.
+describe("glued tool-label repair (split-delivery shape)", () => {
+  const tBash: ToolDef = {
+    type: "function",
+    function: {
+      name: "bash",
+      description: "Run a shell command.",
+      parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] },
+    },
+  };
+  const tRead: ToolDef = {
+    type: "function",
+    function: {
+      name: "read",
+      description: "Read a file.",
+      parameters: { type: "object", properties: { path: { type: "string" }, limit: { type: "number" } }, required: ["path"] },
+    },
+  };
+  const tWrite: ToolDef = {
+    type: "function",
+    function: {
+      name: "write",
+      description: "Write a file.",
+      parameters: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path", "content"] },
+    },
+  };
+  const tEdit: ToolDef = {
+    type: "function",
+    function: {
+      name: "edit",
+      description: "Replace text.",
+      parameters: {
+        type: "object",
+        properties: { path: { type: "string" }, oldString: { type: "string" }, newString: { type: "string" } },
+        required: ["path", "oldString", "newString"],
+      },
+    },
+  };
+  const tools = [tBash, tRead, tWrite, tEdit];
+
+  it("recovers a write call whose label was glued to the prose", () => {
+    const input = [
+      "Writing the plan now.write",
+      "path: /tmp/demo/plan.json",
+      "",
+      '{',
+      '  "project": "demo",',
+      '  "steps": ["one", "two"]',
+      '}',
+      "```",
+    ].join("\n");
+
+    const parsed = parseToolCalls(input, tools);
+    expect(parsed.hasToolCalls).toBe(true);
+    expect(parsed.toolCalls).toHaveLength(1);
+    expect(parsed.toolCalls[0].function.name).toBe("write");
+    const args = JSON.parse(parsed.toolCalls[0].function.arguments);
+    expect(args.path).toBe("/tmp/demo/plan.json");
+    expect(args.content).toContain('"project": "demo"');
+    expect(parsed.textContent).toContain("Writing the plan now.");
+    expect(parsed.textContent).not.toContain("now.write");
+  });
+
+  it("recovers a write call even when the stream ends without a closing fence", () => {
+    const input = ["Appending the plan.write", "path: /tmp/demo/plan.json", "", '{"project": "demo"'].join("\n");
+
+    const parsed = parseToolCalls(input, tools);
+    expect(parsed.hasToolCalls).toBe(true);
+    expect(parsed.toolCalls[0].function.name).toBe("write");
+    const args = JSON.parse(parsed.toolCalls[0].function.arguments);
+    expect(args.path).toBe("/tmp/demo/plan.json");
+  });
+
+  it("keeps fenced examples inside an edit body as body content, not tool calls", () => {
+    const input = [
+      "Appending the section.edit",
+      "path: /tmp/demo/app.py",
+      "<<<<<<< SEARCH",
+      "value = 1",
+      "=======",
+      "value = 1",
+      "# Verification",
+      "",
+      "```bash",
+      "python -m pytest",
+      "```",
+      "",
+      "```bash",
+      "echo done",
+      "```",
+      ">>>>>>> REPLACE",
+      "```",
+    ].join("\n");
+
+    const parsed = parseToolCalls(input, tools);
+    expect(parsed.toolCalls.map((c) => c.function.name)).toEqual(["edit"]);
+    const args = JSON.parse(parsed.toolCalls[0].function.arguments);
+    expect(args.path).toBe("/tmp/demo/app.py");
+    expect(args.oldString).toBe("value = 1");
+    expect(args.newString).toContain("python -m pytest");
+  });
+
+  it("recovers a shell call whose label was glued to the prose", () => {
+    const input = [
+      "Let me verify the struct result.bash",
+      "cd /tmp/demo",
+      "grep -n staging src/app.py | head -20",
+      "```",
+    ].join("\n");
+
+    const parsed = parseToolCalls(input, tools);
+    expect(parsed.toolCalls).toHaveLength(1);
+    expect(parsed.toolCalls[0].function.name).toBe("bash");
+    const args = JSON.parse(parsed.toolCalls[0].function.arguments);
+    expect(args.command).toContain("grep -n staging src/app.py");
+  });
+
+  it("does not fire on prose that merely ends with a tool word", () => {
+    const input = "I will use bash\nnext, then check the result.";
+    const parsed = parseToolCalls(input, tools);
+    expect(parsed.hasToolCalls).toBe(false);
+  });
+
+  it("does not fire on prose ending in a tool word followed by a real fenced call", () => {
+    const input = ["I will use bash", "some prose first", "```bash", "ls -la", "```"].join("\n");
+    const parsed = parseToolCalls(input, tools);
+    expect(parsed.toolCalls).toHaveLength(1);
+    const args = JSON.parse(parsed.toolCalls[0].function.arguments);
+    expect(args.command).toBe("ls -la");
+  });
+
+  it("leaves a well-formed fenced call untouched", () => {
+    const input = ["Doing it.", "```bash", "ls -la", "```"].join("\n");
+    const parsed = parseToolCalls(input, tools);
+    expect(parsed.toolCalls).toHaveLength(1);
+    const args = JSON.parse(parsed.toolCalls[0].function.arguments);
+    expect(args.command).toBe("ls -la");
+  });
+
+  it("does not split a line whose label is preceded by a backtick", () => {
+    const input = ["Doing it.", "```write", "path: /tmp/demo/x.txt", "", "hello", "```"].join("\n");
+    const parsed = parseToolCalls(input, tools);
+    expect(parsed.toolCalls).toHaveLength(1);
+    expect(parsed.toolCalls[0].function.name).toBe("write");
+  });
+
+  it("maps a model-emitted alias onto the tool the harness actually declares", () => {
+    // Harness declares write_file; the model writes a `write` fence.
+    const onlyWriteFile: ToolDef = { ...tWrite, function: { ...tWrite.function, name: "write_file" } };
+    const input = ["Saving it.write", "path: /tmp/demo/x.txt", "", "hello", "```"].join("\n");
+
+    const parsed = parseToolCalls(input, [tBash, onlyWriteFile]);
+    expect(parsed.toolCalls).toHaveLength(1);
+    expect(parsed.toolCalls[0].function.name).toBe("write_file");
+    const args = JSON.parse(parsed.toolCalls[0].function.arguments);
+    expect(args.path).toBe("/tmp/demo/x.txt");
+  });
+});
+
 describe("shell routing (Tier 1)", () => {
   const runCommand: ToolDef = {
     type: "function",

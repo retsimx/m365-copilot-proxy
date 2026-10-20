@@ -265,6 +265,17 @@ Concatenate `writeAtCursor` across deltas → the streamed answer.
 ```
 **Only treat a bot message as content when `messageType` is absent.** Messages *with* a `messageType` are control/meta (see below). We keep whichever of (delta-accumulated) vs (message snapshot) text is longer.
 
+> **Split delivery — a fenced code block may arrive as its own streamed unit (2026-10-20).**
+> When an answer contains prose *and* a fenced code block, M365 can render them as two
+> events: the prose as a `messages[]` snapshot (trailing whitespace trimmed — **no**
+> terminating newline) and the block as a separate `writeAtCursor` delta run whose text is
+> `info-string\n<body>` **with the opening backticks stripped**. Naive concatenation
+> therefore yields `…prose.edit\npath: …`: the block boundary is gone and the info-string
+> reads as part of the sentence. It is not a model error — the info-string exists only
+> because M365 parsed a fence, and CommonMark requires a fence to start a line. Any new
+> consumer must materialise the boundary itself; the proxy repairs it in
+> `restoreM365Fences` Pass 1.5 (see `hypotheses.md` F45).
+
 The final-state bot message (in either the last update frame or the `type:2` stream item) also carries:
 
 | Field | What it is | Useful for |
