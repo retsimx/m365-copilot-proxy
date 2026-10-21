@@ -246,6 +246,8 @@ code_interpreter_interactive_charts, code_interpreter_matplotlib_patching
 > ```
 >
 > Microsoft's runtime intercepts that XML and dispatches to the named sandbox tool (`bash_tool` → `whoami` → `oai`). A non-registered name (e.g. `bash`) returns `NO CONTENT AVAILABLE` — it is *not* routed to the harness. **Only the proxy's fenced ```` ```bash ```` block reaches the harness** (the user's real machine). So the model faces **two competing tool surfaces** — Microsoft's XML/sandbox tools and the proxy's fenced calls — and the fix is prompt-level: the framing **names** Microsoft's tools *and* the XML format and directs the model to the fenced calls only. See [`prompt-engineering.md`](prompt-engineering.md), `hypotheses.md` §23 F23a.
+>
+> **The sandbox is unavoidable — do not deny it (2026-10-21).** The model can and does check the framing against its own tool list; a claim that it *has hands on the user's machine* is falsified by that check and is read as a prompt injection (`hypotheses.md` F46). State the relationship instead: the model drafts, the person runs, the result comes back. Name the native tools only to disqualify them ("they run elsewhere — wrong tool for this task"), never to forbid them or to assert they do not exist.
 
 ---
 

@@ -384,7 +384,7 @@ class BilbyJob(models.Model):
     expect(await isProseDocument(parsed)).toBe(false);
   });
 
-  it("salvages the real call and drops a self-authored <tool_output> block (the tag our framing teaches)", async () => {
+  it("salvages the real call and drops a self-authored <tool_output> block", async () => {
     const simulation = `Let me check the recent commits:
 \`\`\`bash
 git log --oneline -8

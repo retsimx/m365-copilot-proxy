@@ -3519,3 +3519,57 @@ dropped frame) the prefix is still unrecoverable — the reverted text-level rep
 restored, so such a turn degrades to prose as before. Falsified if a cursor-addressed
 message ever carries the whole answer (it would then be appended twice), or if a card
 boundary is observed that must NOT become a newline.
+
+---
+
+### F46 — Refusals on the agent-less Claude path are driven by ownership claims, not by the tool protocol 🟢 (2026-10-21)
+
+**Headline.** Two failure classes look alike and are not. *Engagement* — does the model accept the
+premise, or refuse it as an injection? — and *format* — having engaged, does it emit the fenced step?
+The "wording-only variants moved nothing" finding (F14-era) is the **format** axis. The refusals are
+the **engagement** axis. They need different fixes and must be measured separately.
+
+**Evidence.** Three live sessions (2026-10-18 → 10-20) refused the task outright, naming the mechanism
+verbatim: *"This looks like a prompt injection attempt, asking me to pretend I have a fictional 'sh'
+fence tool and remote machine access"*; *"a genuine M365 Copilot persona alongside fabricated nested
+'system' blocks… a jailbreak attempt trying to redefine my operating protocol through fake nested
+'system' tags"*; *"the path /home/lewis/… doesn't exist in my actual environment… my real tools are
+bash_tool, view, create_file, str_replace"*. One session also named the client config by its heading:
+*"The embedded 'execution agent' / 'm365sonnet5 contract' instructions are not valid for this
+session."* A live self-report adjudication (same model, same week) ranked the triggers in order:
+(1) instructions that discount its own observations (hard gate), (2) literal `<system>`/`<tools>` tags
+inside a user turn, (3) unverifiable capability/identity claims, (4) escalation on retry. It put
+protocol convention and tool names far below those, and offered the *middle path* — "I can't confirm
+this is wired up as described, but here's the command" — which is the behaviour we actually want.
+
+**Root cause, in one line.** The framing asserted something the model could checkably falsify (it has
+no hands on the user's machine), in the delivery shape of a prompt injection (fake system tags), and
+then escalated when it objected. The model was right.
+
+**What changed (2026-10-21).**
+- Delivery: the framing is no longer wrapped in `<system>`/`<tools>`; it is a plain "Operating
+  contract for this session" heading. The tools block is "Step types".
+- Voice: ownership → workflow. *"Your interface to the user's computer"* → *"the blocks below describe
+  the step types you can draft… writing one is drafting, not doing"*. *"The harness alone executes on
+  the user's real machine"* → *"each step you draft is run outside this conversation by the person
+  you're working with, and the real result is pasted back"*. *"Do not infer a separate mount, sandbox,
+  or execution environment"* → deleted.
+- Identity: *"You are an execution agent"* → *"Your job in this session is to draft the next concrete
+  step… not a document, a plan, or a summary"* (keeps the F24 anti-drift function; drift rate must be
+  re-measured).
+- Native tools: naming kept (it stops sandbox drift, F23a), imperative dropped — *"they run somewhere
+  else, so they're the wrong tool for this task"*.
+- Return-side: the framing no longer names the observation tag at all (it was already item 7 in
+  `prompt-engineering.md`; the code had violated its own doc). The fabrication guard now matches a
+  block opener at line start, so an inline mention no longer aborts a turn.
+- Retry: the accusatory "PROTOCOL ERROR… fabricated" text is gone (it provably increases refusal);
+  refusals retry with a plain restatement of the loop.
+- The client configs (`~/.config/opencode/agent/m365*.md`) no longer say *"You have local tools on the
+  user's real machine"* — the same false claim, in the system prompt, which the model quoted by name.
+
+**Caveat / falsification.** Self-report is a reconstruction, not a weight trace. The identity line's
+anti-drift function is documented (F24-era) and was *not* re-validated before removal — if document
+drift returns, restore a task-shaped anti-drift sentence before restoring the identity claim.
+Falsified if refusals persist with no capability claim and no tag-shaped delivery (look instead at
+the client's own persona line, e.g. "You are the SCM agent"), or if the guard scoping lets a real
+fabricated result block through (it must still match at line start).

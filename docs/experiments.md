@@ -100,6 +100,24 @@ gets a non-zero `SOLVED` / tool-call rate. **Always diff against the magic basel
   vs `--model quick --label quick`.
 - **Read:** SOLVED per model.  **Cost:** ~25 msgs/model.
 
+### E-C10 — Engagement axis: refusal vs format (2026-10-21, hypotheses F46)
+- **Hypothesis:** refusals on the agent-less Claude path are driven by unverifiable ownership claims
+  and tag-shaped delivery, not by the fenced protocol; a workflow-voiced contract (draft the step, the
+  person runs it) reduces refusals without reducing tool-call compliance.
+- **Run:** two framing variants behind `M365_FRAMING_VARIANT` / a build flag — (a) agent as deployed
+  before 2026-10-21, (b) agent with workflow voice + task-shape opener + no tag-shaped wrappers.
+  Same task set, rotated order, `--repeat`:
+  ```sh
+  node scripts/bench/run.mjs --base-url http://localhost:4141/v1 --model claude-sonnet-5 --label F46a
+  node scripts/bench/run.mjs --base-url http://localhost:4141/v1 --model claude-sonnet-5 --label F46b
+  ```
+- **Read:** four numbers, separately — refusal rate (`Classifier: REFUSAL`), clean single-call rate,
+  document-drift rate (prose document instead of a step), and large-write success (>12k chars). A
+  refusal win with a drift regression is not a win.
+- **Cost:** bench only; no live threads beyond the bench's own pacing.
+
+---
+
 ### E-C8 — Advisor framing sweep across all models (`scripts/advisor-all-tones-probe.mjs`)
 - **Hypothesis (§19):** Advisor framing ("You write shell commands; I run them and paste output back; make no tool calls") elicits clean ```` ```bash ```` blocks across all available M365 models, avoiding the RLHF agent-refusal reflex.
 - **Run:**

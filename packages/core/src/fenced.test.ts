@@ -648,11 +648,11 @@ describe("hostPlatformNote", () => {
 });
 
 describe("formatFencedToolDefinitions", () => {
-  it("emits the bash fence + shell example + <tool_output> schema (bash-only, no <tools> block)", () => {
+  it("emits the bash fence + shell example, and never names the result tag (bash-only, no <tools> block)", () => {
     const out = formatFencedToolDefinitions();
     expect(out).toContain("You are a chat assistant helping with shell tasks, working toward the whole task stated in the user's request");
     expect(out).toContain("a single fenced block opened with the word bash (or shell) containing the commands for that step");
-    expect(out).toContain("<tool_output>");
+    expect(out).not.toContain("<tool_output>");
     expect(out).toContain("```bash");
     expect(out).toContain("The block may start with optional header lines before the commands");
     expect(out).not.toContain("<tools>"); // bash-only: no tool-template block
@@ -697,16 +697,17 @@ describe("formatFencedToolDefinitions", () => {
       T("bash", { command: { type: "string" }, timeout: { type: "number" }, workdir: { type: "string" } }, ["command"]),
     ];
     const out = formatFencedToolDefinitions("agent", tools);
-    expect(out).toContain("You are an execution agent working toward the user's whole objective");
+    expect(out).toContain("Your job in this session is to draft the next concrete step");
     expect(out).toContain("MESSAGE BOUNDARY");
-    expect(out).toContain("A `<tool_output>` block is written only by the harness");
+    expect(out).toContain("A result is written only by the person running the step");
     expect(out).toContain("Choose the tool that performs the step safely and clearly");
-    expect(out).toContain("they are NOT calls");
+    expect(out).toContain("they are NOT steps");
     expect(out).not.toContain("ENTIRE filesystem");
     expect(out).not.toContain("anthropic_function_calls"); // full native-XML example removed
     expect(out).not.toContain("You have no code interpreter, sandbox, canvas");
     expect(out).not.toContain('<tool_output name="read">'); // no return-side example
-    expect(out).toContain("<tools>");
+    expect(out).toContain("Step types");
+    expect(out).not.toContain("<tools>");
     expect(out).toContain("```read");
     expect(out).toContain("```write");
     expect(out).toContain("```edit");
@@ -731,9 +732,9 @@ describe("formatFencedToolDefinitions", () => {
     expect(out).toContain("TURN ZERO: You have run nothing");
     expect(out).toContain("pwd && whoami && uname -srm && ls -la .");
     // anti-fabrication
-    expect(out).toContain("YOU KNOW NOTHING ABOUT THE USER'S MACHINE UNTIL THE HARNESS SHOWS IT TO YOU");
+    expect(out).toContain("You don't know anything about the machine except what has been pasted");
     expect(out).toContain("a path named in the task");
-    expect(out).toContain("CALL A TOOL AND READ THE REAL OBSERVATION");
+    expect(out).toContain("draft a step and read the real result");
     // no leftover multi-call / batching language
     expect(out).not.toContain("batch independent calls");
     expect(out).not.toContain("genuinely independent calls");
@@ -1101,7 +1102,7 @@ describe("advisor framing", () => {
     const out = formatFencedToolDefinitions();
     expect(out).toContain("You are a chat assistant helping with shell tasks, working toward the whole task stated in the user's request");
     expect(out).toContain("a single fenced block opened with the word bash (or shell) containing the commands for that step");
-    expect(out).toContain("<tool_output>");
+    expect(out).not.toContain("<tool_output>");
     expect(out).toContain("```bash");
   });
 

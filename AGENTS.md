@@ -188,6 +188,13 @@ pnpm test:live      # M365_LIVE=1; live tests that hit real M365 (uses quota)
   The default `m365-copilot` (magic) tone is unreliable for tools (confabulates ~0%
   solve). The older claim that reasoning tones do not work applied only to the legacy
   bare-JSON format prior to fenced/shell routing.
+- **Claude framing is workflow-voiced, never ownership-voiced (F46).** Say *draft the step; the
+  person runs it and pastes the result back* — never *you have tools on the user's machine* or *the
+  harness executes on your machine*. The model checks that claim against its own tool list, falsifies
+  it, and reads the framing as a prompt injection. Name the native tools only to disqualify them
+  ("they run elsewhere — wrong tool for this task"), never to forbid them; keep `<system>` tags and the
+  observation-tag literal out of user-role framing; the fabrication guard matches a result block at
+  line start only, so an inline mention does not abort a turn.
 - **M365 disengages on large tool payloads.** Keep injected toolsets lean. This is why
   pi works and heavy harnesses (opencode) don't. The proxy also enforces one tool call per
   turn and strips M365's invented `{confidence}`/`{final}` JSON (`M365_ALLOW_MULTI_TOOL` to opt out).

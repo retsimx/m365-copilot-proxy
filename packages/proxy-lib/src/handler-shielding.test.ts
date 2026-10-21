@@ -1198,8 +1198,8 @@ describe("Dual-Engine Classifier Integration in Handler", () => {
     expect(runSpy).toHaveBeenCalledTimes(4);
     // Verify that retries sent CONFAB_FORCE_PROMPT
     const retryCallArg = runSpy.mock.calls[1][0];
-    expect(retryCallArg).toContain("I will run the commands and paste the real output back to you");
-    expect(retryCallArg).toContain("Output ONE self-contained ```bash block");
+    expect(retryCallArg).toContain("No block was found in that reply");
+    expect(retryCallArg).toContain("Go ahead and draft the step.");
     expect(classifySpy).toHaveBeenCalledWith(refusalText);
   });
 
@@ -1243,8 +1243,8 @@ describe("Dual-Engine Classifier Integration in Handler", () => {
     // Initial turn + 3 retries = 4 runs total
     expect(runSpy).toHaveBeenCalledTimes(4);
     const retryCallArg = runSpy.mock.calls[1][0];
-    expect(retryCallArg).toContain("I will run the commands and paste the real output back to you");
-    expect(retryCallArg).toContain("Output ONE self-contained ```bash block");
+    expect(retryCallArg).toContain("No block was found in that reply");
+    expect(retryCallArg).toContain("Go ahead and draft the step.");
   });
 
   it("refusal-then-success retry yields content with the REFUSAL separator between attempts (JSON)", async () => {

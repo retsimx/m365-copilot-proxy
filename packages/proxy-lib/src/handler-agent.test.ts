@@ -63,9 +63,9 @@ describe("agent path: framing selection, one call per turn, hallucination correc
     });
     const pool = new SessionPool();
     await handleChatCompletion(body("claude-sonnet-5.5", [{ role: "user", content: "go" }]) as any, pool);
-    expect(captured[0]).toContain("You are an execution agent working toward the user's whole objective");
+    expect(captured[0]).toContain("Your job in this session is to draft the next concrete step");
     expect(captured[0]).toContain("Emit exactly ONE tool-call fence per turn");
-    expect(captured[0]).toContain("YOU KNOW NOTHING ABOUT THE USER'S MACHINE UNTIL THE HARNESS SHOWS IT TO YOU");
+    expect(captured[0]).toContain("You don't know anything about the machine except what has been pasted");
   });
 
   it("GPT model still gets the advisor framing (unchanged)", async () => {
@@ -97,8 +97,8 @@ describe("agent path: framing selection, one call per turn, hallucination correc
   // counter lives on the inner CopilotSession). It is covered by the exported constants
   // below + the live log ("will attach a correction before the real results").
   it("exports the hallucination-correction prompts (fabrication + pure-transcript)", () => {
-    expect(HALLUCINATION_CORRECTION_PROMPT).toContain("fabricated tool output");
-    expect(HALLUCINATION_CORRECTION_PROMPT).toContain("NEVER author, predict, continue, or simulate a `<tool_output>` block");
-    expect(HALLUCINATION_NO_CALL_CORRECTION_PROMPT).toContain("NO valid executable call");
+    expect(HALLUCINATION_CORRECTION_PROMPT).toContain("result block you wrote yourself");
+    expect(HALLUCINATION_CORRECTION_PROMPT).toContain("Never write a result block yourself");
+    expect(HALLUCINATION_NO_CALL_CORRECTION_PROMPT).toContain("No block was found in that reply");
   });
 });

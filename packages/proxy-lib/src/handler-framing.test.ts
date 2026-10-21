@@ -181,8 +181,8 @@ describe("forcing retry prompts for all models (unified advisor force prompt)", 
 
     const retryPrompt = captured[1];
     expect(retryPrompt).toContain(CONFAB_FORCE_PROMPT);
-    expect(retryPrompt).toContain("I will run the commands and paste the real output back to you");
-    expect(retryPrompt).toContain("Output ONE self-contained ```bash block with the commands for me to run, nothing else.");
+    expect(retryPrompt).toContain("No block was found in that reply");
+    expect(retryPrompt).toContain("Go ahead and draft the step.");
     expect(retryPrompt).toContain("You are a chat assistant helping with shell tasks, working toward the whole task stated in the user's request");
     expect(retryPrompt).not.toContain("execution core");
     expect(retryPrompt).not.toContain("TOOL USE IS REQUIRED");
@@ -232,8 +232,8 @@ describe("forcing retry prompts for all models (unified advisor force prompt)", 
 
     const retryPrompt = captured[1];
     expect(retryPrompt).toContain(CONFAB_FORCE_PROMPT);
-    expect(retryPrompt).toContain("I will run the commands and paste the real output back to you");
-    expect(retryPrompt).toContain("Output ONE self-contained ```bash block with the commands for me to run, nothing else.");
+    expect(retryPrompt).toContain("No block was found in that reply");
+    expect(retryPrompt).toContain("Go ahead and draft the step.");
     expect(retryPrompt).toContain("You are a chat assistant helping with shell tasks, working toward the whole task stated in the user's request");
     expect(retryPrompt).not.toContain("execution core");
     expect(retryPrompt).not.toContain("TOOL USE IS REQUIRED");
@@ -283,8 +283,8 @@ describe("forcing retry prompts for all models (unified advisor force prompt)", 
 
     const retryPrompt = captured[1];
     expect(retryPrompt).toContain(CONFAB_FORCE_PROMPT);
-    expect(retryPrompt).toContain("I will run the commands and paste the real output back to you");
-    expect(retryPrompt).toContain("Output ONE self-contained ```bash block with the commands for me to run, nothing else.");
+    expect(retryPrompt).toContain("No block was found in that reply");
+    expect(retryPrompt).toContain("Go ahead and draft the step.");
     expect(retryPrompt).toContain("You are a chat assistant helping with shell tasks, working toward the whole task stated in the user's request");
     expect(retryPrompt).not.toContain("execution core");
     expect(retryPrompt).not.toContain("TOOL USE IS REQUIRED");

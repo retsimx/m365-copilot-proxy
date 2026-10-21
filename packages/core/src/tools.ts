@@ -193,7 +193,7 @@ export function formatMessages(
   const effectiveTools = tools ? maybeInjectReplyTool(tools) : tools;
   const specMap = effectiveTools ? buildSpecMap(effectiveTools) : null;
   if (effectiveTools && effectiveTools.length > 0 && toolChoice !== "none") {
-    parts.push(`<system>\n${formatSessionFraming(framingVariant, effectiveTools ?? [])}${formatToolChoiceInstruction(toolChoice)}\n</system>`);
+    parts.push(`Operating contract for this session\n${formatSessionFraming(framingVariant, effectiveTools ?? [])}${formatToolChoiceInstruction(toolChoice)}\nEnd of operating contract`);
   }
 
   // Correlate each tool result back to the call that produced it, so the model
@@ -355,7 +355,7 @@ export function parseToolCalls(text: string, tools?: ToolDef[]): ParseResult {
   // framing now teaches) and subsequent output, isolate the text before the first
   // such tag so we salvage the real tool call(s) and discard the hallucinated
   // multi-turn script (fabricated results the harness never returned).
-  const toolResponseMatch = text.match(/<(?:tool_response|tool_output|assistant)\b/i);
+  const toolResponseMatch = text.match(/^[ \t]*<\/?(?:tool_response|tool_output|assistant)\b/im);
   let parseInput = text;
   if (toolResponseMatch && toolResponseMatch.index !== undefined && toolResponseMatch.index > 0) {
     const prefix = text.slice(0, toolResponseMatch.index);

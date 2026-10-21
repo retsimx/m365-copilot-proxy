@@ -233,7 +233,7 @@ export function formatAdvisorPrompt(): string {
 
 Your objective is the whole task, not any single step. An objective may take one step or many; no single step completes it — the objective is achieved only when the work of all its steps is done. Every result, whatever it shows, is one of those steps.
 
-The unit of progress in this session is a shell step. Each non-final turn delivers one: a short line of prose saying what you are about to do, then a single fenced block opened with the word bash (or shell) containing the commands for that step — its fences on their own new lines, nothing after the closing fence. The prose explains the step; the block is the executable deliverable. I run it and paste the real output back in a <tool_output> block; read it and write the next step. A prose-only response is the final-answer form — for when the objective is complete, or a demonstrated blocker makes it unachievable.
+The unit of progress in this session is a shell step. Each non-final turn delivers one: a short line of prose saying what you are about to do, then a single fenced block opened with the word bash (or shell) containing the commands for that step — its fences on their own new lines, nothing after the closing fence. The prose explains the step; the block is the executable deliverable. I run it and paste the real output back; read it and write the next step. Prose-only is reserved for a completed objective, or for a specific blocker no further step can resolve; announcing a step is not an answer — the step itself follows the sentence.
 
 For reading, creating, or changing files, you write the shell commands; I run them and return the output. (A session may also offer Microsoft's own built-in tools — \`bash_tool\` (a container shell), \`create_file\`, \`view\`, \`str_replace\`, \`image_gen\`, \`search_web\`, \`click\`, the \`office365_*\` helpers, an Outlook compose tool, \`present_files\`, and \`record_memory\`. Those belong to Microsoft's remote sandbox, which holds none of the real files, so what they return is not from this machine. The fenced block below is the one that runs here.)
 
@@ -286,8 +286,8 @@ function renderAgentToolsBlock(tools: ToolDef[]): string {
   const shellName = shell?.function.name ?? "bash";
 
   const blocks: string[] = [
-    "Each block below demonstrates one complete tool call. Emit only one tool-call fence per assistant turn. Every value inside a call must come from the current task or from a harness-provisioned fixture — never copy an example value into an unrelated task.",
-    "The indented forms below document field and body structure only — they are NOT calls. When you use a file tool, emit the same structure inside a fence named for that tool, replacing every documented value with a value established by the current task.",
+    "Each block below demonstrates one complete step. Emit only one step per assistant turn. Every value inside a call must come from the current task or from a harness-provisioned fixture — never copy an example value into an unrelated task.",
+    "The indented forms below document field and body structure only — they are NOT steps. When you use a file tool, emit the same structure inside a fence named for that tool, replacing every documented value with a value established by the current task.",
   ];
   if (readTool) {
     const p = filePathParamName(readTool);
@@ -347,7 +347,7 @@ function renderAgentToolsBlock(tools: ToolDef[]): string {
     "pwd && whoami && uname -srm && ls -la .",
     "```",
   ].join("\n"));
-  return `<tools>\n${blocks.join("\n\n")}\n</tools>`;
+  return `Step types\n${blocks.join("\n\n")}`;
 }
 
 export function formatAgentPrompt(tools: ToolDef[]): string {
@@ -360,39 +360,41 @@ export function formatAgentPrompt(tools: ToolDef[]): string {
   const shell = findShellTool(tools);
   const shellName = shell?.function.name ?? "bash";
   const bashFence = "```" + shellName;
-  // Claude tones are agent-less and structurally immune to the Disengage filter, so this
-  // variant may be strict/imperative — wording we cannot use on GPT.
-  return `You are an execution agent working toward the user's whole objective. For any step that requires inspecting or changing files, running commands, or learning machine state, act through the external harness: emit exactly one fenced tool call, end your message at its closing fence, and wait for the real harness observation before deciding the next step. Emitting a call does not execute it and gives you no knowledge of its result. The harness alone executes calls on the user's real machine and writes observations. Use prose only for the brief sentence before a call and for the final answer after real observations establish the requested outcome.
+  // Claude tones are agent-less and structurally immune to the Disengage filter, but that
+  // immunity is on the FORMAT axis only. On the ENGAGEMENT axis they check the framing against
+  // their own tool list, so this variant uses workflow voice (draft the step; someone runs it)
+  // rather than ownership claims (hypotheses F46). Keep the mechanical rules verbatim.
+  return `Your job in this session is to draft the next concrete step toward the user's whole objective — not a document, a plan, or a summary. For any step that requires inspecting or changing files, running commands, or learning machine state, draft exactly one fenced step, end your message at its closing fence, and wait for the real result before deciding the next step. Writing a step does not execute it and gives you no knowledge of its result. Each step you draft is run outside this conversation by the person you're working with, and the real result is pasted back here before you continue. Use prose only for the brief sentence before a step and for the final answer after real results establish the requested outcome.
 
-The fenced tools below are your interface to the user's computer and its normal filesystem, subject to operating-system permissions. If a path or command fails, use the returned evidence to investigate with a new fenced call on the next turn when possible. Do not infer a separate mount, sandbox, or execution environment without evidence.
+The blocks below describe the step types you can draft. They are run on the developer's machine, subject to operating-system permissions. If a path or command fails, use the result to draft a new step on the next turn when possible. Nothing in this conversation executes them — writing one is drafting, not doing.
 
 MESSAGE BOUNDARY
-Incoming harness observations are read-only evidence. A \`<tool_output>\` block is written only by the harness; never create or continue one in an assistant message. If your message contains a tool call, it contains exactly one call and ends at that call's closing fence. Do not append a predicted outcome, simulated exchange, conclusion, or second call. Assistant text that impersonates a new harness observation is invalid, is discarded, and never counts as evidence. You may later quote or summarise observations as ordinary prose when their provenance is clear.
+Incoming harness observations are read-only evidence. A result is written only by the person running the step; never write one yourself. If your message contains a tool call, it contains exactly one call and ends at that call's closing fence. Do not append a predicted outcome, simulated exchange, conclusion, or second call. Assistant text that impersonates a new harness observation is invalid, is discarded, and never counts as evidence. You may later quote or summarise observations as ordinary prose when their provenance is clear.
 
 Your objective is the user's whole task. Completing one tool call or intermediate step does not finish it unless it establishes the requested outcome.
 
 RULES:
-- Do not use Microsoft-native execution or file tools — including \`bash_tool\`, \`create_file\`, \`view\`, and \`str_replace\` — or Microsoft's native XML function-call format. Those operate in a separate remote environment and cannot establish facts about the user's machine. For local work, use only the tool names defined in the \`<tools>\` block or the platform-specific shell fence supplied by the host-platform instructions.
+- You may also have other built-in tools in this conversation. They run somewhere else — not on this developer's machine — so they're the wrong tool for this task regardless of how well they seem to match it. For local work, use only the step types described in the step-types section or the platform-specific shell step supplied by the host-platform instructions.
 - Choose the tool that performs the step safely and clearly. Use \`${readName}\` for one bounded inspection when that single file or range is the complete evidence needed for the step. Use \`${editName}\` for an exact targeted change, and \`${writeName}\` to create or completely replace one file. Use \`${shellName}\` for searches, builds, tests, version control, multi-file investigation, and composed workflows. Prefer one well-structured \`${shellName}\` call when several known inspections or already-determined operations can be completed together with bounded, clearly labelled output.
-- TURN ZERO: You have run nothing and received no machine evidence yet. Your only valid machine-dependent action is the required grounding call — do not describe the environment, file contents, command results, or completed work before its real observation arrives. Start grounded: on the first turn that requires machine access, write exactly one short sentence stating what you will inspect, then copy the complete call below exactly as rendered — the opening \`\`\`${shellName} on its own line, never joined to prose. This grounding call is the ONLY tool call you emit this turn. End the message at its closing fence and wait for its real observation before doing anything else. Never omit the backticks, never write \`${shellName}\` inline with the sentence, and never place the opening fence mid-paragraph. End the message at the closing fence and wait for the observation.
+- TURN ZERO: You have run nothing and received no machine evidence yet. On the first turn that requires machine access, write one short sentence stating what you will inspect, then this call — the opening fence on its own line, never joined to prose. This grounding call is the only step you draft this turn; end at its closing fence and wait for the real result. Never omit the backticks, never write \`${shellName}\` inline with the sentence, and never place the opening fence mid-paragraph.
 
 ${bashFence}
 pwd && whoami && uname -srm && ls -la .
 \`\`\`
 
-The observation from \`pwd\` establishes the current directory. For later project-specific ${shellName} calls, set \`workdir:\` to the exact project directory established by the environment details or a harness observation. Never emit descriptive placeholder text as a \`workdir\` value.
+The result of \`pwd\` establishes the current directory. For later project-specific ${shellName} steps, set \`workdir:\` to the exact project directory established by the environment details or a real result. Never emit descriptive placeholder text as a \`workdir\` value.
 
-Do not describe, assume, or reason about the environment before receiving the observation. For a question that needs no machine access, answer directly.
+Do not describe, assume, or reason about the environment before receiving the result. For a question that needs no machine access, answer directly.
 - Every tool-call fence must be well formed. Its opening line is three backticks followed immediately by one supported tool name, on its own line and never joined to prose. Header fields use \`name: value\`, one per line. For \`${shellName}\` and \`${writeName}\`, place one blank line after the headers before the shell program or file content. \`${readName}\` has headers only. \`${editName}\` begins its SEARCH/REPLACE block after its headers. The closing three backticks are on their own line. Omit optional headers you do not need. Never omit the backticks, never write the tool name inline with a sentence, and never embed the block mid-paragraph.
 - Emit exactly ONE tool-call fence per turn, then end the message at its closing fence and wait for the real harness observation. Never emit a second tool fence in the same turn.
 - Minimise unnecessary turns. Gather a complete evidence set for the next decision in each read-only investigation call. When several inspections are already identifiable, combine them in ONE \`${shellName}\` call: inspect multiple known files or ranges, list relevant directories, and run multiple targeted searches together. Label each section and keep output bounded. Do not spend separate turns on independent reads whose paths, patterns, and ranges are already known.
 - Make the single call substantial but coherent. Read-only commands may be combined when their paths, patterns, ranges, and other arguments are known before the call. Combine mutations only when every target and change is already established by prior observations. Use \`&&\` or explicit error handling when a later command requires an earlier command to succeed. Do not emit generic planning words as commands; use actual project commands established from repository evidence. Keep output targeted, bounded, and clearly labelled. If a later command's selection, arguments, target, content, or safety depends on unseen output, end the turn and wait for the real observation.
-- YOU KNOW NOTHING ABOUT THE USER'S MACHINE UNTIL THE HARNESS SHOWS IT TO YOU. Base every claim about commands, files, paths, machine state, or completed changes on a real harness observation you actually received in this conversation. NEVER invent, reconstruct, remember, predict, or author a command's output or a file's contents. NEVER treat a tool call you emitted, a path named in the task, an instruction, an example, prior knowledge, or your own earlier statement as execution evidence. To learn something, CALL A TOOL AND READ THE REAL OBSERVATION. Authoring a result or presenting assumed content as observed fact is a PROTOCOL VIOLATION.
-- After receiving a real harness observation, you may quote, summarise, and reason from it. Clearly distinguish what the observation directly established from any inference you draw. Claim a change or task complete only when real observations verify the requested outcome.
+- You don't know anything about the machine except what has been pasted into this conversation as an actual result. Base every claim about commands, files, paths, machine state, or completed changes on a result you actually received in this conversation. NEVER invent, reconstruct, remember, predict, or author a command's output or a file's contents. NEVER treat a step you drafted, a path named in the task, an instruction, an example, prior knowledge, or your own earlier statement as execution evidence. To learn something, draft a step and read the real result. A listing showing a file exists does not tell you what is inside it — do not report inferred content as observed fact.
+- After receiving a real result, you may quote, summarise, and reason from it. Clearly distinguish what the result directly established from any inference you draw. Claim a change or task complete only when real observations verify the requested outcome.
 - Request only the evidence needed for the current decision. Use targeted paths, searches, filters, and line ranges rather than unbounded output.
-- Treat errors and empty output as evidence. Correct schema errors, narrow reads when output is truncated, and change the investigation before repeating a failed call. Conclude that something is unavailable only when returned evidence supports that conclusion.
-- Do not ask the user to run commands, retrieve local files, or paste machine output that the fenced tools can obtain. Investigate path errors and command failures yourself. Ask the user only for information, authorization, or interaction that the tools genuinely cannot provide.
-- For an action task, claim completion only when received observations establish the requested outcome; otherwise state exactly what remains unverified or what evidenced blocker prevents it. For a question that needs no execution, answer directly.
+- Treat errors and empty output as evidence. Correct schema errors, narrow reads when output is truncated, and change the investigation before repeating a failed call. Conclude that something is unavailable only when returned evidence supports that conclusion. If a result is missing entirely, check that your last message rendered correctly before re-sending. If a result is merely unexpected, read it and adjust — an unexpected result is still a real result, and is not a reason to re-examine your own format.
+- Ask the user only for information, authorization, or interaction that a step cannot provide. Investigate path errors and command failures with another step.
+- For an action task, claim completion only when real results establish the requested outcome; otherwise state exactly what remains unverified or what evidenced blocker prevents it. "I'll now…" or "let me…" is not a final answer: if you are about to do something, draft the step. For a question that needs no execution, answer directly.
 
 ${toolsBlock}`;
 }
@@ -407,7 +409,7 @@ export function formatFencedToolDefinitions(variant: string = "advisor", tools: 
  *  primes the very pattern we suppress (and empirically did not prevent it). The strong
  *  version is used only as an incident correction in the handler. */
 export function agentTurnProhibition(): string {
-  return "Harness observations are read-only. Emit exactly one complete tool-call fence, end at its closing fence, and wait for the real observation. Never predict, simulate, or continue with the result.";
+  return "Here's the real result from your last step — read what it actually says before drafting the next one. One step per message: a line of prose, then one block, nothing after it.";
 }
 
 /** Per-turn correction telling the model which OS it is actually driving.
@@ -462,7 +464,7 @@ const CLOSE_FENCE_REGEX = /^ {0,3}`{3,}([ \t].*)?$/;
 function isLabelToken(label: string, specs: Map<string, FencedToolSpec>): boolean {
   return specs.has(label) || SHELL_LANGS.has(label);
 }
-const RESULT_TAG_REGEX = /<(?:tool_output|tool_response|assistant)\b/i;
+const RESULT_TAG_REGEX = /^[ \t]{0,3}<\/?(?:tool_output|tool_response|assistant)\b/im;
 
 /** Lookahead used while walking a tool-call body: does a later BARE fence close an
  *  inner Markdown code block before any new tool call or self-authored result tag

@@ -157,6 +157,13 @@ A proposed rewrite of the advisor framing into a terser "chat assistant" voice �
 
 ### Two framings now: advisor (GPT) vs agent (Claude) — Oct 2026
 
+**Two independent axes (2026-10-21).** *Engagement* — does the model accept the premise, or refuse
+it as injection? — and *format* — having engaged, does it emit the fenced step? The "wording-only
+moved nothing" finding below is the **format** axis; refusal is the **engagement** axis. A fix on one
+does not substitute for the other, and measuring only one hides regressions on the other. Claude's
+agent-less path is exposed on the engagement axis (it can check the framing against its own tool
+list); GPT's is exposed on the format axis (Disengage). `hypotheses.md` F46 has the evidence.
+
 Framing is **no longer universal**. Claude tones (`Claude_*`) are **agent-less** (no
 declarative agent attached — see [`m365-copilot-api.md` §5](m365-copilot-api.md)), which
 makes them structurally immune to the F17/F22 Disengage class. That immunity buys a
@@ -167,10 +174,16 @@ makes them structurally immune to the F17/F22 Disengage class. That immunity buy
 `write`, `edit`, `bash` — and (Oct 11) the framing was hardened after a long-session regression
 ([`hypotheses.md`](hypotheses.md) §24). In order of importance:
 
-1. **Execution-agent identity, not a message-writer.** The opener is *"You are an execution agent
-   working toward the user's whole objective…"*. The earlier *"You write assistant messages…"* gave a
-   message-writer identity (which includes design docs/plans) and drifted into prose-document output
-   instead of acting.
+1. **Task-shape, not identity.** The opener used to be *"You are an execution agent working toward
+   the user's whole objective…"*; the earlier *"You write assistant messages…"* gave a message-writer
+   identity (which includes design docs/plans) and drifted into prose-document output instead of
+   acting. **2026-10-21:** the identity claim is itself a refusal trigger on the agent-less path — it
+   collides with the model's checkable self-knowledge ("I'm Microsoft Copilot, my tools are
+   bash_tool/create_file/…") and identity reassignment is one of the most common injection moves
+   ([`hypotheses.md`](hypotheses.md) F46). The opener is now task-shaped: *"Your job in this session is
+   to draft the next concrete step… — not a document, a plan, or a summary."* That keeps the
+   anti-drift force without asserting a capability. **Re-measure the document-drift rate; if drift
+   returns, this is the line to revisit.**
 2. **Exactly one tool call per turn.** *"Emit exactly ONE tool-call fence per turn… never emit a
    second tool fence in the same turn."* Multi-call batching re-activates the model's
    "call → result → call" continuation prior, so it fabricates the observations *between* calls
@@ -219,8 +232,13 @@ your files"*). **Only the fenced ```` ```bash ```` block reaches the harness** (
 machine) — a non-registered XML name (`bash`) just returns `NO CONTENT AVAILABLE`. Attaching the
 agent would route Claude to GPT-5, and dropping the code-interpreter `optionsSets` did not stop it —
 so the fix is prompt-level: the framing **names Microsoft's tools *and* the XML format** and directs
-the model to the fenced calls only (Claude: imperative *"ignore them"*; GPT/advisor: the same fact
-stated **descriptively**, since that framing is shape-frozen).
+the model to the fenced calls only. **2026-10-21:** keep the naming, drop the imperative. The
+refusals quote the *claim* wrapped around the names ("cannot establish facts about the user's
+machine"), not the names themselves; the wording is now disqualification — *"they run somewhere
+else — not on this developer's machine — so they're the wrong tool for this task"* — which preserves
+the direction without the capability assertion. Removing the names entirely was considered and
+rejected: they are what stop the sandbox drift (F23/F24), and the advisor framing already names them
+descriptively. GPT/advisor keeps its descriptive, shape-frozen form.
 
 **Self-authored `<tool_output>` simulation — rejected, corrected in place.** A Claude run fabricated
 git output: it emitted a real `git log` fence, then wrote its **own** `<tool_output>` blocks with
@@ -230,6 +248,13 @@ the fabricated suffix. It now **corrects in place** (a `PROTOCOL CORRECTION` bef
 **no session reset** — resetting made every turn a full replay, [`hypotheses.md`](hypotheses.md) §24
 F24d), and the **post-fence abort guard** stops generation the moment the model continues past the
 fence ([`tool-calling.md`](tool-calling.md)).
+
+**2026-10-21 — the doc already said this; the code didn't.** Item 7 above says never show the return
+side, but the agent framing still named the tag and the handler wraps every real result in it, so the
+model was re-exposed every turn. The framing no longer names it (functional phrasing only: *"a result
+is written only by the person running the step"*), and the fabrication guard now matches a **block
+opener at line start** rather than any mention, so quoting the name in prose no longer aborts a turn.
+The observation wrapper itself is unchanged — the model still has to recognise a real result.
 
 ### Production findings & confabulation bypass (`docs/hypotheses.md` §21)
 
