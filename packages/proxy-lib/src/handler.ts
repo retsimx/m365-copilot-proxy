@@ -132,6 +132,10 @@ interface ConversationState {
   session: ModelSession;
   sentMessageCount: number;
   lastAccessedAt: number;
+  /** Turns currently in flight. A conversation with an active turn is never reaped by the
+   *  idle TTL — a deep-reasoning turn can run longer than MAX_IDLE_MS, and the dashboard
+   *  poll (getSessionsSnapshot) runs the same reaper mid-turn. */
+  activeTurns: number;
   sessionId?: string;
   fingerprint?: string;
   turnCount?: number;
@@ -186,6 +190,7 @@ export class SessionPool {
       session: new ModelSession(this.sessionOptions),
       sentMessageCount: 0,
       lastAccessedAt: Date.now(),
+      activeTurns: 0,
       sessionId: sessionId?.trim() || fingerprint,
       fingerprint,
       status: "idle",
@@ -233,9 +238,26 @@ export class SessionPool {
     return `${sessionPrefix}${simpleHash(`${systemText}::${userText}::${toolSig}`)}`;
   }
 
+  /** Mark a turn as in flight — the idle reaper will not reclaim this conversation. */
+  beginTurn(state: ConversationState): void {
+    state.activeTurns += 1;
+    state.lastAccessedAt = Date.now();
+  }
+
+  /**
+   * Mark a turn as finished. This is also where the idle-TTL countdown (re)starts: a turn
+   * that ran for 45 minutes must not leave the session already 45 minutes stale, or the
+   * follow-up would silently open a brand-new remote conversation.
+   */
+  endTurn(state: ConversationState): void {
+    state.activeTurns = Math.max(0, state.activeTurns - 1);
+    state.lastAccessedAt = Date.now();
+  }
+
   private evictStale() {
     const now = Date.now();
     for (const [key, state] of this.conversations) {
+      if (state.activeTurns > 0) continue; // long turn in flight — never reap
       if (now - state.lastAccessedAt > MAX_IDLE_MS) {
         log.info(`Evicting idle conversation ${key}`);
         this.conversations.delete(key);
@@ -1115,6 +1137,11 @@ export async function handleChatCompletion(
     log.warn(`Model '${model}' is marked exhausted — short-circuiting with 403 (no upstream turn)`);
     return modelExhaustedResponse(model, null);
   }
+
+  // A turn is now in flight: the idle reaper must not reclaim this conversation,
+  // however long the model thinks (deep-reasoning turns can exceed the 30 min TTL).
+  pool.beginTurn(conv);
+
   // Track A (§3.3): recognise tool fences byte-identically to the parser so the
   // prose gate can seal at the first *known* tool fence. Built once per request.
   const specs = hasTools ? buildSpecMap(body.tools ?? []) : undefined;
@@ -1670,6 +1697,7 @@ export async function handleChatCompletion(
   }
   } finally {
     conv.status = "idle";
+    pool.endTurn(conv); // turn finished -> idle-TTL countdown starts here
   }
   } // end produceInternal()
 
