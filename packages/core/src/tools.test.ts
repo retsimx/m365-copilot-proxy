@@ -460,7 +460,7 @@ describe("tool-result labelling", () => {
       ],
       tools,
     );
-    expect(out).toContain('<tool_response tool="bash" command="ls -la">');
+    expect(out).toContain('Result of the step (bash) command="ls -la":');
     expect(out).not.toContain('name="unknown"');
   });
 
@@ -470,7 +470,7 @@ describe("tool-result labelling", () => {
       [{ role: "tool", tool_call_id: "orphan", content: "some output" }],
       tools,
     );
-    expect(out).toContain('<tool_response tool="tool">');
+    expect(out).toContain("Result of the step (tool):");
   });
 });
 

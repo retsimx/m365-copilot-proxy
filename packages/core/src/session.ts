@@ -206,7 +206,11 @@ export function createAnswerAccumulator(onDelta: (emit: string) => void) {
     advanceCard(id: string, text: string): void {
       if (stopped) return;
       if (cardId !== id) {
-        const sep = answer.length > 0 && !answer.endsWith("\n") ? "\n" : "";
+        // A new card is a new block in the rendered answer — the web UI draws each card
+        // as its own paragraph. Materialise that boundary as a blank line (normalising
+        // to exactly one) so consecutive paragraphs and code blocks render separately,
+        // rather than running together as one paragraph.
+        const sep = answer.length === 0 ? "" : answer.endsWith("\n\n") ? "" : answer.endsWith("\n") ? "\n" : "\n\n";
         cardBase = answer.length + sep.length;
         cardId = id;
         answer = answer + sep + text;

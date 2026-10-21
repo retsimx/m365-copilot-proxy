@@ -290,7 +290,7 @@ describe("createAnswerAccumulator — cursor-addressed card starts (split delive
     acc.advance(acc.answer + "\n```");
 
     expect(acc.answer).toBe(
-      'Now let me read the plan JSON and the verdict.\n```shell\necho "=== PLAN" && cat plan.json\n```',
+      'Now let me read the plan JSON and the verdict.\n\n```shell\necho "=== PLAN" && cat plan.json\n```',
     );
     expect(emitted.join("")).toBe(acc.answer);
   });
@@ -300,14 +300,14 @@ describe("createAnswerAccumulator — cursor-addressed card starts (split delive
     acc.advanceCard("a", "First paragraph.");
     acc.advanceCard("b", "```bash\nls\n```");
     acc.advanceCard("c", "Trailing line.");
-    expect(acc.answer).toBe("First paragraph.\n```bash\nls\n```\nTrailing line.");
+    expect(acc.answer).toBe("First paragraph.\n\n```bash\nls\n```\n\nTrailing line.");
   });
 
   it("does not add a second newline when the answer already ends with one", () => {
     const acc = createAnswerAccumulator(() => {});
     acc.advanceCard("a", "Paragraph.\n");
     acc.advanceCard("b", "```bash\nls\n```");
-    expect(acc.answer).toBe("Paragraph.\n```bash\nls\n```");
+    expect(acc.answer).toBe("Paragraph.\n\n```bash\nls\n```");
   });
 
   it("extends the same card without duplicating what was already streamed", () => {

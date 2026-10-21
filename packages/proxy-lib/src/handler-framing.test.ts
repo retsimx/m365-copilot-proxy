@@ -339,20 +339,20 @@ describe("delta tool re-injection (shell elision)", () => {
     return captured[captured.length - 1];
   }
 
-  it("re-attaches the session framing on a delta turn, with the named <tool_output>", async () => {
+  it("re-attaches the session framing on a delta turn, with the plain result envelope", async () => {
     const prompt = await deltaPromptFor([bashTool]);
     expect(prompt).not.toContain("do a thing"); // delta path — not a full replay of the turn-0 user message
     expect(prompt).toContain("You are a chat assistant helping with shell tasks, working toward the whole task stated in the user's request");
     expect(prompt).toContain("a single fenced block opened with the word bash (or shell) containing the commands for that step");
-    expect(prompt).toContain('<tool_output name="bash"');
-    expect(prompt).toContain("</tool_output>");
+    expect(prompt).toContain("Result of the step (bash)");
+    expect(prompt).toContain("The session continues;");
   });
 
   it("re-attaches the framing on a mixed delta turn too", async () => {
     const prompt = await deltaPromptFor([bashTool, readFileTool]);
     expect(prompt).not.toContain("do a thing");
     expect(prompt).toContain("You are a chat assistant helping with shell tasks, working toward the whole task stated in the user's request");
-    expect(prompt).toContain('<tool_output name="bash"');
+    expect(prompt).toContain("Result of the step (bash)");
   });
 
   it("M365_NO_TURN_FRAMING=1 disables the per-turn framing re-attach", async () => {
@@ -360,7 +360,7 @@ describe("delta tool re-injection (shell elision)", () => {
     try {
       const prompt = await deltaPromptFor([bashTool]);
       expect(prompt).not.toContain("You are a chat assistant helping with shell tasks, working toward the whole task stated in the user's request");
-      expect(prompt).toContain('<tool_output name="bash"');
+      expect(prompt).toContain("Result of the step (bash)");
     } finally {
       delete process.env.M365_NO_TURN_FRAMING;
     }
@@ -368,21 +368,21 @@ describe("delta tool re-injection (shell elision)", () => {
 
   it("annotates an empty tool result so the model keeps going", async () => {
     const prompt = await deltaPromptFor([bashTool], "(no output)");
-    expect(prompt).toContain('<tool_output name="bash" empty="true">');
+    expect(prompt).toContain('Result of the step (bash) empty="true":');
     expect(prompt).toContain("A command that prints nothing is a normal result, not a failure");
   });
 
   it("annotates a truncated tool result with a fetch-the-rest instruction (incl. saved path)", async () => {
     const toolContent = "...output truncated...\nFull output saved to: /tmp/oc/out-1.txt";
     const prompt = await deltaPromptFor([bashTool], toolContent);
-    expect(prompt).toContain('<tool_output name="bash" truncated="true">');
+    expect(prompt).toContain('Result of the step (bash) truncated="true":');
     expect(prompt).toContain("a size cap, NOT the end");
     expect(prompt).toContain("/tmp/oc/out-1.txt");
   });
 
   it("leaves a normal tool result unannotated", async () => {
     const prompt = await deltaPromptFor([bashTool]);
-    expect(prompt).toContain('<tool_output name="bash">');
+    expect(prompt).toContain("Result of the step (bash):");
     expect(prompt).not.toContain('empty="true"');
     expect(prompt).not.toContain('truncated="true"');
   });

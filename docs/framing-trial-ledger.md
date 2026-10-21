@@ -118,3 +118,26 @@ verifies on disk. Failure = refusal or prose-only delivery.
 **Result.** (pending)
 
 **Verdict.** (pending)
+
+### T5–T10 results (2026-10-21)
+
+| ID | Change | Result | Verdict |
+|---|---|---|---|
+| T5a | current advisor framing, massive dispatch | refused at write ("can't generate or modify files"), prose fallback | baseline reproduced |
+| T5b | pre-Oct-21 advisor (`91b9f29`) | refused at write; retry emitted the call (run stopped) | framing text is not the cause |
+| T5c | + per-turn file-step sentence | refused at write | wrong direction |
+| T5d | + post-delta reminder (recency) | refused at write ("shell-driven file task") | wrong direction |
+| T5e | non-meta read/write control | refused at write ("in this interface") | not the audit task |
+| T6 | de-tag the `<user>` delta channel | 1 run wrote, but via refusal + printed command executed; repeat T6b clean; T6c refused at a *read* ("shell interaction ended") | helps one class, unreliable |
+| T7 | plain result envelope + "session continues" cue | termination class gone; write refusal persists | partial |
+| T8 | output-destination phrasing | clean once, refused on repeat (T8b) | stochastic, not the fix |
+| T9 | `M365_NO_TURN_FRAMING=1` (no per-turn re-attach) | refused at write | wrong direction |
+| T10 | **agent framing + full read/write/edit/bash tool set** for GPT | **2/2 clean** (T10, T10b); used a shell heredoc, not `write` | best signal so far; user testing in production |
+
+**Lessons.**
+- The write refusal is **stochastic**, not deterministic: the same wording succeeds and fails across fresh sessions. Single-run results are meaningless (T8 vs T8b; T6b vs T6c).
+- It is **not** the advisor text (T5b), the per-turn re-attach (T9), the task content (T5e), or the position of the reminder (T5d).
+- The reliable historical shape is the **full tool set + drafted-step (agent) framing** (T10), which is now enabled via `M365_FRAMING_VARIANT=agent` and `read/write/edit` in the `m365gpt`/`m365gpt61` agent configs.
+- T7 removed the "session ended after a truncated read" class; keep it.
+
+**Open.** T10 needs more samples in production; the model still prefers shell heredocs over the `write` tool. If it holds, retire the bash-only advisor path for GPT or keep it only as a fallback.
