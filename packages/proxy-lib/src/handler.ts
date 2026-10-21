@@ -95,6 +95,15 @@ export const HALLUCINATION_CORRECTION_PROMPT =
 export const HALLUCINATION_NO_CALL_CORRECTION_PROMPT =
   "No block was found in that reply, and any result text you wrote has been discarded; nothing ran. Draft the step now as one complete block, and stop at its closing fence.";
 
+/** A tool-mode turn that produced no call but opens with "about to act" language —
+ *  the model narrated the step, or went to a native tool and stopped. Retried once with
+ *  the plain corrective prompt. Deliberately looks only at the opening: the rest of such
+ *  a turn is usually the model explaining a sandbox result that never applied here. */
+function looksLikeStalledToolTurn(text: string): boolean {
+  const head = text.trim().slice(0, 240);
+  return /\b(i'?ll|i will|let me|i need to|i should|i'?m going to|i am going to|first,|next,|reading|inspecting|checking|looking at)\b/i.test(head);
+}
+
 // M365 soft-caps output around ~3k tokens (~12k chars) and — critically —
 // CONCLUDES EARLY rather than truncating mid-stream, so a too-long answer comes
 // back clean-looking but incomplete with no error to detect (docs/hypotheses.md
@@ -1485,6 +1494,8 @@ export async function handleChatCompletion(
       `\n\n--- REFUSAL DETECTED - RETRY ${n}/${maxConfabRetries} ---\n\n`;
     const artifactSeparator = (n: number) =>
       `\n\n--- REMOTE ARTIFACT DETECTED - RETRY ${n}/${maxConfabRetries} ---\n\n`;
+    const stallSeparator = (n: number) =>
+      `\n\n--- NO STEP DETECTED - RETRY ${n}/${maxConfabRetries} ---\n\n`;
 
     // Commit-on-stream (§3.3): a retry after prose reached the client would diverge from
     // `sent` and be dropped by the end-of-turn prefix guard, so we normally skip retries
@@ -1497,20 +1508,26 @@ export async function handleChatCompletion(
       const verdict = toolModeNoCall ? await classifyTurnResponse(turnText) : "DELIVERABLE";
       const refusal = toolModeNoCall && verdict === "REFUSAL";
       const remoteArtifact = looksLikeRemoteArtifactCompletion(turnText);
-      if (!refusal && !remoteArtifact) break;
+      // A DELIVERABLE verdict on a tool-mode turn is not always a deliverable: the model
+      // can narrate the step ("I'll read the four files...") and stop, or go to a native
+      // tool and report its sandbox result. Both are stalls, not answers (F46/F47).
+      const stall = toolModeNoCall && !refusal && !remoteArtifact && looksLikeStalledToolTurn(turnText);
+      if (!refusal && !remoteArtifact && !stall) break;
       if (streamedProse && !refusal) {
         log.info("Prose already streamed live (commit-on-stream) — skipping confab retry to preserve the sent prefix");
         break;
       }
       if (refusal) {
         log.info(`Turn classified REFUSAL (no tool call) — forcing retry ${attempt + 1}/${maxConfabRetries}`);
+      } else if (stall) {
+        log.info(`Tool-mode stall (no step) — forcing retry ${attempt + 1}/${maxConfabRetries}`);
       } else {
         log.info(`Remote artifact completion detected (no tool call) — forcing retry ${attempt + 1}/${maxConfabRetries}`);
       }
       // Emit the separator for the retry that is *starting*. Stream it live only if this
       // attempt's prose already reached the client (otherwise the whole combined text is
       // emitted once at the end); the JSON path picks it up from `combinedText` regardless.
-      const separator = remoteArtifact ? artifactSeparator(attempt + 1) : confabSeparator(attempt + 1);
+      const separator = remoteArtifact ? artifactSeparator(attempt + 1) : stall ? stallSeparator(attempt + 1) : confabSeparator(attempt + 1);
       combinedText += separator;
       retried = true;
       if (streamedProse) onDelta?.(separator);
