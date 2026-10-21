@@ -377,7 +377,10 @@ function formatDeltaMessages(messages: ParsedMessage[]): string {
     } else if (m.role === "system") {
       // Skip system messages on follow-up turns
     } else {
-      parts.push(`<user>\n${getMessageContent(m)}\n</user>`);
+      // No angle-bracket wrapper: a tag-shaped <user> block in a delta reads as part of
+      // the same result/instruction family as the observation wrapper, and GPT models
+      // reclassify the request as chat rather than a shell step (framing ledger T6).
+      parts.push(`The person you are working with says:\n${getMessageContent(m)}`);
     }
   }
   return parts.join("\n\n");
