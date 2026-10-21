@@ -1165,7 +1165,13 @@ export async function handleChatCompletion(
       // IMMEDIATELY BEFORE the real tool results so it frames them as authoritative.
       const correction = framingVariant === "agent" && conv.pendingHallucinationCorrection ? `${HALLUCINATION_CORRECTION_PROMPT}\n\n` : "";
       conv.pendingHallucinationCorrection = false;
-      text = `${framing}${prohibition}${correction}${delta}`;
+      // Recency matters: the retry prompt puts "draft the step" AFTER the request and
+      // reliably recovers a write-step refusal, while the re-attached framing sits
+      // BEFORE the delta and does not. Close the message with the same instruction.
+      const turnReminder = framingVariant === "advisor" && hasTools
+        ? "\n\nDraft the step for the request above; I run it and the real output comes back before the next step."
+        : "";
+      text = `${framing}${prohibition}${correction}${delta}${turnReminder}`;
       log.info(`Chat completion: model=${model}, stream=${body.stream}, messages=${body.messages.length}, new=${newMessages.length}, turn=${session.turnCount}, mode=delta, cid=${convId}`);
     } else {
       // No meaningful new content to send — nudge M365 to continue.
