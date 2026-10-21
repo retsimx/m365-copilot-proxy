@@ -152,7 +152,12 @@ interface ConversationState {
 
 // --- Session pool: maps conversation fingerprint → M365 session ---
 
-const MAX_IDLE_MS = 30 * 60 * 1000; // evict after 30 min idle
+// Idle TTL for a pooled conversation. Override with M365_SESSION_IDLE_TTL_SEC
+// (seconds); the 30-minute default is the conservative local policy.
+const MAX_IDLE_MS = (() => {
+  const v = Number(process.env.M365_SESSION_IDLE_TTL_SEC);
+  return Number.isFinite(v) && v > 0 ? v * 1000 : 30 * 60 * 1000;
+})();
 
 export class SessionPool {
   private conversations = new Map<string, ConversationState>();
@@ -1139,7 +1144,7 @@ export async function handleChatCompletion(
   }
 
   // A turn is now in flight: the idle reaper must not reclaim this conversation,
-  // however long the model thinks (deep-reasoning turns can exceed the 30 min TTL).
+  // however long the model thinks (deep-reasoning turns can exceed the idle TTL).
   pool.beginTurn(conv);
 
   // Track A (§3.3): recognise tool fences byte-identically to the parser so the
