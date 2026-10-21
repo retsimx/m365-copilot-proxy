@@ -72,3 +72,49 @@ and the existing old agent is reused (agents are never deleted).
 **Result.** (pending)
 
 **Verdict.** (pending)
+
+---
+
+## T4 — Single-turn probe (2026-10-21) — **flawed test**
+
+**Hypothesis.** A one-turn "write this file" request through the proxy is enough to
+compare framings.
+
+**Change.** None (probe only); `scripts/framing-trial-probe.mjs` and two curl turns.
+
+**Result.**
+- Without `tools` in the request the proxy takes the **agent-less** path (`agent=none`):
+  no tool call, content "Created `/tmp/opencode/framing-probe.md`…" — a fabricated
+  success, and the file does not exist.
+- With `tools: [bash]` the agent attaches and the **current** framing works on turn 0:
+  `finish: tool_calls`, a `bash` command that writes the file and verifies it
+  byte-for-byte.
+
+**Verdict.** **Flawed test, discarded.** A single turn does not reproduce the failure.
+The refusal appears only in the long multi-turn agentic dispatch (read several files,
+then write). All framing trials must use that dispatch shape. The agent-less/no-tools
+path also matters: it confabulates rather than writing, so trials must send `tools`.
+
+---
+
+## T5 — Massive-dispatch trials (2026-10-21)
+
+**Hypothesis.** The write-step refusal depends on the long dispatch + multi-turn
+context, and the framing text can change it.
+
+**Test.** `m365gpt`, one run per candidate, same ~600-word dispatch (source files only;
+no hypothesis documents), reads 4–5 files, writes `/tmp/opencode/gpt-audit.md`.
+Success = a `bash` tool call that writes the file (harness executes it) and the file
+verifies on disk. Failure = refusal or prose-only delivery.
+
+**Candidates.**
+- T5a — current framing (`fe11b70`) — baseline.
+- T5b — pre-Oct-21 advisor framing (`91b9f29`: tag named, "you write", prose-only line).
+- T5c — current + explicit file-step sentence.
+- T5d — current with the subject reverted to "you write the shell commands".
+
+**Commit.** (per candidate)
+
+**Result.** (pending)
+
+**Verdict.** (pending)
