@@ -449,6 +449,8 @@ export function isAdvisorTone(tone?: string): boolean {
 }
 
 export function framingVariantForTone(tone?: string): string {
+  const forced = process.env.M365_FRAMING_VARIANT;
+  if (forced === "advisor" || forced === "agent") return forced;
   return isAdvisorTone(tone) ? "advisor" : "agent";
 }
 
