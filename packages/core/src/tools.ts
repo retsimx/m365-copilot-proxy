@@ -242,7 +242,7 @@ export function formatMessages(
       // Show the command/args that produced this output so the model reads it in
       // context (a directory listing vs file contents vs a command's stdout).
       const cmdAttr = meta?.summary ? ` command="${meta.summary}"` : "";
-      parts.push(`<tool_response tool="${name}"${cmdAttr}>\n${getMessageContent(m)}\n</tool_response>`);
+      parts.push(`Result of the step (${name})${cmdAttr}:\n${getMessageContent(m)}\nEnd of result.`);
     } else if (m.role === "system") {
       // Never wrap harness instructions in angle-bracket tags: a user-role message that
       // contains <system>...</system> is the canonical injection shape and is read as one

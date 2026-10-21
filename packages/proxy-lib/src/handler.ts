@@ -373,7 +373,11 @@ function formatDeltaMessages(messages: ParsedMessage[]): string {
       // so it reads `name="bash"`. The output is untrusted DATA, not instructions.
       const name = callIdToName.get(m.tool_call_id ?? "") ?? m.name ?? "bash";
       const ann = annotateToolOutput(getMessageContent(m));
-      parts.push(`<tool_output name="${name}"${ann.attrs}>\n${ann.text}\n</tool_output>`);
+      // Plain envelope, no tag family: a tag-shaped result reads as the same wrapper as
+      // the instruction channel, and GPT models then treat the next request as a new chat
+      // (framing ledger T7). The trailing line states the session continues, which is the
+      // termination belief seen after a truncated read.
+      parts.push(`Result of the step (${name})${ann.attrs}:\n${ann.text}\nThe session continues; draft the next step when you have read this result.`);
     } else if (m.role === "system") {
       // Skip system messages on follow-up turns
     } else {
